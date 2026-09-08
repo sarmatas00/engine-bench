@@ -30,7 +30,7 @@ if (requireWebGL2()) {
     expect: 'MapLibre is flat underneath; the hill is a deck.gl TerrainLayer. In "drape" the blocks are painted onto the surface and lose their height. In "offset" each vertex is lifted by the ground height, so a wide block tilts with the slope.',
     claim: 'deck.gl will drape onto any layer we mark as terrain — it picks the target by a property, not by a fixed class. Cost: MapLibre drops to a flat background map, the feature is experimental, and draping discards height.',
     controls: [{kind: 'select', id: 'mode', label: 'terrainDrawMode', options: ['drape', 'offset'], value: 'drape',
-      onChange: v => { mode = v as any; overlay.setProps({layers: layers()}); }}]
+      onChange: v => { mode = v as any; overlay.setProps({layers: layers()}); ui.probe(`terrainDrawMode now: ${mode}`); }}]
   });
   const map = makeMap(ui.canvasHost);
   map.on('load', async () => {

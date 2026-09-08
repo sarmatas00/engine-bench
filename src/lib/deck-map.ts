@@ -41,10 +41,10 @@ export async function loadGltfMesh(url: string) {
   const attributeNames = Object.keys(raw);
   const attributes: Record<string, Attr> = {};
   for (const [name, a] of Object.entries(raw)) {
-    const value = a.value as Float32Array;
     attributes[name] = name === 'POSITION' || name === 'NORMAL'
-      ? {value: toZUp(value), size: 3, normalized: a.normalized}
-      : {value, size: a.components, normalized: a.normalized};
+      ? {value: toZUp(a.value as Float32Array), size: 3, normalized: a.normalized}
+      : {value: a.value, size: a.components, normalized: a.normalized};
   }
-  return {attributes, indices: {value: prim.indices!.value, size: 1 as const}, attributeNames};
+  if (!prim.indices) throw new Error('loadGltfMesh expects indexed geometry');
+  return {attributes, indices: {value: prim.indices.value, size: 1 as const}, attributeNames};
 }

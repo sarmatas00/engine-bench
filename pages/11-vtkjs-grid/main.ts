@@ -40,7 +40,7 @@ if (requireWebGL2()) {
     const renderer = fs.getRenderer(); rw = fs.getRenderWindow();
 
     const ctf = vtkColorTransferFunction.newInstance();
-    for (const t of [10, 16, 22, 28, 35]) { const [r, g, b] = colormap(t, 10, 35); ctf.addRGBPoint(t, r / 255, g / 255, b / 255); }
+    for (const t of [10, 16.25, 22.5, 28.75, 35]) { const [r, g, b] = colormap(t, 10, 35); ctf.addRGBPoint(t, r / 255, g / 255, b / 255); }
     const ofun = vtkPiecewiseFunction.newInstance();
     ofun.addPoint(10, 0); ofun.addPoint(20, 0.002); ofun.addPoint(28, 0.02); ofun.addPoint(35, 0.12);
 

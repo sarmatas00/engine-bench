@@ -8,5 +8,5 @@ export function describeModel(model: Model, attr: string) {
   const inShaderLayout = shaderAttrs.some(a => a.name === attr);
   const vs = String((model as any).props?.vs ?? (model as any).props?.source ?? '');
   const inVsSource = vs.includes(attr);
-  return {inBufferLayout, inShaderLayout, inVsSource, accessors: 'model.bufferLayout[].name / model.pipeline.shaderLayout.attributes[].name / model.props.vs'};
+  return {inBufferLayout, inShaderLayout, inVsSource, accessors: 'model.bufferLayout[].name | .attributes[].attribute / model.pipeline.shaderLayout.attributes[].name / model.props.vs | .source'};
 }

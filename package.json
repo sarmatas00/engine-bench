@@ -9,7 +9,7 @@
     "generate": "bun scripts/generate.ts",
     "preview": "vite preview --port 4173 --strictPort",
     "test:unit": "bun test tests/unit",
-    "test": "bun run build && playwright test"
+    "test": "bun run test:unit && bun run build && playwright test"
   },
   "dependencies": {
     "@deck.gl/core": "9.4.0",

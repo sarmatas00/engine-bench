@@ -44,6 +44,25 @@ if (requireWebGL2()) {
   map.on('load', () => {
     overlay = makeOverlay(map, [build()]);
     ui.probe('src/lib/temperature-layer.ts: getShaders() override + a 2-float uniform block. Depends on deck.gl shader source strings (no stability promise).');
+    // Sample the center pixel while the WebGL context is live, right after a render, so the
+    // smoke test has a colour reading that does not depend on preserveDrawingBuffer being set —
+    // by the time a test's page.evaluate runs, the drawing buffer may already be cleared/swapped.
+    overlay.setProps({
+      onAfterRender: () => {
+        // Wait until the ProbedTemperature layer's draw() has actually loaded the model —
+        // otherwise an early frame (before the async glTF load resolves) samples the bare
+        // basemap background instead of the coloured mesh.
+        if (window.__bench.probe.centerPixel || !window.__bench.probe.scenegraph) return;
+        const canvas = document.querySelector('#host canvas.maplibregl-canvas') as HTMLCanvasElement | null;
+        const gl = canvas?.getContext('webgl2') as WebGL2RenderingContext | null;
+        if (!canvas || !gl) return;
+        const cx = Math.floor(canvas.width / 2);
+        const cy = Math.floor(canvas.height / 2);
+        const px = new Uint8Array(4);
+        gl.readPixels(cx, gl.drawingBufferHeight - cy, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+        ui.setProbe('centerPixel', [px[0], px[1], px[2]]);
+      }
+    });
     whenIdle(map, () => ui.ready());
   });
 }

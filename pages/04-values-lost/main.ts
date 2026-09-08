@@ -23,6 +23,7 @@ if (requireWebGL2()) {
         const r = describeModel(models[0], ATTR);
         ui.setProbe('scenegraph', {loaded: true, ...r});
         ui.probe(`ScenegraphLayer  loaded=yes  bufferLayout=${r.inBufferLayout}  shaderLayout=${r.inShaderLayout}  vsSource=${r.inVsSource}`);
+        ui.probe(`bufferLayout names: ${models[0].bufferLayout.map((l: any) => l.name).join(', ')}`);
       }
       super.draw(p);
     }
@@ -35,6 +36,7 @@ if (requireWebGL2()) {
         const r = describeModel(model, ATTR);
         ui.setProbe('simpleMesh', {loaded: true, ...r});
         ui.probe(`SimpleMeshLayer  loaded=yes  bufferLayout=${r.inBufferLayout}  shaderLayout=${r.inShaderLayout}  vsSource=${r.inVsSource}`);
+        ui.probe(`bufferLayout names: ${model.bufferLayout.map((l: any) => l.name).join(', ')}`);
       }
       super.draw(p);
     }
@@ -46,7 +48,7 @@ if (requireWebGL2()) {
     ui.probe('normalizeGeometryAttributes (simple-mesh-layer.ts:44) returns exactly: positions, colors, normals, texCoords');
     makeOverlay(map, [
       new ProbedScenegraph({id: 'sg', data: [0], scenegraph: '/data/field.glb',
-        coordinateSystem: METERS, coordinateOrigin: ORIGIN, getPosition: () => [-1050, 0, 0], getOrientation: GLTF_ORIENTATION, _lighting: 'flat'}),
+        coordinateSystem: METERS, coordinateOrigin: ORIGIN, getPosition: () => [-1050, 0, 0], getOrientation: GLTF_ORIENTATION, _lighting: 'flat', getColor: [180, 180, 180]}),
       new ProbedSimpleMesh({id: 'sm', data: [0], mesh,
         coordinateSystem: METERS, coordinateOrigin: ORIGIN, getPosition: () => [1050, 0, 0], getColor: [180, 180, 180]})
     ]);

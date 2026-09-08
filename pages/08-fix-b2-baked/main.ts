@@ -48,6 +48,7 @@ if (requireWebGL2()) {
   map.on('load', async () => {
     const mesh = await loadGltfMesh('/data/field-baked.glb');
     ui.probe(`glTF attributes in file: ${mesh.attributeNames.join(', ')}`);
+    ui.probe('deck.gl renames COLOR_0 → colors in normalizeGeometryAttributes (mesh path); the glTF path keeps the original name.');
     makeOverlay(map, [
       new ProbedScenegraph({id: 'sg', data: [0], scenegraph: '/data/field-baked.glb',
         coordinateSystem: METERS, coordinateOrigin: ORIGIN, getPosition: () => [-1050, 0, 0], getOrientation: GLTF_ORIENTATION, _lighting: 'flat'}),

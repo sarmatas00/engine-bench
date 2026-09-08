@@ -6,7 +6,7 @@ import {localToLngLat} from '@lib/geo';
 if (requireWebGL2()) {
   const ui = mountChrome({
     num: '09', title: 'Cesium — terrain follows lines, not models',
-    expect: 'a blue polygon and a yellow line wrapped perfectly over the ridge; the red glTF blocks clamp only at their shared origin point, so the ones on the flanks still float or sink.',
+    expect: 'a blue polygon and a yellow line wrapped perfectly over the ridge; the red glTF blocks clamp only at their shared origin point, so the ones on the flanks still float clear of it.',
     claim: 'The only one that follows terrain natively, but only for flat outlines and lines, not for 3D shapes — so it does not solve our case.'
   });
   const viewer = makeViewer(ui.canvasHost);

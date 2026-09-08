@@ -17,12 +17,13 @@ if (requireWebGL2()) {
     makeOverlay(map, [new SimpleMeshLayer({
       id: 'blocks', data: [0], mesh,
       coordinateSystem: METERS, coordinateOrigin: ORIGIN, getPosition: () => [0, 0, 0],
-      getColor: [217, 83, 79], _lighting: 'flat'
+      getColor: [217, 83, 79]
     })]);
     map.setTerrain({source: DEM_SOURCE, exaggeration: 1});
     ui.probe('MapLibre drapes only: background, fill, line, raster, hillshade, color-relief  (src/webgl/render_to_texture.ts:17)');
     ui.probe('Layer type "custom" — how deck.gl, Three.js or anything external attaches — is not in that list.');
     ui.probe('h(x, y) ≥ 5 m across the whole scene, so sea-level geometry is always below ground here — buried, never floating.');
+    ui.probe('maplibre-gl pinned to 5.24.0: @deck.gl/mapbox 9.4.0 interleaved mode reads map.transform, removed from Map in maplibre-gl 6.x.');
     whenIdle(map, () => ui.ready());
   });
 }

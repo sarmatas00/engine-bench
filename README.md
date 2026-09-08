@@ -10,9 +10,10 @@ blocks and a temperature field; every page draws that same scene in its engine.
 ## Run
 
     bun install                 # also copies Cesium's assets to public/cesium
+    bunx playwright install chromium   # once, before the first test run
     bun run generate            # "the pipeline": writes public/data/*
     portless engine-bench bun run dev
-    bun run test                # builds, opens every page headless, screenshots to screens/
+    bun run test                # unit tests, then builds, opens every page headless, screenshots to screens/
     bunx tsc --noEmit -p tsconfig.json   # typecheck
 
 ## Pinned versions
