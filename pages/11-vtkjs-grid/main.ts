@@ -19,7 +19,7 @@ if (requireWebGL2()) {
   let mc: any, rw: any;
   const ui = mountChrome({
     num: '11', title: 'VTK.js — one job',
-    expect: 'the same plume as a volume, plus a solid isosurface at the slider temperature. This page never loaded the unstructured mesh; it loaded the regular grid the pipeline wrote.',
+    expect: 'a faint translucent plume as a volume, with a solid orange isosurface visible at the slider temperature inside it. This page never loaded the unstructured mesh; it loaded the regular grid the pipeline wrote.',
     claim: 'Cannot display our simulation meshes at all — it has no concept of that kind of mesh. It stays useful for one thing: if we convert results to a regular grid first, it can draw them.',
     controls: [{kind: 'range', id: 'iso', label: 'Isosurface (°C)', min: 11, max: 34, step: 1, value: 20,
       onChange: v => { mc.setContourValue(v); rw.render(); }}]
@@ -42,7 +42,7 @@ if (requireWebGL2()) {
     const ctf = vtkColorTransferFunction.newInstance();
     for (const t of [10, 16, 22, 28, 35]) { const [r, g, b] = colormap(t, 10, 35); ctf.addRGBPoint(t, r / 255, g / 255, b / 255); }
     const ofun = vtkPiecewiseFunction.newInstance();
-    ofun.addPoint(10, 0); ofun.addPoint(20, 0.02); ofun.addPoint(35, 0.35);
+    ofun.addPoint(10, 0); ofun.addPoint(20, 0.002); ofun.addPoint(28, 0.02); ofun.addPoint(35, 0.12);
 
     const vmapper = vtkVolumeMapper.newInstance(); vmapper.setInputData(image); vmapper.setSampleDistance(8);
     const volume = vtkVolume.newInstance(); volume.setMapper(vmapper);
