@@ -14,7 +14,10 @@ export const PAGES: PageSpec[] = [
     // SimpleMeshLayer: stripped by normalizeGeometryAttributes before any buffer exists.
     expect(sm).toMatchObject({loaded: true, inBufferLayout: false, inShaderLayout: false});
   }},
-  {slug: '06-fix-a2-predraped'}
+  {slug: '06-fix-a2-predraped'},
+  {slug: '08-fix-b2-baked', extraChecks: async (_page, probe) => {
+    expect((probe.simpleMesh as any).inBufferLayout).toBe(true);   // colors reach the GPU on the mesh path
+  }}
 ];
 
 for (const spec of PAGES) {
