@@ -13,7 +13,8 @@ export const PAGES: PageSpec[] = [
     expect(sg).toMatchObject({loaded: true, inBufferLayout: true, inShaderLayout: false});
     // SimpleMeshLayer: stripped by normalizeGeometryAttributes before any buffer exists.
     expect(sm).toMatchObject({loaded: true, inBufferLayout: false, inShaderLayout: false});
-  }}
+  }},
+  {slug: '06-fix-a2-predraped'}
 ];
 
 for (const spec of PAGES) {
