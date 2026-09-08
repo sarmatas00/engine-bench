@@ -8,10 +8,14 @@ save -> load round trip (dtcc-core#85) preserved.
 """
 
 import json
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))   # /work, mounted beside solve.py
+import benchio
 
 OUT = Path("/out")
 
@@ -36,7 +40,6 @@ def main():
 
     from dtcc_sim.datasets import UrbanHeatSimulationDataset
     from dtcc_core.io import save_volume_mesh
-    import dtcc_core
 
     mesh = UrbanHeatSimulationDataset()(bounds=bounds, format=None, **ARGS)
 
@@ -62,7 +65,7 @@ def main():
         },
         "field_names": [f.name for f in fields],
         "args": ARGS,
-        "dtcc_core_version": getattr(dtcc_core, "__version__", "unknown"),
+        "dtcc_core_revision": benchio.distribution_revision("dtcc-core"),
         "solved_at": datetime.now(timezone.utc).isoformat(),
     }
     (OUT / "heat.meta.json").write_text(json.dumps(heat_meta, indent=2) + "\n")

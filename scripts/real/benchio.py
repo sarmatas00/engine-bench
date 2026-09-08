@@ -116,6 +116,41 @@ def read_mesh_pair(out_dir, name: str) -> dict:
     return out
 
 
+def distribution_revision(name: str) -> str:
+    """Best available revision string for an installed distribution.
+
+    `dtcc_core.__version__` does not exist on the pinned build, so a naive
+    getattr records the literal "unknown" as the provenance of the round-trip
+    measurement. pip records what was actually installed in direct_url.json:
+    a git commit for a VCS install, a path for an editable one (whose git HEAD
+    we then resolve). Falls back to the declared version.
+    """
+    import json as _json
+    import subprocess
+    from importlib.metadata import distribution, PackageNotFoundError
+
+    try:
+        dist = distribution(name)
+    except PackageNotFoundError:
+        return "not installed"
+    try:
+        raw = dist.read_text("direct_url.json")
+        if raw:
+            info = _json.loads(raw)
+            commit = info.get("vcs_info", {}).get("commit_id")
+            if commit:
+                return commit
+            if info.get("dir_info", {}).get("editable") and info.get("url", "").startswith("file://"):
+                path = info["url"][len("file://"):]
+                head = subprocess.run(["git", "-C", path, "rev-parse", "HEAD"],
+                                      capture_output=True, text=True, timeout=10)
+                if head.returncode == 0:
+                    return head.stdout.strip()
+    except Exception:
+        pass
+    return dist.version or "unknown"
+
+
 def load_dataset_json(out_dir) -> dict:
     return json.loads((Path(out_dir) / "dataset.json").read_text())
 

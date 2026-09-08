@@ -183,13 +183,32 @@ maplibre-gl pinned to 5.24.0: @deck.gl/mapbox 9.4.0 interleaved mode reads `map.
   50,729 vertices, 182,331 cells, T 18.00–32.95 degC, `KSP` converged in 8 iterations. Both fixes
   are one line each in `dtcc-sim/Dockerfile`; this note is written so a DTCC engineer can apply them
   directly upstream.
-- The container's `dtcc_core.__version__` is the literal string `"unknown"` (no `__version__`
-  attribute is set on the package installed from
+- **Fixed — `heat.meta.json`'s provenance field was unattributable.** The container's
+  `dtcc_core.__version__` is the literal string `"unknown"` (no `__version__` attribute is set on
+  the package installed from
   `git+https://github.com/dtcc-platform/dtcc-core.git@9774162563d94a038a9ae799495020101b8250d7`),
   confirming the concern raised on Task 9's first pass: the brief's Interfaces section names the
-  `heat.meta.json` key `dtcc_core_revision`, but the code (correctly kept as transcribed, since
-  Task 10 reads what the code writes) writes `dtcc_core_version` from `getattr(dtcc_core,
-  "__version__", "unknown")` — which on this pin carries no revision information at all. The actual
-  pinned commit (`9774162563d94a038a9ae799495020101b8250d7`, an ancestor of the native venv's
-  `dtcc-core` HEAD `5cf56fa0a5f88659cd888010cd7121fe56f9577e`) has to be read from
-  `dtcc-sim/pyproject.toml`'s dependency pin, not from `heat.meta.json`, if a future task needs it.
+  `heat.meta.json` key `dtcc_core_revision`, but the original code (transcribed as given, since at
+  the time Task 10 read whatever key the code wrote) wrote `dtcc_core_version` from
+  `getattr(dtcc_core, "__version__", "unknown")` — which on this pin carried no revision
+  information at all, so the round-trip measurement that is the whole point of Stage 2
+  (dtcc-core#85) was attributed to a literal `"unknown"`. Fixed with `benchio.distribution_revision`
+  (`scripts/real/benchio.py`) — a pure-stdlib resolver using `importlib.metadata`'s
+  `direct_url.json` (the VCS commit pip actually installed, or the git `HEAD` of an editable
+  install's path, falling back to the declared version) — and `solve.py` now writes
+  `"dtcc_core_revision": benchio.distribution_revision("dtcc-core")`. Verified: `heat.meta.json`
+  now records `"dtcc_core_revision": "9774162563d94a038a9ae799495020101b8250d7"` — the exact pin
+  from `dtcc-sim/pyproject.toml` — and the same resolver against the native venv's editable install
+  returns its git `HEAD`, `5cf56fa0a5f88659cd888010cd7121fe56f9577e`, via the editable-install
+  fallback path (confirmed directly, and by
+  `scripts/real/tests/test_benchio.py::test_distribution_revision_resolves_the_editable_dtcc_core_install`).
+  Task 10's downstream plan was updated to match: it reads `dtcc_core_revision` (not `..._version`),
+  and its two native-side keys are `solver_dtcc_core_revision` and `native_dtcc_core_revision`.
+- **`dtcc_core.__version__` does not exist on the installed `dtcc-core` package** (neither the
+  container's pinned-commit install nor the native venv's editable install sets it — `getattr(dtcc_core,
+  "__version__", ...)` silently returns the default instead of raising). This is a provenance trap
+  for any DTCC tooling that records versions by reading `__version__`: it fails silently, not
+  loudly, so a script can run to completion and log a placeholder as if it were real data. We only
+  caught it here because the round-trip measurement (dtcc-core#85) needed an attributable revision
+  and a flat `"unknown"` in every run's `heat.meta.json` was conspicuous. `importlib.metadata`'s
+  `direct_url.json` is the reliable source instead (see the fix above).

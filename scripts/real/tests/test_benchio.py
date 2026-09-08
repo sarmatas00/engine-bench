@@ -92,3 +92,17 @@ def test_read_mesh_pair_rejects_a_truncated_binary(tmp_path):
     (tmp_path / "t.mesh.bin").write_bytes(b"short")
     with pytest.raises(ValueError, match="byteLength"):
         benchio.read_mesh_pair(tmp_path, "t")
+
+
+def test_distribution_revision_resolves_the_editable_dtcc_core_install():
+    # dtcc-core is installed editable from ../dtcc-core in the native venv, with no
+    # __version__ attribute on the pinned build — this is the case a naive
+    # getattr(dtcc_core, "__version__", "unknown") would silently misreport.
+    # Don't assert a specific commit: the local ../dtcc-core clone moves.
+    revision = benchio.distribution_revision("dtcc-core")
+    assert revision not in ("unknown", "not installed")
+    assert len(revision) >= 7  # a git hash (short or full), not a placeholder
+
+
+def test_distribution_revision_reports_a_package_that_is_not_installed():
+    assert benchio.distribution_revision("this-package-does-not-exist-12345") == "not installed"
