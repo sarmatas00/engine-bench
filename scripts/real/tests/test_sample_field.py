@@ -59,6 +59,17 @@ def test_compare_round_trip_reports_a_float32_downcast():
     assert result["dtype_after"] == "float32"
 
 
+def test_compare_round_trip_is_not_lossless_when_only_the_field_name_changed():
+    """Identical values, renamed field. The values alone must not buy a lossless verdict."""
+    pre = np.array([18.0, 21.0, 32.0])
+    meta = {"vertices": 3, "cells": 1, "field": {"name": "temperature", "dtype": "float64", "count": 3}}
+    result = sample_field.compare_round_trip(pre, pre.copy(), meta, vertices=3, cells=1,
+                                             field_name="f_0", dtype="float64")
+    assert result["max_abs_delta"] == 0.0
+    assert result["field_present"] is True
+    assert result["lossless"] is False
+
+
 def test_colormap_matches_the_typescript_stops():
     out = sample_field.colormap(np.array([0.0, 1.0, 0.5]), 0.0, 1.0)
     assert tuple(out[0]) == (33, 102, 172)

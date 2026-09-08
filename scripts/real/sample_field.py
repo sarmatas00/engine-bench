@@ -76,6 +76,10 @@ def compare_round_trip(pre_values, post_values, meta, *, vertices, cells, field_
         result["max_abs_delta"] = float(np.max(np.abs(post - pre)))
     result["lossless"] = bool(
         result["field_present"]
+        # The name is part of what a round trip can lose. Without this, a field silently renamed
+        # while its values stayed byte-identical would still be reported lossless — and a renamed
+        # field is precisely the shape of metadata loss this measurement exists to catch.
+        and result["field_name_before"] == result["field_name_after"]
         and result["vertices_before"] == result["vertices_after"]
         and result["cells_before"] == result["cells_after"]
         and result["count_before"] == result["count_after"]
@@ -83,6 +87,20 @@ def compare_round_trip(pre_values, post_values, meta, *, vertices, cells, field_
         and result["max_abs_delta"] == 0.0
     )
     return result
+
+
+def round_trip_note(name: str, round_trip: dict) -> str:
+    verdict = "no loss" if round_trip["lossless"] else "LOSS"
+    return (
+        f"- dtcc-core#85 round trip on `{name}` "
+        f"(`save_volume_mesh` in the dtcc-sim container -> `load_volume_mesh` natively): **{verdict}**. "
+        f"vertices {round_trip['vertices_before']} -> {round_trip['vertices_after']}, "
+        f"cells {round_trip['cells_before']} -> {round_trip['cells_after']}, "
+        f"field `{round_trip['field_name_before']}` -> `{round_trip['field_name_after']}`, "
+        f"dtype {round_trip['dtype_before']} -> {round_trip['dtype_after']}, "
+        f"max |dT| {round_trip['max_abs_delta']}. Full record in "
+        f"`public/data/real/dataset.json` under `stage2.roundtrip`."
+    )
 
 
 def append_note(text: str) -> None:
@@ -114,9 +132,29 @@ def main(out_dir: Path = OUT) -> dict:
         dtype=None if field is None else str(np.asarray(field.values).dtype),
     )
     print("round trip:", json.dumps(round_trip, indent=2), flush=True)
+
+    # Persist the verdict BEFORE anything else can fail. This is the only durable record of the
+    # dtcc-core#85 measurement, and the branch where it matters most — a field that did not
+    # survive — is exactly the branch that cannot go on to produce the other artifacts. Note that
+    # `stages.stage2` stays null when the field is gone: the JS side reads it as `hasField`, and a
+    # timestamp there would make the pages try to load field files that were never written.
+    stage2 = {
+        "args": heat_meta["args"],
+        "roundtrip": round_trip,
+        "solver_dtcc_core_revision": heat_meta.get("dtcc_core_revision", "unknown"),
+        "native_dtcc_core_revision": benchio.distribution_revision("dtcc-core"),
+    }
+    stages = dict(meta["stages"])
+    if post is not None:
+        stages["stage2"] = datetime.now(timezone.utc).isoformat()
+    benchio.patch_dataset_json(out_dir, stages=stages, stage2=stage2)
+    append_note(round_trip_note(meta["name"], round_trip))
+
     if post is None:
-        raise RuntimeError("the temperature field did not survive the volume-mesh round trip; "
-                           "the comparison is in dataset.json and NOTES.md")
+        raise RuntimeError(
+            "the temperature field did not survive the volume-mesh round trip; the comparison has "
+            "been written to dataset.json (stage2.roundtrip) and to NOTES.md"
+        )
 
     origin, z0, extent = meta["origin"], meta["z0"], meta["extent"]
     local = np.asarray(vm.vertices, dtype=np.float64).copy()
@@ -164,31 +202,9 @@ def main(out_dir: Path = OUT) -> dict:
         "roundtrip": round_trip,
     }, indent=2) + "\n")
 
-    stages = dict(meta["stages"])
-    stages["stage2"] = datetime.now(timezone.utc).isoformat()
-    benchio.patch_dataset_json(out_dir, stages=stages, stage2={
-        "args": heat_meta["args"],
-        "roundtrip": round_trip,
-        # heat_meta's provenance key is dtcc_core_revision (Task 9's fix for dtcc_core.__version__
-        # being unset on the pinned build); benchio.distribution_revision resolves the same way
-        # for the native venv's editable install, so both sides are attributable revisions rather
-        # than the literal "unknown" a naive __version__ read would produce on either side.
-        "solver_dtcc_core_revision": heat_meta.get("dtcc_core_revision", "unknown"),
-        "native_dtcc_core_revision": benchio.distribution_revision("dtcc-core"),
-        "field": {"tmin": tmin, "tmax": tmax, "unit": heat_meta["field"]["unit"] or "degC"},
-    })
+    stage2["field"] = {"tmin": tmin, "tmax": tmax, "unit": heat_meta["field"]["unit"] or "degC"}
+    benchio.patch_dataset_json(out_dir, stage2=stage2)
 
-    verdict = "no loss" if round_trip["lossless"] else "LOSS"
-    append_note(
-        f"- dtcc-core#85 round trip on `{meta['name']}` "
-        f"(`save_volume_mesh` in the dtcc-sim container -> `load_volume_mesh` natively): **{verdict}**. "
-        f"vertices {round_trip['vertices_before']} -> {round_trip['vertices_after']}, "
-        f"cells {round_trip['cells_before']} -> {round_trip['cells_after']}, "
-        f"field `{round_trip['field_name_before']}` -> `{round_trip['field_name_after']}`, "
-        f"dtype {round_trip['dtype_before']} -> {round_trip['dtype_after']}, "
-        f"max |dT| {round_trip['max_abs_delta']}. Full record in "
-        f"`public/data/real/dataset.json` under `stage2.roundtrip`."
-    )
     print("sample_field: wrote field, field-baked, field.grid.*, field.json; NOTES.md updated", flush=True)
     return {"roundtrip": round_trip, "tmin": tmin, "tmax": tmax}
 
