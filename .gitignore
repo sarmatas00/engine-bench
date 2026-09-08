@@ -5,3 +5,4 @@ public/cesium
 screens
 test-results
 playwright-report
+.venv

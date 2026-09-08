@@ -14,6 +14,9 @@ blocks and a temperature field; every page draws that same scene in its engine.
     bun run generate            # "the pipeline": writes public/data/*
     portless engine-bench bun run dev
     bun run test                # unit tests, then builds, opens every page headless, screenshots to screens/
+    uv venv --python 3.11 .venv                                  # real-data pipeline, once
+    uv pip install --python .venv/bin/python -e ../dtcc-core pytest
+    .venv/bin/pytest scripts/real/tests                          # Python unit tests
     bunx tsc --noEmit -p tsconfig.json   # typecheck
 
 ## Pinned versions

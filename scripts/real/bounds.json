@@ -1,0 +1,10 @@
+{
+  "name": "gothenburg-skansen-kronan",
+  "crs": "EPSG:3006",
+  "bounds": [318369, 6398890, 318869, 6399390],
+  "fallback": {
+    "name": "gothenburg-ramberget",
+    "bounds": [317647, 6401152, 318147, 6401652],
+    "reason": "used only if the primary box has less than 20 m of terrain relief"
+  }
+}
