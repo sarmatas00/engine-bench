@@ -113,7 +113,6 @@ def read_mesh_pair(out_dir, name: str) -> dict:
         size = spec["length"] * _ITEM_SIZE[spec["type"]]
         chunk = blob[spec["offset"]: spec["offset"] + size]
         out[spec["name"]] = np.frombuffer(chunk, dtype=_NP_DTYPES[spec["type"]]).copy()
-    out["_meta"] = meta
     return out
 
 

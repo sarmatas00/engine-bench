@@ -54,6 +54,8 @@ def test_write_and_read_mesh_pair_round_trips_every_array(tmp_path):
     assert (tmp_path / "field.mesh.bin").stat().st_size == meta["byteLength"]
 
     back = benchio.read_mesh_pair(tmp_path, "field")
+    # Exactly the arrays, nothing else: callers iterate this dict expecting numpy arrays.
+    assert set(back) == {"positions", "normals", "indices", "temperature"}
     assert np.allclose(back["positions"].reshape(-1, 3), positions)
     assert np.array_equal(back["indices"], indices.reshape(-1))
     assert np.allclose(back["temperature"], temperature, atol=1e-6)
