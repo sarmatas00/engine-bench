@@ -15,6 +15,10 @@ export const PAGES: PageSpec[] = [
     expect(sm).toMatchObject({loaded: true, inBufferLayout: false, inShaderLayout: false});
   }},
   {slug: '06-fix-a2-predraped'},
+  {slug: '07-fix-b1-shader', extraChecks: async (_page, probe) => {
+    // The subclass declares _TEMPERATURE in its own shader, so it now binds and colours.
+    expect(probe.scenegraph).toMatchObject({loaded: true, inBufferLayout: true, inShaderLayout: true});
+  }},
   {slug: '08-fix-b2-baked', extraChecks: async (_page, probe) => {
     expect((probe.simpleMesh as any).inBufferLayout).toBe(true);   // colors reach the GPU on the mesh path
   }}
