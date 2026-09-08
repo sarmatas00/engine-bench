@@ -2,7 +2,7 @@ import {TerrainLayer} from '@deck.gl/geo-layers';
 import {SimpleMeshLayer} from '@deck.gl/mesh-layers';
 import {_TerrainExtension as TerrainExtension} from '@deck.gl/extensions';
 import {mountChrome, requireWebGL2} from '@lib/chrome';
-import {makeMap, makeOverlay, loadGltfMesh, ORIGIN, METERS, whenIdle} from '@lib/deck-map';
+import {makeMap, makeOverlay, loadGltfMesh, ORIGIN, METERS} from '@lib/deck-map';
 import {extentBounds, extentImage} from '@lib/synth-tiles';
 
 if (requireWebGL2()) {
@@ -10,15 +10,20 @@ if (requireWebGL2()) {
   let mode: 'drape' | 'offset' = 'drape';
   let mesh: Awaited<ReturnType<typeof loadGltfMesh>>;
   let dem = '', tex = '';
+  // Held so the ready-check below can read isLoaded off the exact instance deck.gl is tracking.
+  let terrain: TerrainLayer;
 
-  const layers = () => [
-    new TerrainLayer({id: 'terrain', elevationData: dem, texture: tex, bounds: extentBounds(),
+  const layers = () => {
+    terrain = new TerrainLayer({id: 'terrain', elevationData: dem, texture: tex, bounds: extentBounds(),
       elevationDecoder: {rScaler: 6553.6, gScaler: 25.6, bScaler: 0.1, offset: -10000},
-      meshMaxError: 2, operation: 'terrain+draw', material: false}),
-    new SimpleMeshLayer({id: 'blocks', data: [0], mesh, coordinateSystem: METERS, coordinateOrigin: ORIGIN,
-      getPosition: () => [0, 0, 0], getColor: [217, 83, 79],
-      extensions: [new TerrainExtension()], terrainDrawMode: mode})
-  ];
+      meshMaxError: 2, operation: 'terrain+draw', material: false});
+    return [
+      terrain,
+      new SimpleMeshLayer({id: 'blocks', data: [0], mesh, coordinateSystem: METERS, coordinateOrigin: ORIGIN,
+        getPosition: () => [0, 0, 0], getColor: [217, 83, 79],
+        extensions: [new TerrainExtension()], terrainDrawMode: mode})
+    ];
+  };
 
   const ui = mountChrome({
     num: '05', title: 'Fix A1 — deck.gl owns the terrain',
@@ -34,6 +39,16 @@ if (requireWebGL2()) {
     ui.probe("terrain-effect.ts:74  layers.filter(l => l.props.operation.includes('terrain'))  — target chosen by property, so DTCC's terrain_surface_mesh qualifies.");
     ui.probe('TerrainExtension is exported from @deck.gl/extensions as experimental.');
     ui.probe(`terrainDrawMode in use: ${mode}  (auto-select rule, terrain-extension.ts: is3d || hasAnchor ? 'offset' : 'drape')`);
-    whenIdle(map, () => ui.ready());
+    // MapLibre's `idle` fires as soon as its own flat raster tiles settle — it has no idea the
+    // deck.gl TerrainLayer is still decoding the two data-URL images and building a terrain mesh,
+    // or that TerrainExtension needs a render pass with that mesh loaded before it has a terrain
+    // cover to drape the blocks onto. Wait for deck.gl itself to report the terrain as loaded and
+    // for a render to actually happen with it, instead of trusting MapLibre's idle.
+    let signaled = false;
+    overlay.setProps({
+      onAfterRender: () => {
+        if (!signaled && terrain.isLoaded) { signaled = true; ui.ready(); }
+      }
+    });
   });
 }
