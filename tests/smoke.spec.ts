@@ -25,7 +25,8 @@ export const PAGES: PageSpec[] = [
   {slug: '05-fix-a1-deck-terrain'},
   {slug: '03-threejs-floats'},
   {slug: '09-cesium-terrain'},
-  {slug: '10-cesium-voxels'}
+  {slug: '10-cesium-voxels'},
+  {slug: '11-vtkjs-grid'}
 ];
 
 for (const spec of PAGES) {
