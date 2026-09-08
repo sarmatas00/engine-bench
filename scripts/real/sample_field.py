@@ -27,7 +27,6 @@ OUT = REPO / "public" / "data" / "real"
 NOTES = REPO / "NOTES.md"
 
 GRID_DIMS = (64, 64, 32)
-GRID_HEIGHT_M = 80.0
 PERCENTILES = (2.0, 98.0)
 
 # Same five stops as src/lib/colormap.ts.
@@ -203,7 +202,10 @@ def main(out_dir: Path = OUT) -> dict:
                             extra={"colors": (colormap(temperature, tmin, tmax).reshape(-1), "u8", 3)})
 
     nx, ny, nz = GRID_DIMS
-    spacing = [2 * extent / (nx - 1), 2 * extent / (ny - 1), GRID_HEIGHT_M / (nz - 1)]
+    # Read from the solve's own record, not a duplicated constant, so the grid's vertical extent
+    # can never drift from `mesh_domain_height` used by the solve itself.
+    grid_height_m = float(heat_meta["args"]["mesh_domain_height"])
+    spacing = [2 * extent / (nx - 1), 2 * extent / (ny - 1), grid_height_m / (nz - 1)]
     grid_origin = [-extent, -extent, 0.0]
     gx = grid_origin[0] + np.arange(nx) * spacing[0]
     gy = grid_origin[1] + np.arange(ny) * spacing[1]

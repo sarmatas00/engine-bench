@@ -6,7 +6,9 @@ if (requireWebGL2()) (async () => {
   const scene = await loadScene();
   const ui = mountChrome({
     num: '12', title: 'PlayCanvas',
-    expect: 'the baked temperature mesh, rendered well, in an arbitrary engine space. The list on the right is the point: nothing here can place it on the Earth.',
+    expect: !scene.hasField
+      ? 'nothing — this dataset has no temperature field (stage 2 has not run), so there is no baked mesh to load. See the probe panel below for how to generate one.'
+      : 'the baked temperature mesh, rendered well, in an arbitrary engine space. The list on the right is the point: nothing here can place it on the Earth.',
     claim: 'No geographic support anywhere in the engine. Its only mapping project is one person\'s side project — 32 commits, dormant about ten months, and tied to a paid Google service.',
     dataset: datasetChrome(scene)
   });

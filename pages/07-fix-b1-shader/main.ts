@@ -13,7 +13,9 @@ if (requireWebGL2()) (async () => {
 
   const ui = mountChrome({
     num: '07', title: 'Fix B1 — custom shader',
-    expect: scene.dataset === 'real'
+    expect: !scene.hasField
+      ? 'nothing — this dataset has no temperature field (stage 2 has not run), so there is no mesh to colour. See the probe panel below for how to generate one.'
+      : scene.dataset === 'real'
       ? 'the real ground mesh coloured by _TEMPERATURE, live: deep blue nearly everywhere, with cyan-to-red rims hugging the building walls and white gaps where the buildings themselves stand. Read the header range before the colours: the solve pins the ground to 18 °C (Dirichlet), so the whole ramp spans 0.75 °C and those red rims are tenths of a degree, not a heat wave. Drag Scale max up to 30 and the surface goes almost uniformly blue — same data, honest scale. Same file as page 04; the only difference is one subclass with its own shader.'
       : 'the field mesh coloured by _TEMPERATURE, live. Drag the sliders and the colours move. Same file as page 04; the only difference is one subclass with its own shader.',
     claim: 'Because it fails at the shader, a small subclass that supplies its own shader does bind them. Cost: it leans on deck.gl internals that carry no stability promise, so it needs maintaining.',

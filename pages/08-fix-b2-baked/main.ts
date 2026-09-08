@@ -9,7 +9,9 @@ if (requireWebGL2()) (async () => {
   const [tMin, tMax] = scene.colourRange;
   const ui = mountChrome({
     num: '08', title: 'Fix B2 — baked colours',
-    expect: scene.dataset === 'real'
+    expect: !scene.hasField
+      ? 'nothing — this dataset has no temperature field (stage 2 has not run), so there is no baked-colour file to load. See the probe panel below for how to generate one.'
+      : scene.dataset === 'real'
       ? 'the same two copies as page 04, but the colours are baked into the file. Right copy (SimpleMeshLayer) is coloured — deep blue ground with warm rims along the building walls; left copy (ScenegraphLayer) is plain white, because deck.gl 9.4.0 ignores COLOR_0 on the glTF path, so B2 requires the mesh path (SimpleMeshLayer / Tile3DLayer mesh content). The baked scale is the header range, 0.75 °C end to end, and the sliders are disabled: changing it means regenerating the file.'
       : 'a coloured temperature field with no client code. Right copy (SimpleMeshLayer) must be coloured. Left copy (ScenegraphLayer) shows whether the glTF path honours COLOR_0 at all. Sliders are disabled: a new scale means regenerating the file. ScenegraphLayer ignores COLOR_0 on deck.gl 9.4.0 — B2 requires the mesh path (SimpleMeshLayer / Tile3DLayer mesh content).',
     claim: 'Decide the colour scale when we generate the file, and ship colours instead of raw values. No client work at all, works in every viewer today, and it is exactly what the Table already does. Cost: no changing the colour scale in the browser.',

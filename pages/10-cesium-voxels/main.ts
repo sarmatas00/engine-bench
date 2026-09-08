@@ -3,7 +3,7 @@ import {mountChrome, requireWebGL2, noFieldForThisDataset} from '@lib/chrome';
 import {makeViewer, enuMatrix, whenTilesLoaded} from '@lib/cesium-setup';
 import {loadGrid} from '@lib/grid';
 import {COLORMAP_GLSL} from '@lib/colormap';
-import {loadScene, datasetChrome, scaleMinBounds, scaleMaxBounds} from '@lib/dataset';
+import {loadScene, datasetChrome, reportGridFailure, scaleMinBounds, scaleMaxBounds} from '@lib/dataset';
 
 if (requireWebGL2()) (async () => {
   const scene = await loadScene();
@@ -13,12 +13,14 @@ if (requireWebGL2()) (async () => {
   // the voxels clamped to the top stop and the plume rendered as a solid red block (see NOTES.md).
   // Loaded before the header so the sliders can present the range they actually drive; without a
   // field there is no grid file to fetch, so the gate below still runs first for that case.
-  const grid = scene.hasField ? await loadGrid(scene) : undefined;
+  const grid = scene.hasField ? await loadGrid(scene).catch(reportGridFailure) : undefined;
   const [t0, t1] = grid ? [grid.min, grid.max] : scene.colourRange;
   let shader: Cesium.CustomShader | undefined;
   const ui = mountChrome({
     num: '10', title: 'Cesium — volume rendering',
-    expect: scene.dataset === 'real'
+    expect: !scene.hasField
+      ? 'nothing — this dataset has no temperature field (stage 2 has not run), so there is no grid to ray-march. See the probe panel below for how to generate one.'
+      : scene.dataset === 'real'
       ? 'the real 64×64×32 grid ray-marched as a volume over the tile: a broad translucent haze, yellow-green through most of its body, with amber patches where the air over the densest blocks is warmest and a soft cyan fringe where it fades out. The globe graticule and the hill silhouette show through it. The sliders carry this page’s own scale — the grid’s extent, 18.0–32.5 °C; the header’s 18.0–18.7 °C is the ground-surface range pages 07 and 08 colour against, and it does not describe the air. A diffusion solve over a 500 m box has no single sharp hot spot, so the warm body spreads across the built-up half of the tile rather than rising from one point.'
       : 'a translucent 3-D plume over the hot spot: a hot amber core fading through green and cyan to transparent. This is the temperature field as a volume, not a surface.',
     claim: 'it is the only engine that can currently draw volume data like a wind or heat field in 3D. Not the base map, but a real candidate for a dedicated simulation view.',

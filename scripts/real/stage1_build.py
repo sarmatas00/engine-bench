@@ -34,8 +34,17 @@ MIN_RELIEF_M = 20.0
 
 def local_frame(bounds) -> dict:
     xmin, ymin, xmax, ymax = [float(v) for v in bounds]
+    x_span, y_span = xmax - xmin, ymax - ymin
+    # `extent` is derived from the x span alone and then reused as the y half-size everywhere
+    # downstream (every page's zoom, camera, sideOffset, grid spacing and TerrainLayer bounds) —
+    # a non-square `bounds.json` would silently produce a wrong y half-size across the whole bench.
+    assert abs(x_span - y_span) < 1e-6, (
+        f"local_frame: bounds must be square — x span {x_span} m != y span {y_span} m "
+        f"(bounds={bounds}); `extent` is derived from the x span alone and reused as the y "
+        f"half-size everywhere downstream"
+    )
     return {"origin": [(xmin + xmax) / 2.0, (ymin + ymax) / 2.0],
-            "extent": (xmax - xmin) / 2.0}
+            "extent": x_span / 2.0}
 
 
 def raster_stats(raster) -> dict:

@@ -14,7 +14,7 @@ import vtkActor from '@kitware/vtk.js/Rendering/Core/Actor';
 import {mountChrome, requireWebGL2, noFieldForThisDataset} from '@lib/chrome';
 import {loadGrid} from '@lib/grid';
 import {colormap} from '@lib/colormap';
-import {loadScene, datasetChrome} from '@lib/dataset';
+import {loadScene, datasetChrome, reportGridFailure} from '@lib/dataset';
 
 if (requireWebGL2()) (async () => {
   const scene = await loadScene();
@@ -25,12 +25,14 @@ if (requireWebGL2()) (async () => {
   // made the isosurface a box-filling slab (see NOTES.md). Loaded before the header so the slider
   // spans the range it actually contours; without a field there is no grid file to fetch, so the
   // gate below still runs first for that case.
-  const grid = scene.hasField ? await loadGrid(scene) : undefined;
+  const grid = scene.hasField ? await loadGrid(scene).catch(reportGridFailure) : undefined;
   const [t0, t1] = grid ? [grid.min, grid.max] : scene.colourRange, span = t1 - t0;
   let mc: any, rw: any;
   const ui = mountChrome({
     num: '11', title: 'VTK.js — one job',
-    expect: scene.dataset === 'real'
+    expect: !scene.hasField
+      ? 'nothing — this dataset has no temperature field (stage 2 has not run), so there is no grid to load. See the probe panel below for how to generate one.'
+      : scene.dataset === 'real'
       ? 'the volume as a faint pale haze with a solid orange isosurface inside it: at the default 23.8 °C, a lens of warm air over the built-up half of the tile, scalloped at the edges, with a few detached islands to the south-west. The slider carries this page’s own scale, the grid’s 18.0–32.5 °C extent — the header’s 18.0–18.7 °C is the ground-surface range pages 07 and 08 use — and it spans something real: the contour encloses 67% of the volume at the bottom of the slider, 30% at the default and almost nothing at the top. This page never loaded the unstructured mesh; it loaded the regular grid the pipeline wrote.'
       : 'a faint translucent plume as a volume, with a solid orange isosurface visible at the slider temperature inside it. This page never loaded the unstructured mesh; it loaded the regular grid the pipeline wrote.',
     claim: 'Cannot display our simulation meshes at all — it has no concept of that kind of mesh. It stays useful for one thing: if we convert results to a regular grid first, it can draw them.',
@@ -73,7 +75,11 @@ if (requireWebGL2()) (async () => {
 
   renderer.resetCamera(); renderer.getActiveCamera().elevation(-50); renderer.resetCameraClippingRange();
   rw.render();
-  ui.probe('input: field.grid.f32 via vtkImageData. The 41×41 surface mesh and any tetrahedral mesh were never loaded — vtk.js has no mapper for vtkUnstructuredGrid.');
-  ui.probe('the grid conversion in scripts/generate.ts is the one step that feeds both this page and page 10.');
+  ui.probe(scene.dataset === 'real'
+    ? 'input: field.grid.f32 via vtkImageData. The 6,288-vertex ground mesh and the tetrahedral volume mesh were never loaded — vtk.js has no mapper for vtkUnstructuredGrid.'
+    : 'input: field.grid.f32 via vtkImageData. The 41×41 surface mesh and any tetrahedral mesh were never loaded — vtk.js has no mapper for vtkUnstructuredGrid.');
+  ui.probe(scene.dataset === 'real'
+    ? 'the grid conversion in scripts/real/sample_field.py is the one step that feeds both this page and page 10.'
+    : 'the grid conversion in scripts/generate.ts is the one step that feeds both this page and page 10.');
   ui.ready();
 })();

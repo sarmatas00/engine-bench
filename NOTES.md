@@ -12,7 +12,13 @@ maplibre-gl pinned to 5.24.0: @deck.gl/mapbox 9.4.0 interleaved mode reads `map.
 ## Findings
 
 - dtcc-core#85 round trip on `gothenburg-skansen-kronan` (`save_volume_mesh` in the dtcc-sim container -> `load_volume_mesh` natively): **no loss**. vertices 50729 -> 50729, cells 182331 -> 182331, field `temperature` -> `temperature`, dtype float64 -> float64, max |dT| 0.0. Full record in `public/data/real/dataset.json` under `stage2.roundtrip`.
-- The temperature field sampled onto the ground mesh (`field.glb`/`field-baked.glb`, 6,288 vertices) is much flatter than either the full volume solve or the synthetic scene's display range, and this is expected, not a defect. The solve's full field spans 18.00-32.95 degC (mean 26.11) and the 64x64x32 volume grid sampled for `field.grid.f32` spans 18.00-32.49 degC, but the ground mesh itself — which sits at `ground_bc_type: dirichlet, ground_value: 18.0` — spans only 18.00-22.63 degC, and its 2nd/98th-percentile colour range (`field.json`'s `tmin`/`tmax`, what pages actually colour against) is 18.00-18.746 degC, a 0.75 degC band. The ground is a Dirichlet boundary pinned to the ambient value, so almost every ground vertex sits at or near 18 degC by construction; only vertices close to a hot building wall or roof rise above it. The synthetic scene's fixed display range is [10, 35] degC (25 degC span) for comparison. Left as measured — not retuned. Consequence for the briefing: normalising a 0.75 degC span onto the same five-stop blue-to-red ramp still paints a full blue-to-red gradient across the mesh — the ramp always spans its input's own min-to-max, regardless of how narrow that input is — so pages 07/08/10/11 on the real dataset will *look* like a dramatic temperature swing across the surface while representing almost no actual variation. A reader who sees only the screenshot, without this number, would be misled about how much the real solve's ground temperature actually varies.
+- The container's solve and Stage 1's raster disagree on the tile's terrain minimum by 0.12 m — measured while verifying the frame, not a defect to fix. `heat.xdmf`'s volume mesh (loaded natively with `load_volume_mesh`) has z in `[1.2397061261541102, 81.2397061261541]`, a domain height of exactly `mesh_domain_height` = 80.0 m above *its own* terrain floor of 1.2397 m. `public/data/real/dataset.json`'s `z0` — Stage 1's raster minimum, the value everything in this bench treats as the tile's local zero — is 1.1191982915663998 m. The two floors differ by 0.1205 m: the container solved its mesh against a terrain sample that was not bit-for-bit the same minimum Stage 1 recorded from the raster. Harmless against 53.45 m of relief (0.2% of it), but it is exactly the class of cross-revision fact this file exists to hold, so it is recorded here rather than left to be rediscovered.
+- **Superseded by the Task 11 entry below (measured on the shipped renders): the prediction in this
+  bullet that pages 07/08/10/11 "will *look* like a dramatic temperature swing across the surface"
+  is wrong for the surface pages (07, 08, 12) — the synthetic and real datasets turn out to have
+  nearly the same colour distribution, 82.6/11.7/2.9/2.8 vs 83.0/12.0/4.3/0.7 by band. Any earlier
+  note repeating that prediction as fact is wrong and is corrected by the Task 11 entry.** The
+  temperature field sampled onto the ground mesh (`field.glb`/`field-baked.glb`, 6,288 vertices) is much flatter than either the full volume solve or the synthetic scene's display range, and this is expected, not a defect. The solve's full field spans 18.00-32.95 degC (mean 26.11) and the 64x64x32 volume grid sampled for `field.grid.f32` spans 18.00-32.49 degC, but the ground mesh itself — which sits at `ground_bc_type: dirichlet, ground_value: 18.0` — spans only 18.00-22.63 degC, and its 2nd/98th-percentile colour range (`field.json`'s `tmin`/`tmax`, what pages actually colour against) is 18.00-18.746 degC, a 0.75 degC band. The ground is a Dirichlet boundary pinned to the ambient value, so almost every ground vertex sits at or near 18 degC by construction; only vertices close to a hot building wall or roof rise above it. The synthetic scene's fixed display range is [10, 35] degC (25 degC span) for comparison. Left as measured — not retuned. Consequence for the briefing: normalising a 0.75 degC span onto the same five-stop blue-to-red ramp still paints a full blue-to-red gradient across the mesh — the ramp always spans its input's own min-to-max, regardless of how narrow that input is — so pages 07/08/10/11 on the real dataset will *look* like a dramatic temperature swing across the surface while representing almost no actual variation. A reader who sees only the screenshot, without this number, would be misled about how much the real solve's ground temperature actually varies.
 - Page 08 (`field-baked.glb`, COLOR_0 = baked RGB, no `_TEMPERATURE`): right copy (SimpleMeshLayer) renders coloured — blue-to-red gradient with a red/yellow hot spot. Left copy (ScenegraphLayer) renders plain white/grey; COLOR_0 never reaches its GPU buffer at all. Probe: `simpleMesh = {inBufferLayout: true, inShaderLayout: true, inVsSource: true}` (probed as `colors`), `scenegraph = {inBufferLayout: false, inShaderLayout: false, inVsSource: false}` (probed as `COLOR_0`). Buffer-layout names printed to the probe panel: SimpleMeshLayer → `geometry, instancePositions, instanceColors, instanceModelMatrix` (colors folded into the interleaved `geometry` entry's nested attributes); ScenegraphLayer → `instancePositions, instanceColors, instanceModelMatrix, geometry` (its `geometry` entry has no colour attribute at all — stock scenegraph-layer-vertex.glsl.ts never declares one). So B2 stands for the mesh path only.
 - Page 07 (fix B1): on deck.gl 9.4.0 the fix is one `getShaders()` override plus a `draw()` override to feed the uniform — patch the two stock vertex anchors (`in vec3 positions;`, `void main(void) {`) and the flat-path fragment assignment, append a 2-float uniform-block module, and `_TEMPERATURE` binds and colours. No buffer-layout entry was needed (the attribute already reaches the model's `bufferLayout`), and `src/lib/probe.ts` needed no change: once the attribute is declared and used, WebGL program introspection puts it in `model.pipeline.shaderLayout.attributes`, so the probe flips to `{inBufferLayout: true, inShaderLayout: true, inVsSource: true}` on its own. One trap the briefing's "genuinely small" hides: the fragment shader has three `fragColor = ...;` assignments (PBR, textured flat, flat) — a naive first-match replace patches the dead PBR branch and leaves the surface uncoloured, so the anchor must be the exact `fragColor = vColor;`, and each anchor needs its own no-op guard.
 - Implementation note (not a briefing correction): `loadGltfMesh` (`src/lib/deck-map.ts`) previously dropped the glTF accessor's `normalized` flag when building each `Attr`, which crashed `SimpleMeshLayer` on `field-baked.glb`'s normalized Uint8 VEC3 `COLOR_0` (`Error: size: 3` from luma.gl's `VertexFormatDecoder`, deck.gl 9.4.0 / loaders.gl `@loaders.gl/gltf`). Fixed at the source: `loadGltfMesh` now carries `a.normalized` through into every returned `Attr`, so page 08 needs no page-local workaround.
@@ -31,13 +37,20 @@ maplibre-gl pinned to 5.24.0: @deck.gl/mapbox 9.4.0 interleaved mode reads `map.
   `custom` layer) reproduces exactly. The visual is milder than the synthetic page — most buildings
   keep something above ground instead of five of six vanishing — but not for the reason the plan
   gave. The plan expected "buildings on low ground stand clear, only the ones on the hill get
-  buried". Measured against the DEM: the terrain
-  under a footprint centroid is 0.40 m at its lowest, median 3.57 m, mean 5.57 m, max 52.80 m,
-  while the buildings are 2.50–28.26 m tall (median 8.69 m). So nothing stands clear — the tile's
-  local zero is an empty low corner of the DEM, not where the city is. Every one of the 217 has at
-  least 0.4 m of ground over its base; 60 of 217 vanish completely (roof at or below the terrain
-  over their own centroid), including all 8 that stand on ground above 20 m; across all 217 the
-  median building keeps 4.5 m of its 8.7 m height above the local ground, i.e. roughly half.
+  buried". **Correction: the digits this bullet originally gave here did not reproduce (see the
+  final review's re-measurement below); the qualitative claim — nothing stands clear, roughly half —
+  still holds.** Under the same convention the page-09 finding names for its building-group
+  centroids — a footprint's own true polygon centroid (area-weighted, not a vertex mean), matched
+  against the nearest-cell height in `terrain-rgb.png` (the same nearest-cell convention
+  `stage1_build.py` used to write it) — the terrain under a footprint centroid is 1.20 m at its
+  lowest, median 3.60 m, mean 5.65 m, max 53.00 m, while the buildings are 2.50–28.26 m tall (median
+  8.69 m). So nothing stands clear — the tile's local zero is an empty low corner of the DEM, not
+  where the city is. Every one of the 217 has at least 1.2 m of ground over its base; 58 of 217
+  vanish completely (roof at or below the terrain over their own centroid), including all 8 that
+  stand on ground above 20 m; across all 217 the median building keeps 4.22 m of its 8.7 m height
+  above the local ground, i.e. roughly half. (Re-measured for the final review's fix pass with a
+  script sampling `footprints.geojson` centroids against `terrain-rgb.png`, decoded with
+  `scripts/real/benchio.decode_terrain_rgb`; script and output are in the fix report.)
   (Counts are from `footprints.geojson` + `terrain-rgb.png`, the LOD0 heights; pages 02/03 draw the
   LOD1 mesh, so treat them as the shape of the result, not as a per-triangle census.) Vertex-level,
   on the drawn mesh: 18,477 of 20,726 vertices are lowered by more than 1 m when `buildings` is
@@ -52,8 +65,12 @@ maplibre-gl pinned to 5.24.0: @deck.gl/mapbox 9.4.0 interleaved mode reads `map.
   floating", which is exactly true on both datasets.
 - Pages 01/02/03 `expect:` lines were written for the synthetic six blocks ("five vanish inside the
   hill and one just pokes through") and are false on the real tile. Made dataset-aware, with the
-  real branch describing what the screenshot shows. The remaining ten pages still carry
-  synthetic-only `expect:` text on `?dataset=real`; Task 12 Step 3 sweeps them.
+  real branch describing what the screenshot shows. The remaining ten pages still carried
+  synthetic-only `expect:` text on `?dataset=real`. **Correction: this bullet originally said "Task
+  12 Step 3 sweeps them" — that sweep never happened for the six field pages (see the entry below,
+  corrected in the final review's fix pass).** Pages 05, 06 and 09 did pick up dataset-aware
+  `expect:` text along the way; the fix for 04/07/08/10/11/12 is the separate `hasField` mismatch
+  described below.
 - **Defect found in Task 7, fixed in Task 3b — `blocks.glb` on the real dataset carried torn
   geometry.** `flatten_buildings` (`scripts/real/stage1_build.py:169`, old version) looped over
   face markers and did `positions[verts, 2] -= positions[verts, 2].min()` per marker. Adjacent
@@ -145,8 +162,10 @@ maplibre-gl pinned to 5.24.0: @deck.gl/mapbox 9.4.0 interleaved mode reads `map.
   milder here than on the synthetic ridge, and for a structural reason: exaggeration `e` moves the
   ground under a building by `(e-1) x ground`, and the median ground under a building on this tile is
   3.70 m against a median building height of 9.35 m. So at exaggeration 2.0 the median building takes
-  on 3.7 m of ground — 40% of its height, plainly visible but not a vanishing — while 30 of 103 go
-  under completely and the hilltop octagon is swallowed by 50.5 m. At 0.5 they float by 1.85 m median,
+  on 3.7 m of ground — 40% of its height, plainly visible but not a vanishing — while, under the same
+  convention as the page-09 finding, 30 of 103 go under completely (stable at 30 under both DEM
+  conventions tried; only a mesh-vertex definition of "ground" moves it, to 28) and the hilltop
+  octagon is swallowed by 50.5 m. At 0.5 they float by 1.85 m median,
   25.25 m at the hilltop. On the synthetic ridge the same slider moves the hill by up to 120 m.
 - Page 09 (Cesium) on the real tile: the mechanism reproduces, the story inverts. The polygon and the
   line are `classificationType: TERRAIN` / `clampToGround` and both project per-pixel, correctly. But
@@ -157,13 +176,13 @@ maplibre-gl pinned to 5.24.0: @deck.gl/mapbox 9.4.0 interleaved mode reads `map.
   hill flank and the drape is obvious. The glTF model is the real correction. The synthetic page says
   the clamp makes blocks "float clear"; on this tile the anchor's ground is 3.40 m, near the tile
   floor of 0.00 m, against a 53.5 m relief, so the single clamp point mostly *buries* rather than
-  floats: of the 103 building groups, 55 sink into the ground (14 of them out of sight, worst 47.1 m),
-  47 float — by at most 3.00 m, less than a third of the median 9.35 m building height, i.e. barely
-  visible — and 1 lands exactly level, which is the group the earlier "55 and 47" arithmetic dropped
-  (55 + 47 + 1 = 103). Only 17 of 103 are off by more than 5 m. The convention behind every count in
-  this bullet, made explicit because it changes them: a group's ground is the DEM sampled at that
-  group's centroid, compared against the anchor's 3.40 m. A footprint spans a range of ground, so
-  there is no single right answer and the split is convention-sensitive — measured against each
+  floats. Under this convention — a group's ground is the DEM sampled at that group's centroid,
+  compared against the anchor's 3.40 m — 55 sink into the ground (14 of them out of sight, worst
+  47.1 m), 47 float — by at most 3.00 m, less than a third of the median 9.35 m building height,
+  i.e. barely visible — and 1 lands exactly level, which is the group the earlier "55 and 47"
+  arithmetic dropped (55 + 47 + 1 = 103, of 103 building groups total). Only 17 of 103 are off by
+  more than 5 m. A footprint spans a range of ground, so there is no single right answer and the
+  split is convention-sensitive — measured against each
   group's own lowest mesh vertex instead it is 50 sink / 53 float / 0 level, with the same 14 out of
   sight. Re-measured in Task 12 off `public/data/real/buildings.mesh.*` and `terrain-rgb.png`; every
   other figure in this bullet (47.1, 3.00, 17, 9.35) reproduced exactly. So on a 500 m tile the
@@ -172,9 +191,18 @@ maplibre-gl pinned to 5.24.0: @deck.gl/mapbox 9.4.0 interleaved mode reads `map.
 - Pages 04 and 12 are now gated on `scene.hasField` like 07, 08, 10 and 11, and added to
   `FIELD_PAGES` in `tests/smoke.spec.ts`. Both gate before any engine is constructed: on
   `?dataset=real` page 04 reports and finishes in 546 ms without building a MapLibre map, page 12 in
-  737 ms without constructing `pc.Application`. Their header `expect:` lines still describe the
-  synthetic field render while the body says there is no field — the same mismatch the four pages
-  gated in Task 6 already carry, and Task 12 Step 3's sweep covers all six.
+  737 ms without constructing `pc.Application`. **Correction: this bullet originally claimed their
+  header `expect:` lines still described the synthetic field render while the body said there was no
+  field, and that "Task 12 Step 3's sweep covers all six" — that sweep never ran. The final review
+  caught the mismatch still live in `pages/04:13`, `07:16`, `08:12`, `10:21`, `11:33` and `12:9`: all
+  six branched `expect:` on `scene.dataset`, never on `scene.hasField`, so on a checkout with no
+  field the header still promised the field render while the body said there was none — e.g. page
+  07's header still said "deep blue nearly everywhere, with cyan-to-red rims…" with no field to
+  colour. Fixed in the final fix pass: all six `expect:` lines now check `scene.hasField` first and
+  print a short "nothing — this dataset has no temperature field" line that matches
+  `noFieldForThisDataset`'s body probe, before falling through to the existing dataset branch.
+  Verified against the actual degraded path (a copy of `dist/data/real/dataset.json` with
+  `stages.stage2` set to `null`, served via `vite preview`), not by reading the diff.**
 - **DTCC's `dtcc-sim` image does not build as shipped on an Apple Silicon machine (`docker compose
   build dtcc-sim` under `--platform linux/amd64`) — two separate, one-line-fixable defects in
   `dtcc-sim/Dockerfile`, neither of which is a FEniCSx or TetGen problem.**
