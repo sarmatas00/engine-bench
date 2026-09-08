@@ -1,4 +1,6 @@
 import {test, expect, type Page} from '@playwright/test';
+import {existsSync, readFileSync} from 'node:fs';
+import {resolve} from 'node:path';
 
 type PageSpec = {slug: string; extraChecks?: (page: Page, probe: Record<string, unknown>) => Promise<void>};
 
@@ -79,23 +81,51 @@ export const PAGES: PageSpec[] = [
 
 export const FIELD_PAGES = new Set(['04-values-lost', '07-fix-b1-shader', '08-fix-b2-baked', '10-cesium-voxels', '11-vtkjs-grid', '12-playcanvas']);
 
-for (const spec of PAGES) {
-  test(spec.slug, async ({page}) => {
-    const errors: string[] = [];
-    page.on('pageerror', e => errors.push(`pageerror: ${e.message}`));
-    page.on('console', m => { if (m.type() === 'error') errors.push(`console.error: ${m.text()}`); });
+const REAL_DIR = resolve(import.meta.dirname, '../public/data/real');
 
-    await page.goto(`/${spec.slug}/`);
-    await page.waitForFunction(() => (window as any).__bench?.ready === true, null, {timeout: 30_000});
+function realState(): {available: boolean; hasField: boolean; reason: string} {
+  const metaPath = resolve(REAL_DIR, 'dataset.json');
+  if (!existsSync(metaPath)) {
+    return {available: false, hasField: false,
+      reason: 'public/data/real/dataset.json is absent — run .venv/bin/python scripts/real/stage1_build.py'};
+  }
+  if (!existsSync(resolve(REAL_DIR, 'blocks.glb'))) {
+    return {available: false, hasField: false,
+      reason: 'public/data/real/blocks.glb is absent — run bun run generate:real'};
+  }
+  const meta = JSON.parse(readFileSync(metaPath, 'utf8'));
+  const hasField = meta?.stages?.stage2 != null;
+  return {available: true, hasField,
+    reason: hasField ? '' : 'stage 2 has not run — no field for this dataset (scripts/real/stage2_sim.sh)'};
+}
 
-    const probe = await page.evaluate(() => (window as any).__bench.probe);
-    expect(probe.webgl, 'page reported no WebGL2').not.toBe(false);
-    if (FIELD_PAGES.has(spec.slug)) {
-      expect(probe.field, 'a field page must report probe.field').not.toBeUndefined();
+const REAL = realState();
+
+for (const dataset of ['synthetic', 'real'] as const) {
+  test.describe(dataset, () => {
+    for (const spec of PAGES) {
+      test(spec.slug, async ({page}) => {
+        if (dataset === 'real' && !REAL.available) test.skip(true, REAL.reason);
+        if (dataset === 'real' && FIELD_PAGES.has(spec.slug) && !REAL.hasField) test.skip(true, REAL.reason);
+
+        const errors: string[] = [];
+        page.on('pageerror', e => errors.push(`pageerror: ${e.message}`));
+        page.on('console', m => { if (m.type() === 'error') errors.push(`console.error: ${m.text()}`); });
+
+        const query = dataset === 'real' ? '?dataset=real' : '';
+        await page.goto(`/${spec.slug}/${query}`);
+        await page.waitForFunction(() => (window as any).__bench?.ready === true, null, {timeout: 30_000});
+
+        const probe = await page.evaluate(() => (window as any).__bench.probe);
+        expect(probe.webgl, 'page reported no WebGL2').not.toBe(false);
+        expect(errors, errors.join('\n')).toEqual([]);
+        if (FIELD_PAGES.has(spec.slug)) {
+          expect(probe.field, 'a field page must report probe.field').toBe(true);
+        }
+
+        await page.screenshot({path: `screens/${dataset}/${spec.slug}.png`, fullPage: true});
+        if (spec.extraChecks) await spec.extraChecks(page, probe);
+      });
     }
-    expect(errors, errors.join('\n')).toEqual([]);
-
-    await page.screenshot({path: `screens/${spec.slug}.png`, fullPage: true});
-    if (spec.extraChecks) await spec.extraChecks(page, probe);
   });
 }

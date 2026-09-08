@@ -88,15 +88,33 @@ maplibre-gl pinned to 5.24.0: @deck.gl/mapbox 9.4.0 interleaved mode reads `map.
   `TerrainLayer.bounds` is an axis-aligned `[W, S, E, N]` rectangle, so the raster was squeezed 4.8%
   in longitude and stretched 4.3% in latitude against the SimpleMeshLayer blocks beside it, which
   deck.gl places in metre offsets from the anchor. Displacement at the tile edge: **+12.06 / -12.03 m
-  east-west and -10.85 / +10.84 m north-south**, about 11 screen px at zoom 16.2. Measured on screen,
-  not just on paper: pages 05 and 06 share a camera and both draw the same 10 m contour rule over the
-  same DEM, so the contour marks should land on the same pixels. Cross-correlating the two masks over
-  the hill, page 05 before the fix peaked at a shift of (+15, -20) screen px with 4,130 px of overlap
-  at zero shift; after the fix it peaks at (+4, -4) px with 9,358 at zero shift — the residual is the
-  Delatin terrain mesh disagreeing with MapLibre's 256 px DEM tiles, not a frame error.
+  east-west and -10.85 / +10.84 m north-south**, which is 10.9 ground px at the zoom-16.2 nadir scale
+  (1.111 m per CSS px at 57.698 degN). Measured on screen, not just on paper: pages 05 and 06 share
+  a camera and both draw the same 10 m contour rule over the same DEM, so the contour marks should
+  land on the same pixels. Cross-correlating the two masks over the hill, page 05 before the fix
+  peaked at a shift of (+15, -20) screen px with 4,130 px of overlap at zero shift; after the fix it
+  peaks at (+4, -4) px with 9,358 at zero shift — the residual is the Delatin terrain mesh
+  disagreeing with MapLibre's 256 px DEM tiles, not a frame error.
   Fixed by handing `TerrainLayer` `extentLngLatBounds(scene)`, the same true-north 500 m square every
   other layer and page already uses. `terrain.json` is left alone: as source metadata the reprojected
   corners are correct, they are just not a bbox and not the bench's frame.
+- **The two page-05 displacement figures above, ~11 px and ~25 px, are not the same quantity and were
+  never comparable** — recorded in Task 12 because an earlier draft left them side by side, a factor
+  of two apart, with no note saying why. The 11 px is analytic: the *largest in-plane* raster offset
+  (12.06 m, at the tile edge) divided by the nadir ground resolution. It assumes a top-down camera,
+  and the defect is a scale about the tile centre, so it falls to zero at the centre and only reaches
+  11 px at the edge. The 25 px is the magnitude of `(+15, -20)`, the peak of a 2-D cross-correlation
+  fitted as a single *translation*, in the shared pitched view (`initialView` in `src/lib/tiles.ts`:
+  pitch 60, bearing -20, 1280x800). A single translation is the wrong model for a centre-anchored
+  scale error, and that peak also absorbs everything else the two terrain renderers disagree about.
+  Projecting the in-plane error through the actual camera (MapLibre's `cameraToCenterDistance` =
+  0.5 x 800 / tan(36.87 deg / 2) = 1200 px) gives an on-screen displacement of 5.2 px at the hill
+  centroid, 10.6 px over the hill's south-west flank, and **at most 11.0 px anywhere on the tile** —
+  so the analytic figure is not a lower bound on the measured one, it is close to an upper bound on
+  the part of it this defect can explain. Roughly half the 25 px peak is the frame error; the rest is
+  the Delatin-versus-256-px-tile disagreement the post-fix (+4, -4) peak measures directly. What the
+  two figures do agree on is the sign, the direction, and the outcome: the fix collapses the peak from
+  25 px to 5.7 px and more than doubles the overlap at zero shift, 4,130 -> 9,358.
 - Consequence of the above worth carrying to the briefing: **the bench draws the real tile rotated
   2.57 deg from true north.** Local metres in this repo are EPSG:3006 grid metres (building vertices
   are easting/northing minus the origin, the DEM is sampled on the grid axes), while `src/lib/geo.ts`
@@ -139,11 +157,18 @@ maplibre-gl pinned to 5.24.0: @deck.gl/mapbox 9.4.0 interleaved mode reads `map.
   hill flank and the drape is obvious. The glTF model is the real correction. The synthetic page says
   the clamp makes blocks "float clear"; on this tile the anchor's ground is 3.40 m, near the tile
   floor of 0.00 m, against a 53.5 m relief, so the single clamp point mostly *buries* rather than
-  floats: of the 103 building groups, 55 sink into the ground (14 of them out of sight, worst 47.1 m)
-  and only 47 float, by at most 3.00 m — less than a third of the median 9.35 m building height, i.e.
-  barely visible. Only 17 of 103 are off by more than 5 m. So on a 500 m tile the model-origin clamp
-  error is not "floats clear", it is "correct to within a couple of metres for most of the tile and
-  catastrophic for the few buildings on the hill". Both `expect:` texts corrected.
+  floats: of the 103 building groups, 55 sink into the ground (14 of them out of sight, worst 47.1 m),
+  47 float — by at most 3.00 m, less than a third of the median 9.35 m building height, i.e. barely
+  visible — and 1 lands exactly level, which is the group the earlier "55 and 47" arithmetic dropped
+  (55 + 47 + 1 = 103). Only 17 of 103 are off by more than 5 m. The convention behind every count in
+  this bullet, made explicit because it changes them: a group's ground is the DEM sampled at that
+  group's centroid, compared against the anchor's 3.40 m. A footprint spans a range of ground, so
+  there is no single right answer and the split is convention-sensitive — measured against each
+  group's own lowest mesh vertex instead it is 50 sink / 53 float / 0 level, with the same 14 out of
+  sight. Re-measured in Task 12 off `public/data/real/buildings.mesh.*` and `terrain-rgb.png`; every
+  other figure in this bullet (47.1, 3.00, 17, 9.35) reproduced exactly. So on a 500 m tile the
+  model-origin clamp error is not "floats clear", it is "correct to within a couple of metres for
+  most of the tile and catastrophic for the few buildings on the hill". Both `expect:` texts corrected.
 - Pages 04 and 12 are now gated on `scene.hasField` like 07, 08, 10 and 11, and added to
   `FIELD_PAGES` in `tests/smoke.spec.ts`. Both gate before any engine is constructed: on
   `?dataset=real` page 04 reports and finishes in 546 ms without building a MapLibre map, page 12 in
@@ -306,3 +331,34 @@ maplibre-gl pinned to 5.24.0: @deck.gl/mapbox 9.4.0 interleaved mode reads `map.
   pixel-identical, except page 08's probe panel, where the two probe blocks swapped order — a
   pre-existing race between which layer's `draw()` fires first, same text either way — and ±1 of
   SwiftShader noise inside page 11's volume raycast.
+- **Task 12, the whole matrix and the real-screenshot sweep.** `bun run test` now runs
+  `13 pages x {synthetic, real}` = **26 tests, 26 passed, 0 skipped** (1 worker, 1.5 min; Cesium
+  page 10 is 17.7 s synthetic / 16.5 s real, page 09 9.9 / 10.8 s, everything else under 4 s).
+  Every screenshot under `screens/` was deleted before the run and regenerated from scratch: an
+  earlier task left a stale PNG on disk still showing a "no field" gate after the field existed, so
+  nothing on disk was trusted. All 13 `screens/real/*.png` were then opened and compared against
+  their own page header. Verdict: **13 of 13 show what their header promises**, with the numbers
+  re-measured rather than eyeballed where a number was available —
+  · page 07's ramp distribution on the fresh render: 82.8% of on-ramp pixels in the bottom tenth,
+  11.3% lower-middle, 3.0% upper-middle, 2.9% top tenth, median ramp position 0.003; synthetic the
+  same way 83.2 / 11.8 / 4.3 / 0.7. Both reproduce Task 11's figures, so the surface pages are
+  unchanged by the volume-scale fix, as expected — 07 and 08 scale to the ground field, which that
+  fix did not touch.
+  · page 11's isosurface, recomputed from the shipped `field.grid.f32` (131,072 voxels,
+  18.00–32.49 degC): 67.0% of the volume enclosed at the bottom of the slider, 30.2% at the default
+  23.80 degC, 0.0% at the top. The header's "67% / 30% / almost nothing" is exact.
+  · page 09's counts re-measured off the shipped meshes; see the page 09 bullet above for the
+  correction and the convention.
+  One measured qualification, not a contradiction: page 10's header calls the warm parts of the
+  volume "amber patches". Classifying the render by hue, the body of the haze sits at hue 66–78
+  (yellow-green, 5th–95th percentile), the cyan fringe is 5.2% of the frame with a median distance
+  of 11 px from the blob edge (so it is a fringe, not scatter), and genuinely amber pixels
+  (hue < 50) are **0.58% of the frame**, the largest patch 309 px over the densest blocks. "Amber
+  patches" is honest; "an amber core" would not be, and the header does not say that.
+- Task 12, `pages/00-index/main.ts`: the index blurb is dataset-aware, and three rows of its table
+  are overridden on `?dataset=real` because they described the synthetic scene and not the render —
+  01 ("Blocks follow the hill" -> 217 real footprints), 02 ("stay at sea level" -> stay at the tile
+  floor and are buried, since the real DEM bottoms out at 0.0 m) and 10 ("3-D temperature plume" ->
+  a broad haze, not a sharp plume). The other nine rows are true on both datasets and were left
+  alone. Pages 04 and 12 were checked and need no dataset branch: their `expect:` text describes
+  what both renders do, and both were confirmed against the real screenshots.

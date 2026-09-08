@@ -81,3 +81,80 @@ def test_colormap_clamps_outside_the_range():
     out = sample_field.colormap(np.array([-5.0, 5.0]), 0.0, 1.0)
     assert tuple(out[0]) == (33, 102, 172)
     assert tuple(out[1]) == (200, 30, 30)
+
+
+def _round_trip(max_abs_delta: float = 0.0) -> dict:
+    pre = np.array([18.0, 21.0, 32.0])
+    post = pre + max_abs_delta
+    meta = {"vertices": 3, "cells": 1, "field": {"name": "temperature", "dtype": "float64", "count": 3}}
+    return sample_field.compare_round_trip(pre, post, meta, vertices=3, cells=1,
+                                           field_name="temperature", dtype="float64")
+
+
+NOTES_FIXTURE = (
+    "# engine-bench notes\n"
+    "\n"
+    "## Findings\n"
+    "\n"
+    "- an earlier finding that must survive\n"
+    "  with a continuation line of its own\n"
+    "- a later finding that must survive too\n"
+)
+
+
+def test_upsert_note_writes_one_bullet_when_the_script_is_run_twice(tmp_path):
+    """sample_field.py is meant to be re-runnable. Running it twice must update its bullet,
+    not append a second copy for someone to delete by hand."""
+    notes = tmp_path / "NOTES.md"
+    notes.write_text(NOTES_FIXTURE)
+    key = sample_field.note_key("gothenburg-skansen-kronan")
+
+    first = sample_field.round_trip_note("gothenburg-skansen-kronan", _round_trip())
+    sample_field.upsert_note(first, key, notes)
+    sample_field.upsert_note(first, key, notes)
+
+    body = notes.read_text()
+    assert body.count(key) == 1
+    assert len([ln for ln in body.splitlines() if ln.startswith(key)]) == 1
+    # The bullets that were already there are untouched.
+    assert "- an earlier finding that must survive\n  with a continuation line of its own" in body
+    assert "- a later finding that must survive too" in body
+
+
+def test_upsert_note_replaces_the_old_verdict_rather_than_stacking_verdicts(tmp_path):
+    notes = tmp_path / "NOTES.md"
+    notes.write_text(NOTES_FIXTURE)
+    key = sample_field.note_key("gothenburg-skansen-kronan")
+
+    sample_field.upsert_note(sample_field.round_trip_note("gothenburg-skansen-kronan", _round_trip()), key, notes)
+    assert "**no loss**" in notes.read_text()
+
+    lossy = _round_trip(max_abs_delta=0.5)
+    sample_field.upsert_note(sample_field.round_trip_note("gothenburg-skansen-kronan", lossy), key, notes)
+    body = notes.read_text()
+    assert body.count(key) == 1
+    assert "**LOSS**" in body
+    assert "**no loss**" not in body
+
+
+def test_upsert_note_keeps_one_bullet_per_tile(tmp_path):
+    """The key carries the tile name, so a different tile gets its own bullet."""
+    notes = tmp_path / "NOTES.md"
+    notes.write_text(NOTES_FIXTURE)
+    for name in ("gothenburg-skansen-kronan", "some-other-tile", "gothenburg-skansen-kronan"):
+        sample_field.upsert_note(sample_field.round_trip_note(name, _round_trip()), sample_field.note_key(name), notes)
+
+    body = notes.read_text()
+    assert body.count(sample_field.note_key("gothenburg-skansen-kronan")) == 1
+    assert body.count(sample_field.note_key("some-other-tile")) == 1
+
+
+def test_upsert_note_adds_the_findings_heading_when_it_is_missing(tmp_path):
+    notes = tmp_path / "NOTES.md"
+    notes.write_text("# engine-bench notes\n")
+    key = sample_field.note_key("gothenburg-skansen-kronan")
+    sample_field.upsert_note(sample_field.round_trip_note("gothenburg-skansen-kronan", _round_trip()), key, notes)
+    sample_field.upsert_note(sample_field.round_trip_note("gothenburg-skansen-kronan", _round_trip()), key, notes)
+    body = notes.read_text()
+    assert body.count("## Findings") == 1
+    assert body.count(key) == 1

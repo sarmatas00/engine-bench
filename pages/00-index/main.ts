@@ -16,16 +16,28 @@ const rows: [string, string, string, string][] = [
   ['12-playcanvas', 'PlayCanvas', 'Mesh renders; no CRS, basemap or terrain API.', 'Rejected.']
 ];
 
+// Three rows describe something the synthetic scene does and the real tile does not. Overridden
+// rather than reworded for both, because the difference is the finding: on the real tile z = 0 is
+// the tile floor (buried, never floating) and the solved field has no single hot spot to plume.
+const realExpect: Record<string, string> = {
+  '01-maplibre-baseline': '217 real footprints extruded onto the hillside with terrain on.',
+  '02-deckgl-floats': 'Same buildings via deck.gl stay at the tile floor and are buried when terrain is on.',
+  '10-cesium-voxels': 'The solved field as a VoxelPrimitive: a broad haze, not a sharp plume.'
+};
+
 const ds = currentDataset();
 const q = ds === 'real' ? '?dataset=real' : '';
+const blurb = ds === 'real'
+  ? 'Every page draws the same real Gothenburg tile in its own engine. Differences are the engine\'s.'
+  : 'Every page draws the same synthetic hill, six blocks and a temperature field. Differences are the engine\'s.';
 document.body.innerHTML = `
   <header class="bench"><h1>engine-bench</h1>
-  <div class="expect">Every page draws the same scene in its own engine. Differences are the engine's.</div>
+  <div class="expect">${blurb}</div>
   <div class="dataset">Dataset: <b>${ds}</b> ·
     <a href="/00-index/">synthetic</a> · <a href="/00-index/?dataset=real">real (Gothenburg tile)</a>
     — the real dataset needs <code>scripts/real/stage1_build.py</code> to have run.</div></header>
   <main style="padding:14px;overflow:auto"><table style="border-collapse:collapse">
   <thead><tr><th align="left">Page</th><th align="left">What you should see</th><th align="left">Claim</th></tr></thead>
-  <tbody>${rows.map(([slug, t, e, c]) => `<tr><td style="padding:4px 12px 4px 0"><a href="/${slug}/${q}">${slug.slice(0, 2)} · ${t}</a></td><td style="padding:4px 12px 4px 0">${e}</td><td>${c}</td></tr>`).join('')}</tbody>
+  <tbody>${rows.map(([slug, t, e, c]) => `<tr><td style="padding:4px 12px 4px 0"><a href="/${slug}/${q}">${slug.slice(0, 2)} · ${t}</a></td><td style="padding:4px 12px 4px 0">${(ds === 'real' && realExpect[slug]) || e}</td><td>${c}</td></tr>`).join('')}</tbody>
   </table></main>`;
 window.__bench = {ready: true, probe: {}};

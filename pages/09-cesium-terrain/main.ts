@@ -9,7 +9,7 @@ if (requireWebGL2()) (async () => {
   const ui = mountChrome({
     num: '09', title: 'Cesium — terrain follows lines, not models',
     expect: scene.dataset === 'real'
-      ? 'a blue polygon draped on the real terrain — it folds down the hill flank, one corner at 47 m against 1.5–7.8 m for the other three — and a gold line that stays straight because the ground it crosses only moves 2.8 m. The red glTF blocks clamp at one point, the tile anchor, and the anchor sits near the tile floor at 3.4 m, so here they are mostly sunk rather than floating: 55 of the 103 building groups sink in, 14 of them out of sight, and the 47 that do float clear only rise by up to 3.0 m.'
+      ? 'a blue polygon draped on the real terrain — it folds down the hill flank, one corner at 47 m against 1.5–7.8 m for the other three — and a gold line that stays straight because the ground it crosses only moves 2.8 m. The red glTF blocks clamp at one point, the tile anchor, and the anchor sits near the tile floor at 3.4 m, so here they are mostly sunk rather than floating: of the 103 building groups, 55 sink in — 14 of them out of sight — 47 float, clearing by at most 3.0 m, and 1 lands level.'
       : 'a blue polygon and a yellow line wrapped perfectly over the ridge; the red glTF blocks clamp only at their shared origin point, so the ones on the flanks still float clear of it.',
     claim: 'The only one that follows terrain natively, but only for flat outlines and lines, not for 3D shapes — so it does not solve our case.',
     dataset: datasetChrome(scene)

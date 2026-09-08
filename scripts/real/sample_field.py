@@ -103,14 +103,38 @@ def round_trip_note(name: str, round_trip: dict) -> str:
     )
 
 
-def append_note(text: str) -> None:
-    """Append a bullet under NOTES.md's `## Findings` heading."""
-    body = NOTES.read_text()
+def note_key(name: str) -> str:
+    """The stable prefix that identifies this script's NOTES.md bullet, one per tile."""
+    return f"- dtcc-core#85 round trip on `{name}`"
+
+
+def upsert_note(text: str, key: str, notes: Path | None = None) -> None:
+    """Write a bullet under NOTES.md's `## Findings` heading, replacing the existing bullet
+    that starts with `key` if there is one.
+
+    This script is explicitly re-runnable (stage 2 can be re-solved, the round trip re-measured),
+    so a second run must *update* its finding, not leave a second copy behind for someone to
+    delete by hand — which is what the earlier append-only version cost.
+    """
+    path = NOTES if notes is None else notes
     marker = "## Findings\n"
+    body = path.read_text()
     if marker not in body:
         body = body.rstrip() + "\n\n" + marker + "\n"
+    text = text.rstrip() + "\n"
+    lines = body.splitlines(keepends=True)
+    for i, line in enumerate(lines):
+        if not line.startswith(key):
+            continue
+        # A bullet owns its continuation lines: everything up to the next bullet, the next
+        # heading, or a blank line.
+        j = i + 1
+        while j < len(lines) and lines[j].strip() and not lines[j].startswith("- ") and not lines[j].startswith("#"):
+            j += 1
+        path.write_text("".join(lines[:i]) + text + "".join(lines[j:]))
+        return
     head, tail = body.split(marker, 1)
-    NOTES.write_text(head + marker + "\n" + text.rstrip() + "\n" + tail.lstrip("\n"))
+    path.write_text(head + marker + "\n" + text + tail.lstrip("\n"))
 
 
 def main(out_dir: Path = OUT) -> dict:
@@ -148,7 +172,7 @@ def main(out_dir: Path = OUT) -> dict:
     if post is not None:
         stages["stage2"] = datetime.now(timezone.utc).isoformat()
     benchio.patch_dataset_json(out_dir, stages=stages, stage2=stage2)
-    append_note(round_trip_note(meta["name"], round_trip))
+    upsert_note(round_trip_note(meta["name"], round_trip), note_key(meta["name"]))
 
     if post is None:
         raise RuntimeError(

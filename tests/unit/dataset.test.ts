@@ -1,5 +1,5 @@
 import {describe, expect, test} from 'bun:test';
-import {decodeTerrainRgb, sampleBilinear, encodeTerrainRgbPixel} from '../../src/lib/dataset';
+import {decodeTerrainRgb, sampleBilinear, encodeTerrainRgbPixel, scaleMinBounds, scaleMaxBounds} from '../../src/lib/dataset';
 
 /** 4x4 Terrain-RGB fixture: height = 10 * column, rows identical, row 0 = north. */
 function fixture(): {data: Uint8ClampedArray; width: number; height: number} {
@@ -67,5 +67,53 @@ describe('dataset terrain decoding', () => {
     const field = decodeTerrainRgb(data, width, height);
     expect(sampleBilinear(field, width, height, 100, 0, 100)).toBeCloseTo(100, 3);
     expect(sampleBilinear(field, width, height, 100, 0, -100)).toBeCloseTo(0, 3);
+  });
+});
+
+describe('colour-scale slider bounds', () => {
+  // The synthetic scene's colourRange is [10, 35]; the fixed 0-20 / 20-50 pair these functions
+  // replaced was written for exactly that. Any drift here is a visible change to the synthetic
+  // pages, so pin the old numbers exactly.
+  test('are exact no-ops on the synthetic range [10, 35]', () => {
+    expect(scaleMinBounds(10)).toEqual({min: 0, max: 20});
+    expect(scaleMaxBounds(35)).toEqual({min: 20, max: 50});
+  });
+
+  test('are exact no-ops anywhere inside the old fixed tracks', () => {
+    for (const v of [0, 5, 10, 15, 20]) expect(scaleMinBounds(v)).toEqual({min: 0, max: 20});
+    for (const v of [20, 25, 35, 42, 50]) expect(scaleMaxBounds(v)).toEqual({min: 20, max: 50});
+  });
+
+  test('widen to contain the real ground field, whose max falls below the old 20-50 track', () => {
+    // public/data/real/field.json: tmin 17.99999987228115, tmax 18.746469572546268.
+    // 18.75 under a fixed min:20 track pinned the handle to the left end while the readout
+    // beside it said 18.75 — the control contradicted itself on screen.
+    expect(scaleMinBounds(17.99999987228115)).toEqual({min: 0, max: 20});
+    expect(scaleMaxBounds(18.746469572546268)).toEqual({min: 18.746469572546268, max: 50});
+  });
+
+  test('leave the real volume range alone: it already fits the old tracks', () => {
+    // public/data/real/field.grid.json spans 18.00-32.49 degC; pages 10 and 11 scale to that.
+    expect(scaleMinBounds(18.0)).toEqual({min: 0, max: 20});
+    expect(scaleMaxBounds(32.49)).toEqual({min: 20, max: 50});
+  });
+
+  test('always produce a track that contains its own value', () => {
+    const values = [-40, -0.5, 0, 1e-9, 10, 17.99999987228115, 18.746469572546268, 20, 32.49, 35, 50, 120.5];
+    for (const v of values) {
+      const lo = scaleMinBounds(v);
+      expect(lo.min).toBeLessThanOrEqual(v);
+      expect(lo.max).toBeGreaterThanOrEqual(v);
+      const hi = scaleMaxBounds(v);
+      expect(hi.min).toBeLessThanOrEqual(v);
+      expect(hi.max).toBeGreaterThanOrEqual(v);
+    }
+  });
+
+  test('never produce an empty or inverted track', () => {
+    for (const v of [-40, 0, 18.75, 35, 50, 120.5]) {
+      expect(scaleMinBounds(v).max).toBeGreaterThan(scaleMinBounds(v).min);
+      expect(scaleMaxBounds(v).max).toBeGreaterThan(scaleMaxBounds(v).min);
+    }
   });
 });

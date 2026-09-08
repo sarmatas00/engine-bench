@@ -55,8 +55,10 @@ export function mountChrome(opts: ChromeOptions) {
  * dataset's colour range comes from a solver, so `String(value)` printed the 2nd percentile as
  * "17.99999987228115". Two decimals, trailing zeros dropped — the same string as before wherever
  * the value was already round.
+ *
+ * Exported for tests/unit/chrome.test.ts; nothing else imports it.
  */
-function readout(value: number | string): string {
+export function readout(value: number | string): string {
   const n = Number(value);
   return Number.isFinite(n) ? String(Number(n.toFixed(2))) : String(value);
 }
