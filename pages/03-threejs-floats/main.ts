@@ -11,7 +11,9 @@ if (requireWebGL2()) (async () => {
   let map: maplibregl.Map;
   const ui = mountChrome({
     num: '03', title: 'Three.js floats',
-    expect: 'the same six blocks drawn by Three.js inside a MapLibre custom layer. With terrain on, five are buried in the hill and one just pokes through — the same buried result as page 02.',
+    expect: scene.dataset === 'real'
+      ? 'the same real buildings drawn by Three.js inside a MapLibre custom layer. With terrain on, the same ones are buried and the same ones poke through as on page 02 — the same buried result, from a different engine.'
+      : 'the same six blocks drawn by Three.js inside a MapLibre custom layer. With terrain on, five are buried in the hill and one just pokes through — the same buried result as page 02.',
     claim: 'it attaches to MapLibre the same way, so it inherits the terrain limit exactly.',
     dataset: datasetChrome(scene),
     controls: [{kind: 'toggle', id: 'terrain', label: 'Terrain', value: true, onChange: v => map.setTerrain(v ? {source: DEM_SOURCE, exaggeration: 1} : null)}]

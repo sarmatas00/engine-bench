@@ -9,7 +9,9 @@ if (requireWebGL2()) (async () => {
   let map: ReturnType<typeof makeMap>;
   const ui = mountChrome({
     num: '02', title: 'deck.gl floats (Limitation 1)',
-    expect: 'the same six blocks, now drawn by deck.gl, stay at sea level while the terrain rises around them: five vanish inside the hill and one just pokes through. Toggle terrain off and all six reappear on the flat map.',
+    expect: scene.dataset === 'real'
+      ? 'the same real buildings, now drawn by deck.gl, stay at z = 0 while the terrain rises around them: the ones on the hill vanish inside it and the ones on low ground keep only the height that clears the ground. Toggle terrain off and they all stand full height on the flat map.'
+      : 'the same six blocks, now drawn by deck.gl, stay at sea level while the terrain rises around them: five vanish inside the hill and one just pokes through. Toggle terrain off and all six reappear on the flat map.',
     claim: 'with terrain enabled, "the deck.gl data with z=0 are rendered at the sea level and not aligned with the terrain surface".',
     dataset: datasetChrome(scene),
     controls: [{kind: 'toggle', id: 'terrain', label: 'Terrain', value: true, onChange: v => map.setTerrain(v ? {source: DEM_SOURCE, exaggeration: 1} : null)}]
@@ -26,7 +28,7 @@ if (requireWebGL2()) (async () => {
     ui.probe('MapLibre drapes only: background, fill, line, raster, hillshade, color-relief  (src/webgl/render_to_texture.ts:17)');
     ui.probe('Layer type "custom" — how deck.gl, Three.js or anything external attaches — is not in that list.');
     const [zmin, zmax] = scene.relief;
-    ui.probe(`terrain is ${zmin.toFixed(1)}–${zmax.toFixed(1)} m above the scene zero, so sea-level geometry is below ground here — buried, never floating.`);
+    ui.probe(`terrain is ${zmin.toFixed(1)}–${zmax.toFixed(1)} m above the scene zero, so z = 0 geometry is nowhere above the ground here — buried, never floating.`);
     ui.probe('maplibre-gl pinned to 5.24.0: @deck.gl/mapbox 9.4.0 interleaved mode reads map.transform, removed from Map in maplibre-gl 6.x.');
     whenIdle(map, () => ui.ready());
   });

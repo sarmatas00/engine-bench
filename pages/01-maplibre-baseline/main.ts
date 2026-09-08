@@ -9,7 +9,9 @@ if (requireWebGL2()) (async () => {
   let map: maplibregl.Map;
   const ui = mountChrome({
     num: '01', title: 'MapLibre baseline',
-    expect: 'six extruded blocks standing on the hillside; toggle terrain and they stay on the ground.',
+    expect: scene.dataset === 'real'
+      ? 'every real building footprint on the tile extruded onto the hillside, each standing on the ground where the DEM puts it; toggle terrain and they stay on the ground.'
+      : 'six extruded blocks standing on the hillside; toggle terrain and they stay on the ground.',
     claim: "MapLibre's own source, src/webgl/render_to_texture.ts, lists the only layer types it will drape over terrain: background, fill, line, raster, hillshade, color-relief.",
     dataset: datasetChrome(scene),
     controls: [{kind: 'toggle', id: 'terrain', label: 'Terrain', value: true, onChange: v => map.setTerrain(v ? {source: DEM_SOURCE, exaggeration: 1} : null)}]
