@@ -23,7 +23,8 @@ export const PAGES: PageSpec[] = [
     expect((probe.simpleMesh as any).inBufferLayout).toBe(true);   // colors reach the GPU on the mesh path
   }},
   {slug: '05-fix-a1-deck-terrain'},
-  {slug: '03-threejs-floats'}
+  {slug: '03-threejs-floats'},
+  {slug: '09-cesium-terrain'}
 ];
 
 for (const spec of PAGES) {
