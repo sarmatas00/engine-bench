@@ -1,22 +1,23 @@
 import {ScenegraphLayer, SimpleMeshLayer} from '@deck.gl/mesh-layers';
 import {mountChrome, requireWebGL2} from '@lib/chrome';
-import {makeMap, makeOverlay, loadGltfMesh, ORIGIN, METERS, GLTF_ORIENTATION, whenIdle} from '@lib/deck-map';
+import {makeMap, makeOverlay, loadGltfMesh, origin, METERS, GLTF_ORIENTATION, whenIdle} from '@lib/deck-map';
 import {describeModel} from '@lib/probe';
-import {LON0, LAT0} from '@lib/scene';
+import {loadScene, datasetChrome, wideView, sideOffset} from '@lib/dataset';
 
-const VIEW = {center: [LON0, LAT0] as [number, number], zoom: 12.3, pitch: 45, bearing: 0};
-
-if (requireWebGL2()) {
+if (requireWebGL2()) (async () => {
+  const scene = await loadScene();
+  const [tMin, tMax] = scene.colourRange;
   const ui = mountChrome({
     num: '08', title: 'Fix B2 — baked colours',
     expect: 'a coloured temperature field with no client code. Right copy (SimpleMeshLayer) must be coloured. Left copy (ScenegraphLayer) shows whether the glTF path honours COLOR_0 at all. Sliders are disabled: a new scale means regenerating the file. ScenegraphLayer ignores COLOR_0 on deck.gl 9.4.0 — B2 requires the mesh path (SimpleMeshLayer / Tile3DLayer mesh content).',
     claim: 'Decide the colour scale when we generate the file, and ship colours instead of raw values. No client work at all, works in every viewer today, and it is exactly what the Table already does. Cost: no changing the colour scale in the browser.',
+    dataset: datasetChrome(scene),
     controls: [
-      {kind: 'range', id: 'min', label: 'Scale min (°C)', min: 0, max: 20, step: 1, value: 10, disabled: true, onChange: () => {}},
-      {kind: 'range', id: 'max', label: 'Scale max (°C)', min: 20, max: 50, step: 1, value: 35, disabled: true, onChange: () => {}}
+      {kind: 'range', id: 'min', label: 'Scale min (°C)', min: 0, max: 20, step: 1, value: tMin, disabled: true, onChange: () => {}},
+      {kind: 'range', id: 'max', label: 'Scale max (°C)', min: 20, max: 50, step: 1, value: tMax, disabled: true, onChange: () => {}}
     ]
   });
-  const map = makeMap(ui.canvasHost, VIEW);
+  const map = makeMap(ui.canvasHost, scene, wideView(scene));
 
   class ProbedScenegraph extends ScenegraphLayer<any> {
     static layerName = 'ProbedScenegraphColors';
@@ -46,15 +47,15 @@ if (requireWebGL2()) {
   }
 
   map.on('load', async () => {
-    const mesh = await loadGltfMesh('/data/field-baked.glb');
+    const mesh = await loadGltfMesh(scene.files.fieldBaked);
     ui.probe(`glTF attributes in file: ${mesh.attributeNames.join(', ')}`);
     ui.probe('deck.gl renames COLOR_0 → colors in normalizeGeometryAttributes (mesh path); the glTF path keeps the original name.');
     makeOverlay(map, [
-      new ProbedScenegraph({id: 'sg', data: [0], scenegraph: '/data/field-baked.glb',
-        coordinateSystem: METERS, coordinateOrigin: ORIGIN, getPosition: () => [-1050, 0, 0], getOrientation: GLTF_ORIENTATION, _lighting: 'flat'}),
+      new ProbedScenegraph({id: 'sg', data: [0], scenegraph: scene.files.fieldBaked,
+        coordinateSystem: METERS, coordinateOrigin: origin(scene), getPosition: () => [-sideOffset(scene), 0, 0], getOrientation: GLTF_ORIENTATION, _lighting: 'flat'}),
       new ProbedSimpleMesh({id: 'sm', data: [0], mesh,
-        coordinateSystem: METERS, coordinateOrigin: ORIGIN, getPosition: () => [1050, 0, 0], getColor: [255, 255, 255]})
+        coordinateSystem: METERS, coordinateOrigin: origin(scene), getPosition: () => [sideOffset(scene), 0, 0], getColor: [255, 255, 255]})
     ]);
     whenIdle(map, () => ui.ready());
   });
-}
+})();

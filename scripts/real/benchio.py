@@ -12,8 +12,8 @@ from pathlib import Path
 
 import numpy as np
 
-# Mapbox Terrain-RGB, same constants the synthetic tiles use
-# (src/lib/synth-tiles.ts: v = (h + 10000) / 0.1).
+# Mapbox Terrain-RGB, same constants the bench tiles use
+# (src/lib/dataset.ts encodeTerrainRgbPixel: v = (h + 10000) / 0.1).
 TERRAIN_RGB_BASE = 10000.0
 TERRAIN_RGB_SCALE = 0.1
 
@@ -40,7 +40,7 @@ def decode_terrain_rgb(rgb: np.ndarray) -> np.ndarray:
 
 
 def basemap_rgb(heights: np.ndarray) -> np.ndarray:
-    """Contour/band basemap, the same rules as src/lib/synth-tiles.ts basemapTile()."""
+    """Contour/band basemap, the same rules as src/lib/dataset.ts basemapColour()."""
     e = np.asarray(heights, dtype=np.float64)
     rgb = np.empty(e.shape + (3,), dtype=np.int16)
     rgb[..., 0] = 235

@@ -4,7 +4,7 @@ import {blocksMesh, fieldSurface, fieldGrid, h} from '../src/lib/scene';
 import {colormap} from '../src/lib/colormap';
 import {writeGlb} from './gltf-writer';
 
-const OUT = resolve(import.meta.dir, '../public/data');
+const OUT = resolve(import.meta.dir, '../public/data/synthetic');
 mkdirSync(OUT, {recursive: true});
 const put = (name: string, bytes: Uint8Array | string) => { writeFileSync(resolve(OUT, name), bytes); console.log('wrote', name); };
 
@@ -22,4 +22,4 @@ put('field-baked.glb', await writeGlb(field, {colors}));
 // Regular grid: one conversion, two consumers (Cesium voxels, VTK.js).
 const g = fieldGrid();
 put('field.grid.f32', new Uint8Array(g.data.buffer));
-put('field.grid.json', JSON.stringify({dims: g.dims, origin: g.origin, spacing: g.spacing, min: g.min, max: g.max, dataUrl: '/data/field.grid.f32'}, null, 2));
+put('field.grid.json', JSON.stringify({dims: g.dims, origin: g.origin, spacing: g.spacing, min: g.min, max: g.max, dataUrl: '/data/synthetic/field.grid.f32'}, null, 2));

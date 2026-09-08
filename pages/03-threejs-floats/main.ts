@@ -3,20 +3,22 @@ import * as THREE from 'three';
 import {GLTFLoader} from 'three/examples/jsm/loaders/GLTFLoader.js';
 import {mountChrome, requireWebGL2} from '@lib/chrome';
 import {makeMap, whenIdle} from '@lib/deck-map';
-import {DEM_SOURCE} from '@lib/synth-tiles';
-import {LON0, LAT0} from '@lib/scene';
+import {DEM_SOURCE} from '@lib/tiles';
+import {loadScene, datasetChrome} from '@lib/dataset';
 
-if (requireWebGL2()) {
+if (requireWebGL2()) (async () => {
+  const scene = await loadScene();
   let map: maplibregl.Map;
   const ui = mountChrome({
     num: '03', title: 'Three.js floats',
     expect: 'the same six blocks drawn by Three.js inside a MapLibre custom layer. With terrain on, five are buried in the hill and one just pokes through — the same buried result as page 02.',
     claim: 'it attaches to MapLibre the same way, so it inherits the terrain limit exactly.',
+    dataset: datasetChrome(scene),
     controls: [{kind: 'toggle', id: 'terrain', label: 'Terrain', value: true, onChange: v => map.setTerrain(v ? {source: DEM_SOURCE, exaggeration: 1} : null)}]
   });
-  map = makeMap(ui.canvasHost);
+  map = makeMap(ui.canvasHost, scene);
 
-  const origin = maplibregl.MercatorCoordinate.fromLngLat([LON0, LAT0], 0);
+  const origin = maplibregl.MercatorCoordinate.fromLngLat(scene.anchor, 0);
   const scale = origin.meterInMercatorCoordinateUnits();
   // Model space (glTF Y-up, metres) → mercator: translate to origin, scale metres, flip so +Z(glTF -Z = local +y) points north.
   const modelMatrix = new THREE.Matrix4()
@@ -36,7 +38,7 @@ if (requireWebGL2()) {
       s.camera = new THREE.Camera();
       s.scene = new THREE.Scene();
       s.scene.add(new THREE.AmbientLight(0xffffff, 1.2));
-      new GLTFLoader().load('/data/blocks.glb', g => {
+      new GLTFLoader().load(scene.files.blocks, g => {
         g.scene.traverse(o => { if ((o as THREE.Mesh).isMesh) (o as THREE.Mesh).material = new THREE.MeshBasicMaterial({color: 0xd9534f}); });
         s.scene.add(g.scene);
         loaded = true;
@@ -63,4 +65,4 @@ if (requireWebGL2()) {
     ui.probe('MapLibre custom layer → type "custom" → not in LAYERS_TO_TEXTURES → drawn in world space at the z in the file, never draped.');
     whenIdle(map, () => { idle = true; maybeReady(); });
   });
-}
+})();

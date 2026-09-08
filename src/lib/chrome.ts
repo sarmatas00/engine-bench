@@ -5,7 +5,8 @@ export type Control =
   | {kind: 'range'; id: string; label: string; min: number; max: number; step: number; value: number; disabled?: boolean; onChange: (v: number) => void}
   | {kind: 'select'; id: string; label: string; options: string[]; value: string; onChange: (v: string) => void};
 
-export type ChromeOptions = {num: string; title: string; expect: string; claim: string; controls?: Control[]};
+export type ChromeOptions = {num: string; title: string; expect: string; claim: string;
+  dataset?: {text: string; otherLabel: string; otherHref: string}; controls?: Control[]};
 
 declare global { interface Window { __bench: {ready: boolean; probe: Record<string, unknown>} } }
 window.__bench = {ready: false, probe: {}};
@@ -14,10 +15,14 @@ export function mountChrome(opts: ChromeOptions) {
   document.title = `${opts.num} · ${opts.title} · engine-bench`;
   const header = document.createElement('header');
   header.className = 'bench';
+  const datasetLine = opts.dataset
+    ? `<div class="dataset">${opts.dataset.text} · <a href="${opts.dataset.otherHref}">switch to ${opts.dataset.otherLabel}</a></div>`
+    : '';
   header.innerHTML = `
     <h1><a href="/00-index/">engine-bench</a> · ${opts.num} · ${opts.title}</h1>
     <div class="expect">What you should see: ${opts.expect}</div>
     <div class="claim">Briefing: “${opts.claim}”</div>
+    ${datasetLine}
     <div class="controls"></div>`;
   const controls = header.querySelector('.controls')!;
   for (const c of opts.controls ?? []) controls.appendChild(renderControl(c));

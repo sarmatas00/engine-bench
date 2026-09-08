@@ -1,5 +1,5 @@
 import {describe, expect, test} from 'bun:test';
-import {localToLngLat, lngLatToLocal, tileToLngLat} from '../../src/lib/geo';
+import {localToLngLat, lngLatToLocal, tileToLngLat, setAnchor, anchor} from '../../src/lib/geo';
 import {LON0, LAT0} from '../../src/lib/scene';
 
 describe('geo', () => {
@@ -20,5 +20,10 @@ describe('geo', () => {
     const [lng, lat] = tileToLngLat(0, 0, 0, 0, 0, 256);
     expect(lng).toBeCloseTo(-180, 6);
     expect(lat).toBeCloseTo(85.0511, 3);
+  });
+  test('an explicit anchor overrides the active one', () => {
+    const [lng, lat] = localToLngLat(0, 0, [11.9564, 57.6978]);
+    expect(lng).toBeCloseTo(11.9564, 6);
+    expect(lat).toBeCloseTo(57.6978, 6);
   });
 });

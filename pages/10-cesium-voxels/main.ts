@@ -3,25 +3,29 @@ import {mountChrome, requireWebGL2} from '@lib/chrome';
 import {makeViewer, enuMatrix, whenTilesLoaded} from '@lib/cesium-setup';
 import {loadGrid} from '@lib/grid';
 import {COLORMAP_GLSL} from '@lib/colormap';
+import {loadScene, datasetChrome} from '@lib/dataset';
 
-if (requireWebGL2()) {
+if (requireWebGL2()) (async () => {
+  const scene = await loadScene();
+  const [t0, t1] = scene.colourRange;
   let shader: Cesium.CustomShader | undefined;
   const ui = mountChrome({
     num: '10', title: 'Cesium — volume rendering',
     expect: 'a translucent 3-D plume over the hot spot: a hot amber core fading through green and cyan to transparent. This is the temperature field as a volume, not a surface.',
     claim: 'it is the only engine that can currently draw volume data like a wind or heat field in 3D. Not the base map, but a real candidate for a dedicated simulation view.',
+    dataset: datasetChrome(scene),
     controls: [
-      {kind: 'range', id: 'min', label: 'Scale min (°C)', min: 0, max: 20, step: 1, value: 10, onChange: v => shader?.setUniform('u_min', v)},
-      {kind: 'range', id: 'max', label: 'Scale max (°C)', min: 20, max: 50, step: 1, value: 35, onChange: v => shader?.setUniform('u_max', v)}
+      {kind: 'range', id: 'min', label: 'Scale min (°C)', min: 0, max: 20, step: 1, value: t0, onChange: v => shader?.setUniform('u_min', v)},
+      {kind: 'range', id: 'max', label: 'Scale max (°C)', min: 20, max: 50, step: 1, value: t1, onChange: v => shader?.setUniform('u_max', v)}
     ]
   });
-  const viewer = makeViewer(ui.canvasHost);
+  const viewer = makeViewer(ui.canvasHost, scene);
 
-  loadGrid().then(grid => {
+  loadGrid(scene).then(grid => {
     const [nx, ny, nz] = grid.dims;
     const sx = grid.spacing[0] * (nx - 1) / 2, sy = grid.spacing[1] * (ny - 1) / 2, sz = grid.spacing[2] * (nz - 1) / 2;
     // BOX shape space is the unit cube [-1,1]^3; map it onto the grid's extent in the ENU frame.
-    const shapeTransform = Cesium.Matrix4.multiply(enuMatrix(),
+    const shapeTransform = Cesium.Matrix4.multiply(enuMatrix(scene),
       Cesium.Matrix4.multiply(Cesium.Matrix4.fromTranslation(new Cesium.Cartesian3(grid.origin[0] + sx, grid.origin[1] + sy, grid.origin[2] + sz)),
         Cesium.Matrix4.fromScale(new Cesium.Cartesian3(sx, sy, sz)), new Cesium.Matrix4()), new Cesium.Matrix4());
 
@@ -41,7 +45,7 @@ if (requireWebGL2()) {
     } as unknown as Cesium.VoxelProvider;
 
     shader = new Cesium.CustomShader({
-      uniforms: {u_min: {type: Cesium.UniformType.FLOAT, value: 10}, u_max: {type: Cesium.UniformType.FLOAT, value: 35}},
+      uniforms: {u_min: {type: Cesium.UniformType.FLOAT, value: t0}, u_max: {type: Cesium.UniformType.FLOAT, value: t1}},
       fragmentShaderText: `
         ${COLORMAP_GLSL}
         void fragmentMain(FragmentInput fsInput, inout czm_modelMaterial material) {
@@ -69,4 +73,4 @@ if (requireWebGL2()) {
       });
     });
   });
-}
+})();

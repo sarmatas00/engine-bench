@@ -3,7 +3,7 @@ import {existsSync, readFileSync} from 'node:fs';
 import {resolve} from 'node:path';
 import {NodeIO} from '@gltf-transform/core';
 
-const DATA = resolve(import.meta.dir, '../../public/data');
+const DATA = resolve(import.meta.dir, '../../public/data/synthetic');
 const io = new NodeIO();
 
 beforeAll(async () => {

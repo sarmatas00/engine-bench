@@ -14,21 +14,25 @@ import vtkActor from '@kitware/vtk.js/Rendering/Core/Actor';
 import {mountChrome, requireWebGL2} from '@lib/chrome';
 import {loadGrid} from '@lib/grid';
 import {colormap} from '@lib/colormap';
+import {loadScene, datasetChrome} from '@lib/dataset';
 
-if (requireWebGL2()) {
+if (requireWebGL2()) (async () => {
+  const scene = await loadScene();
+  const [t0, t1] = scene.colourRange, span = t1 - t0;
   let mc: any, rw: any;
   const ui = mountChrome({
     num: '11', title: 'VTK.js — one job',
     expect: 'a faint translucent plume as a volume, with a solid orange isosurface visible at the slider temperature inside it. This page never loaded the unstructured mesh; it loaded the regular grid the pipeline wrote.',
     claim: 'Cannot display our simulation meshes at all — it has no concept of that kind of mesh. It stays useful for one thing: if we convert results to a regular grid first, it can draw them.',
-    controls: [{kind: 'range', id: 'iso', label: 'Isosurface (°C)', min: 11, max: 34, step: 1, value: 20,
+    dataset: datasetChrome(scene),
+    controls: [{kind: 'range', id: 'iso', label: 'Isosurface (°C)', min: t0 + 0.04 * span, max: t1 - 0.04 * span, step: span / 25, value: t0 + 0.4 * span,
       onChange: v => { mc.setContourValue(v); rw.render(); }}]
   });
   const container = document.createElement('div');
   container.style.cssText = 'position:absolute;inset:0';
   ui.canvasHost.prepend(container);
 
-  loadGrid().then(grid => {
+  loadGrid(scene).then(grid => {
     const image = vtkImageData.newInstance();
     image.setDimensions(grid.dims);
     image.setOrigin(grid.origin);
@@ -40,16 +44,17 @@ if (requireWebGL2()) {
     const renderer = fs.getRenderer(); rw = fs.getRenderWindow();
 
     const ctf = vtkColorTransferFunction.newInstance();
-    for (const t of [10, 16.25, 22.5, 28.75, 35]) { const [r, g, b] = colormap(t, 10, 35); ctf.addRGBPoint(t, r / 255, g / 255, b / 255); }
+    for (const f of [0, 0.25, 0.5, 0.75, 1]) { const t = t0 + f * span; const [r, g, b] = colormap(t, t0, t1); ctf.addRGBPoint(t, r / 255, g / 255, b / 255); }
     const ofun = vtkPiecewiseFunction.newInstance();
-    ofun.addPoint(10, 0); ofun.addPoint(20, 0.002); ofun.addPoint(28, 0.02); ofun.addPoint(35, 0.12);
+    // Retuned in NOTES.md: the ambient field is most of the volume, so it must stay near-transparent.
+    for (const [f, a] of [[0, 0], [0.4, 0.002], [0.72, 0.02], [1, 0.12]]) ofun.addPoint(t0 + f * span, a);
 
     const vmapper = vtkVolumeMapper.newInstance(); vmapper.setInputData(image); vmapper.setSampleDistance(8);
     const volume = vtkVolume.newInstance(); volume.setMapper(vmapper);
     volume.getProperty().setRGBTransferFunction(0, ctf); volume.getProperty().setScalarOpacity(0, ofun);
     renderer.addVolume(volume);
 
-    mc = vtkImageMarchingCubes.newInstance({contourValue: 20, computeNormals: true, mergePoints: true});
+    mc = vtkImageMarchingCubes.newInstance({contourValue: t0 + 0.4 * span, computeNormals: true, mergePoints: true});
     mc.setInputData(image);
     const smapper = vtkMapper.newInstance(); smapper.setInputConnection(mc.getOutputPort());
     const actor = vtkActor.newInstance(); actor.setMapper(smapper); actor.getProperty().setColor(0.9, 0.6, 0.1);
@@ -61,4 +66,4 @@ if (requireWebGL2()) {
     ui.probe('the grid conversion in scripts/generate.ts is the one step that feeds both this page and page 10.');
     ui.ready();
   });
-}
+})();

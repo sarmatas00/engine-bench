@@ -1,4 +1,5 @@
 import '@lib/chrome.css';
+import {currentDataset} from '@lib/dataset';
 
 const rows: [string, string, string, string][] = [
   ['01-maplibre-baseline', 'MapLibre baseline', 'Blocks follow the hill with terrain on.', "MapLibre's own layer types drape."],
@@ -15,11 +16,16 @@ const rows: [string, string, string, string][] = [
   ['12-playcanvas', 'PlayCanvas', 'Mesh renders; no CRS, basemap or terrain API.', 'Rejected.']
 ];
 
+const ds = currentDataset();
+const q = ds === 'real' ? '?dataset=real' : '';
 document.body.innerHTML = `
   <header class="bench"><h1>engine-bench</h1>
-  <div class="expect">Every page draws the same synthetic hill, six blocks and a temperature field. Differences are the engine's.</div></header>
+  <div class="expect">Every page draws the same scene in its own engine. Differences are the engine's.</div>
+  <div class="dataset">Dataset: <b>${ds}</b> ·
+    <a href="/00-index/">synthetic</a> · <a href="/00-index/?dataset=real">real (Gothenburg tile)</a>
+    — the real dataset needs <code>scripts/real/stage1_build.py</code> to have run.</div></header>
   <main style="padding:14px;overflow:auto"><table style="border-collapse:collapse">
   <thead><tr><th align="left">Page</th><th align="left">What you should see</th><th align="left">Claim</th></tr></thead>
-  <tbody>${rows.map(([slug, t, e, c]) => `<tr><td style="padding:4px 12px 4px 0"><a href="/${slug}/">${slug.slice(0, 2)} · ${t}</a></td><td style="padding:4px 12px 4px 0">${e}</td><td>${c}</td></tr>`).join('')}</tbody>
+  <tbody>${rows.map(([slug, t, e, c]) => `<tr><td style="padding:4px 12px 4px 0"><a href="/${slug}/${q}">${slug.slice(0, 2)} · ${t}</a></td><td style="padding:4px 12px 4px 0">${e}</td><td>${c}</td></tr>`).join('')}</tbody>
   </table></main>`;
 window.__bench = {ready: true, probe: {}};

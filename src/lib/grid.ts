@@ -1,5 +1,7 @@
-export async function loadGrid() {
-  const metaRes = await fetch('/data/field.grid.json');
+import type {Scene} from './dataset';
+
+export async function loadGrid(scene: Scene) {
+  const metaRes = await fetch(scene.files.gridJson);
   if (!metaRes.ok) throw new Error(`field.grid.json: ${metaRes.status}`);
   const meta = await metaRes.json();
   const dataRes = await fetch(meta.dataUrl);

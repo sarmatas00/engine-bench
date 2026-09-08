@@ -4,18 +4,18 @@ import {MapboxOverlay} from '@deck.gl/mapbox';
 import {COORDINATE_SYSTEM, type Layer} from '@deck.gl/core';
 import {load} from '@loaders.gl/core';
 import {GLTFLoader, postProcessGLTF} from '@loaders.gl/gltf';
-import {registerSynthProtocols, synthStyle, INITIAL_VIEW} from './synth-tiles';
-import {LON0, LAT0} from './scene';
+import {registerProtocols, benchStyle, initialView} from './tiles';
+import type {Scene} from './dataset';
 
-export const ORIGIN: [number, number, number] = [LON0, LAT0, 0];
+export const origin = (s: Scene): [number, number, number] => [s.anchor[0], s.anchor[1], 0];
 export const METERS = COORDINATE_SYSTEM.METER_OFFSETS;
 export const GLTF_ORIENTATION: [number, number, number] = [0, 0, 90];
 
-export function makeMap(host: HTMLElement, view = INITIAL_VIEW): maplibregl.Map {
-  registerSynthProtocols();
+export function makeMap(host: HTMLElement, scene: Scene, view = initialView(scene)): maplibregl.Map {
+  registerProtocols(scene);
   const el = document.createElement('div');
   host.prepend(el);
-  return new maplibregl.Map({container: el, style: synthStyle(), ...view, maxPitch: 85});
+  return new maplibregl.Map({container: el, style: benchStyle(), ...view, maxPitch: 85});
 }
 
 export function makeOverlay(map: maplibregl.Map, layers: Layer[]): MapboxOverlay {

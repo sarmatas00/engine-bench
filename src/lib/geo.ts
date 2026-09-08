@@ -1,16 +1,24 @@
 export const R = 6378137;
-import {LON0, LAT0} from './scene';
 
 const DEG = Math.PI / 180;
 
-export function localToLngLat(x: number, y: number): [number, number] {
-  const c = Math.cos(LAT0 * DEG);
-  return [LON0 + x / (R * c) / DEG, LAT0 + y / R / DEG];
+export type Anchor = [number, number];
+
+// The synthetic scene's anchor, duplicated here as the default so geo.ts does
+// not import scene.ts (scene.ts imports this module).
+let ACTIVE: Anchor = [11.97, 57.70];
+
+export function setAnchor(a: Anchor): void { ACTIVE = a; }
+export function anchor(): Anchor { return ACTIVE; }
+
+export function localToLngLat(x: number, y: number, a: Anchor = ACTIVE): [number, number] {
+  const c = Math.cos(a[1] * DEG);
+  return [a[0] + x / (R * c) / DEG, a[1] + y / R / DEG];
 }
 
-export function lngLatToLocal(lng: number, lat: number): [number, number] {
-  const c = Math.cos(LAT0 * DEG);
-  return [(lng - LON0) * DEG * R * c, (lat - LAT0) * DEG * R];
+export function lngLatToLocal(lng: number, lat: number, a: Anchor = ACTIVE): [number, number] {
+  const c = Math.cos(a[1] * DEG);
+  return [(lng - a[0]) * DEG * R * c, (lat - a[1]) * DEG * R];
 }
 
 /** Lon/lat of pixel (px, py) in web-mercator tile z/x/y of `size` px. */
