@@ -52,10 +52,6 @@ let registered = false;
 export function registerSynthProtocols(): void {
   if (registered) return;
   registered = true;
-  // maplibre-gl derives its worker URL from import.meta.url of its own bundle; under Vite that
-  // points at the built chunk, not a place the worker file actually lives. Point it at the copy
-  // vendored by scripts/copy-maplibre-worker.ts instead.
-  maplibregl.setWorkerUrl('/maplibre/maplibre-gl-worker.mjs');
   maplibregl.addProtocol('synth-dem', async ({url}) => ({data: await toPng(terrainRgbTile(...parse(url)))}));
   maplibregl.addProtocol('synth-map', async ({url}) => ({data: await toPng(basemapTile(...parse(url)))}));
 }

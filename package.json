@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "postinstall": "bun scripts/copy-cesium.ts && bun scripts/copy-maplibre-worker.ts",
+    "postinstall": "bun scripts/copy-cesium.ts",
     "dev": "vite",
     "build": "bun run generate && vite build",
     "generate": "bun scripts/generate.ts",
@@ -24,7 +24,7 @@
     "@loaders.gl/gltf": "4.4.5",
     "@luma.gl/core": "9.4.0",
     "cesium": "1.145.0",
-    "maplibre-gl": "6.8.0",
+    "maplibre-gl": "5.24.0",
     "playcanvas": "2.22.0",
     "three": "0.185.1"
   },
