@@ -1,0 +1,26 @@
+import * as maplibregl from 'maplibre-gl';
+import 'maplibre-gl/dist/maplibre-gl.css';
+import {mountChrome, requireWebGL2} from '@lib/chrome';
+import {registerSynthProtocols, synthStyle, DEM_SOURCE, INITIAL_VIEW} from '@lib/synth-tiles';
+import {blockFootprintsGeoJSON} from '@lib/scene';
+
+if (requireWebGL2()) {
+  let map: maplibregl.Map;
+  const ui = mountChrome({
+    num: '01', title: 'MapLibre baseline',
+    expect: 'six extruded blocks standing on the hillside; toggle terrain and they stay on the ground.',
+    claim: "MapLibre's own source, src/webgl/render_to_texture.ts, lists the only layer types it will drape over terrain: background, fill, line, raster, hillshade, color-relief.",
+    controls: [{kind: 'toggle', id: 'terrain', label: 'Terrain', value: true, onChange: v => map.setTerrain(v ? {source: DEM_SOURCE, exaggeration: 1} : null)}]
+  });
+  registerSynthProtocols();
+  const el = document.createElement('div'); ui.canvasHost.prepend(el);
+  map = new maplibregl.Map({container: el, style: synthStyle(), ...INITIAL_VIEW, maxPitch: 85});
+  map.on('load', () => {
+    map.addSource('blocks', {type: 'geojson', data: blockFootprintsGeoJSON()});
+    map.addLayer({id: 'blocks', type: 'fill-extrusion', source: 'blocks',
+      paint: {'fill-extrusion-color': '#d9534f', 'fill-extrusion-height': ['get', 'height'], 'fill-extrusion-opacity': 0.95}});
+    map.setTerrain({source: DEM_SOURCE, exaggeration: 1});
+    ui.probe('fill-extrusion is a MapLibre layer: it is positioned by MapLibre itself, so it follows the DEM.');
+    map.once('idle', () => ui.ready());
+  });
+}

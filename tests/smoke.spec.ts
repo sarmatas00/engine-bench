@@ -4,7 +4,8 @@ type PageSpec = {slug: string; extraChecks?: (page: Page, probe: Record<string, 
 
 // One entry per page. Later tasks append here.
 export const PAGES: PageSpec[] = [
-  {slug: '00-index'}
+  {slug: '00-index'},
+  {slug: '01-maplibre-baseline'}
 ];
 
 for (const spec of PAGES) {

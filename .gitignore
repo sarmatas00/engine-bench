@@ -2,6 +2,7 @@ node_modules
 dist
 public/data
 public/cesium
+public/maplibre
 screens
 test-results
 playwright-report
