@@ -15,15 +15,23 @@ export function mountChrome(opts: ChromeOptions) {
   document.title = `${opts.num} · ${opts.title} · engine-bench`;
   const header = document.createElement('header');
   header.className = 'bench';
-  const datasetLine = opts.dataset
-    ? `<div class="dataset">${opts.dataset.text} · <a href="${opts.dataset.otherHref}">switch to ${opts.dataset.otherLabel}</a></div>`
-    : '';
   header.innerHTML = `
     <h1><a href="/00-index/">engine-bench</a> · ${opts.num} · ${opts.title}</h1>
     <div class="expect">What you should see: ${opts.expect}</div>
     <div class="claim">Briefing: “${opts.claim}”</div>
-    ${datasetLine}
     <div class="controls"></div>`;
+  if (opts.dataset) {
+    // Built as nodes, not markup: opts.dataset.text embeds the tile name from dataset.json,
+    // and a data file must never be able to inject elements into the page chrome.
+    const line = document.createElement('div');
+    line.className = 'dataset';
+    line.append(opts.dataset.text + ' · ');
+    const link = document.createElement('a');
+    link.href = opts.dataset.otherHref;
+    link.textContent = `switch to ${opts.dataset.otherLabel}`;
+    line.append(link);
+    header.querySelector('.claim')!.after(line);
+  }
   const controls = header.querySelector('.controls')!;
   for (const c of opts.controls ?? []) controls.appendChild(renderControl(c));
 
