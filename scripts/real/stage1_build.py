@@ -61,7 +61,7 @@ def sample_raster_grid(raster, origin, extent, size) -> np.ndarray:
     ys = n0 + extent - (np.arange(size) + 0.5) * (2 * extent / size)   # row 0 = north
     xx, yy = np.meshgrid(xs, ys)
     inv = ~raster.georef
-    cols, rows = inv * (xx, yy)
+    cols, rows = inv @ (xx, yy)   # `*` raises PendingDeprecationWarning in affine
     rows = np.clip(rows.astype(np.int64), 0, raster.data.shape[0] - 1)
     cols = np.clip(cols.astype(np.int64), 0, raster.data.shape[1] - 1)
     grid = np.asarray(raster.data, dtype=np.float64)[rows, cols]
@@ -123,6 +123,88 @@ def write_terrain_artifacts(out_dir, raster, *, bounds, name, crs, size=IMAGE_SI
     return meta
 
 
+def split_surface_mesh(mesh):
+    """Face masks for terrain and buildings.
+
+    dtcc-core's city surface mesh marks faces -2 ground, -1 halo (both terrain)
+    and >= 0 for the building whose index that is
+    (dtcc_core/cpp/include/MeshBuilder.h "markers:" and the wall_face_mask in
+    builder/geometry_builders/meshes.py::_surface_shell_stage_audit).
+    """
+    markers = np.asarray(mesh.markers).reshape(-1)
+    faces = np.asarray(mesh.faces)
+    if markers.size != len(faces):
+        raise RuntimeError(f"{len(faces)} faces but {markers.size} markers -- "
+                           "the surface mesh did not come back with per-face markers")
+    buildings = markers >= 0
+    return ~buildings, buildings
+
+
+def submesh(mesh, face_mask, origin, z0) -> dict:
+    """Compact the masked faces into a standalone mesh in the local frame."""
+    faces = np.asarray(mesh.faces)[np.asarray(face_mask)]
+    used = np.unique(faces)
+    remap = np.full(len(mesh.vertices), -1, dtype=np.int64)
+    remap[used] = np.arange(len(used))
+    positions = np.asarray(mesh.vertices, dtype=np.float64)[used].copy()
+    positions[:, 0] -= origin[0]
+    positions[:, 1] -= origin[1]
+    positions[:, 2] -= z0
+    indices = remap[faces]
+
+    # Area-weighted vertex normals: the cross product is already proportional to
+    # the triangle area, so accumulating it unnormalised does the weighting.
+    normals = np.zeros_like(positions)
+    tri = positions[indices]
+    face_normals = np.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0])
+    for k in range(3):
+        np.add.at(normals, indices[:, k], face_normals)
+    lengths = np.linalg.norm(normals, axis=1)
+    lengths[lengths == 0] = 1.0
+    normals /= lengths[:, None]
+    return {"positions": positions, "normals": normals, "indices": indices}
+
+
+def flatten_buildings(sub, face_markers) -> dict:
+    """Move every building's vertices down so its lowest vertex sits at z = 0.
+
+    This is the real-data analogue of the synthetic blocks.glb: buildings placed
+    at sea level, which pages 02/03/09 draw against real terrain to show that
+    z = 0 geometry is buried, not floating.
+    """
+    positions = sub["positions"].copy()
+    indices = sub["indices"]
+    face_markers = np.asarray(face_markers).reshape(-1)
+    if len(face_markers) != len(indices):
+        raise ValueError(f"{len(indices)} faces but {len(face_markers)} markers")
+    for marker in np.unique(face_markers):
+        verts = np.unique(indices[face_markers == marker])
+        positions[verts, 2] -= positions[verts, 2].min()
+    return {"positions": positions, "normals": sub["normals"], "indices": indices}
+
+
+def footprints_geojson(city, crs) -> dict:
+    """LOD0 footprints in lon/lat with a `height` property, for page 01."""
+    from pyproj import Transformer
+    tf = Transformer.from_crs(crs, "EPSG:4326", always_xy=True)
+    features = []
+    for building in city.buildings:
+        footprint = building.lod0
+        if footprint is None or len(footprint.vertices) < 3:
+            continue
+        polygon = footprint.to_polygon(simplify=0.0)
+        if polygon.is_empty:
+            continue
+        ring = list(polygon.exterior.coords)
+        lons, lats = tf.transform([c[0] for c in ring], [c[1] for c in ring])
+        features.append({
+            "type": "Feature",
+            "properties": {"height": float(building.height)},
+            "geometry": {"type": "Polygon", "coordinates": [[[lon, lat] for lon, lat in zip(lons, lats)]]},
+        })
+    return {"type": "FeatureCollection", "features": features}
+
+
 def build_stage1(out_dir=OUT, bounds_path=BOUNDS_PATH) -> dict:
     from dtcc_core.datasets._city_mesh_common import prepare_city_from_bounds
     from dtcc_core.model import Bounds
@@ -141,8 +223,9 @@ def build_stage1(out_dir=OUT, bounds_path=BOUNDS_PATH) -> dict:
     except Exception as exc:  # spec section 9: fail loudly, never fall back to synthetic
         raise RuntimeError(
             f"stage1 could not build the city for {name} bbox {bounds} ({crs}). "
-            f"The DTCC data servers are compute.dtcc.chalmers.se:8001/tiles (footprints) and "
-            f":8000/get_lidar (point cloud); neither needs credentials. Underlying error: {exc!r}"
+            f"The DTCC data servers are compute.dtcc.chalmers.se:8001 (footprints) and "
+            f":8000 (point cloud); neither needs credentials. The failing URL is in the "
+            f"chained exception below. Underlying error: {exc!r}"
         ) from exc
     raster = city.terrain.raster
     if raster is None:
@@ -155,8 +238,31 @@ def build_stage1(out_dir=OUT, bounds_path=BOUNDS_PATH) -> dict:
         print(f"stage1: WARNING relief is below {MIN_RELIEF_M} m. Spec section 3 says to move to "
               f"the fallback box {spec['fallback']['bounds']} ({spec['fallback']['name']}) and "
               f"record why in NOTES.md.", flush=True)
+
+    from dtcc_core.datasets.city_surface_mesh import CitySurfaceMeshDataset
+
     print(f"stage1: {len(city.buildings)} buildings", flush=True)
-    return {"meta": meta, "city": city}
+    surface = CitySurfaceMeshDataset().build_from_city(
+        city, bounds=bounds, max_mesh_size=MAX_MESH_SIZE, format=None)
+    print(f"stage1: surface mesh {len(surface.vertices)} vertices, {len(surface.faces)} faces", flush=True)
+
+    ground_mask, building_mask = split_surface_mesh(surface)
+    origin, z0 = meta["origin"], meta["z0"]
+    ground = submesh(surface, ground_mask, origin, z0)
+    buildings = submesh(surface, building_mask, origin, z0)
+    flat = flatten_buildings(buildings, np.asarray(surface.markers)[building_mask])
+
+    out_dir = Path(out_dir)
+    for name, sub in [("ground", ground), ("buildings", buildings), ("buildings-flat", flat)]:
+        info = benchio.write_mesh_pair(out_dir, name, positions=sub["positions"],
+                                       normals=sub["normals"], indices=sub["indices"])
+        print(f"stage1: {name}.mesh {info['vertexCount']} vertices, "
+              f"{info['indexCount'] // 3} triangles", flush=True)
+
+    fc = footprints_geojson(city, crs)
+    (out_dir / "footprints.geojson").write_text(json.dumps(fc) + "\n")
+    print(f"stage1: {len(fc['features'])} footprints", flush=True)
+    return {"meta": meta, "city": city, "surface": surface}
 
 
 if __name__ == "__main__":
