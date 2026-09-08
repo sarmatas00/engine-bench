@@ -74,6 +74,10 @@ def test_write_terrain_artifacts_writes_every_file_and_a_consistent_dataset_json
     assert terrain["bounds_local"] == [-250.0, -250.0, 250.0, 250.0]
     rgb = np.asarray(Image.open(tmp_path / "terrain-rgb.png").convert("RGB"))
     decoded = benchio.decode_terrain_rgb(rgb)
-    # The PNG stores heights above z0, so its minimum is 0 and its span is the relief
-    assert abs(decoded.min()) < 0.06
+    # The PNG stores heights above z0, so its minimum is 0 and its span is the relief.
+    # Tolerance: the 64x64 query grid is coarser than the 2 m raster (7.8 m pitch), so a
+    # nearest-cell sample can miss the extreme cell by one pitch — 7.8 m x 0.04 m/m = 0.31 m
+    # on this fixture's ramp — plus 0.05 m of Terrain-RGB quantisation. A missing z0
+    # subtraction would show up as ~10 m, far outside this bound.
+    assert abs(decoded.min()) < 0.4
     assert abs(decoded.max() - meta["relief"]["relief"]) < 0.4
