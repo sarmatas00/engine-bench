@@ -20,7 +20,8 @@ def test_terrain_rgb_round_trip_is_within_half_a_decimetre():
 
 def test_terrain_rgb_matches_the_mapbox_formula_at_zero():
     rgb = benchio.encode_terrain_rgb(np.zeros((1, 1)))
-    v = (rgb[0, 0, 0] << 16) | (rgb[0, 0, 1] << 8) | rgb[0, 0, 2]
+    # int() first: numpy 2 keeps the uint8 dtype through <<, so the shift overflows to 0.
+    v = (int(rgb[0, 0, 0]) << 16) | (int(rgb[0, 0, 1]) << 8) | int(rgb[0, 0, 2])
     assert v == 100000  # (0 + 10000) / 0.1
 
 
@@ -53,7 +54,7 @@ def test_write_and_read_mesh_pair_round_trips_every_array(tmp_path):
     assert (tmp_path / "field.mesh.bin").stat().st_size == meta["byteLength"]
 
     back = benchio.read_mesh_pair(tmp_path, "field")
-    assert np.allclose(back["positions"], positions)
+    assert np.allclose(back["positions"].reshape(-1, 3), positions)
     assert np.array_equal(back["indices"], indices.reshape(-1))
     assert np.allclose(back["temperature"], temperature, atol=1e-6)
 
