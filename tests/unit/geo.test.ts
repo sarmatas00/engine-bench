@@ -1,5 +1,5 @@
 import {describe, expect, test} from 'bun:test';
-import {localToLngLat, lngLatToLocal, tileToLngLat, setAnchor, anchor} from '../../src/lib/geo';
+import {localToLngLat, lngLatToLocal, tileToLngLat} from '../../src/lib/geo';
 import {LON0, LAT0} from '../../src/lib/scene';
 
 describe('geo', () => {

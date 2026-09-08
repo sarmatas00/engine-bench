@@ -44,7 +44,7 @@ if (requireWebGL2()) (async () => {
       ['Load terrain tiles', 'no API — no terrain provider'],
       ['Reproject between EPSG codes', 'no API'],
       ['Community mapping plugin', 'one repo, 32 commits, dormant ~10 months, Google Maps Tiles API (paid)']
-    ]) ui.probe(`${need.padEnd(42)} ${api}`);
+    ]) ui.probe(`${need.padEnd(44)} ${api}`);
     app.once('postrender', () => ui.ready());
   });
   app.assets.add(asset);

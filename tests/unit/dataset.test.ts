@@ -51,8 +51,8 @@ describe('dataset terrain decoding', () => {
     expect(scene.files.field).toBe('/data/synthetic/field.glb');
     expect(scene.elevation(0, 0)).toBeGreaterThan(scene.elevation(900, 0));
     expect(anchor()).toEqual(scene.anchor);
-    // The real backend needs fetch + createImageBitmap, so it is covered by the
-    // Playwright matrix in tests/smoke.spec.ts, not here.
+    // The real backend needs fetch + createImageBitmap, so it has no coverage here.
+    // Task 12's dataset matrix in tests/smoke.spec.ts is what will exercise it.
   });
 
   test('row 0 is north: +y samples the first row', () => {
