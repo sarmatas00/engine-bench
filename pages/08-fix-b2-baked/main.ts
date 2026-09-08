@@ -15,8 +15,8 @@ if (requireWebGL2()) (async () => {
     claim: 'Decide the colour scale when we generate the file, and ship colours instead of raw values. No client work at all, works in every viewer today, and it is exactly what the Table already does. Cost: no changing the colour scale in the browser.',
     dataset: datasetChrome(scene),
     controls: [
-      {kind: 'range', id: 'min', label: 'Scale min (°C)', ...scaleMinBounds(scene), step: 1, value: tMin, disabled: true, onChange: () => {}},
-      {kind: 'range', id: 'max', label: 'Scale max (°C)', ...scaleMaxBounds(scene), step: 1, value: tMax, disabled: true, onChange: () => {}}
+      {kind: 'range', id: 'min', label: 'Scale min (°C)', ...scaleMinBounds(tMin), step: 1, value: tMin, disabled: true, onChange: () => {}},
+      {kind: 'range', id: 'max', label: 'Scale max (°C)', ...scaleMaxBounds(tMax), step: 1, value: tMax, disabled: true, onChange: () => {}}
     ]
   });
   ui.setProbe('field', scene.hasField);

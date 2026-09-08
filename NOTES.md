@@ -244,31 +244,45 @@ maplibre-gl pinned to 5.24.0: @deck.gl/mapbox 9.4.0 interleaved mode reads `map.
   for a coloured pixel on this colormap regardless of the field's dynamic range. No dataset-aware
   threshold is needed in Task 12's matrix, and a passing assertion here must not be read as evidence
   that the real field varies.
-- **Defect found in Task 11 (not fixed here, deliberately) — pages 10 and 11 colour a volume with
-  the ground mesh's colour range.** `scene.colourRange` comes from `field.json`'s `tmin`/`tmax`,
-  which `scripts/real/sample_field.py` computes as the 2nd/98th percentile of the temperature
-  interpolated onto the **ground surface**: 18.000–18.746 °C. Pages 10 and 11 draw
-  `field.grid.f32`, which is the same solve sampled through the *air* over the tile: 131,072 voxels,
-  18.00–32.49 °C, mean 21.80, median 20.31. The two ranges describe different things, and on the
-  synthetic dataset the difference is invisible because `T(x, y, z)` spans 10–35 on both the surface
-  and the grid. On the real dataset it dominates the render:
-  · **65.0%** of the voxels are at or above `tmax`, so they clamp to the top of the ramp *and* to the
-  top of the opacity curve. Page 10's default view is therefore a solid red-orange mass with a thin
-  cyan rim, not the translucent plume the page describes; page 11's isosurface slider spans
-  18.030–18.717 °C, above which lie **78.4%** of the grid at the low end and **65.3%** at the high
-  end, so the contour is a near box-filling slab at every slider position and the volume behind it
-  never shows. (Synthetic, for comparison: the same slider spans 15.2% down to 0.01% of the grid,
-  and 0.000% of voxels reach the top of the ramp.)
-  · It is a scale error, not a renderer or data problem, and it is reversible from the page: setting
-  page 10's Scale max to 33 °C — the grid's own top — turns the identical volume into the
-  translucent green-and-amber haze the briefing describes, with a faint hotter core. Screenshotted
-  both ways.
-  Left in place for now on purpose. The obvious fix — feeding pages 10/11 `field.grid.json`'s own
-  `min`/`max` instead of `scene.colourRange` — would move the synthetic render too (synthetic grid
-  max is 34.9516, not the 35 the pages use now), and Task 11 must not move the synthetic renders. It
-  is a pipeline decision: either `field.json` grows a separate volume range, or the volume pages read
-  the grid's. Recorded here, and both pages' `expect:` text now states the mismatch and its size on
-  screen, so nobody reads the red mass as a hot city.
+- **Defect found and fixed in Task 11 — pages 10 and 11 were colouring a volume with the ground
+  mesh's colour range. Our bug, not a property of DTCC's data.** `scene.colourRange` comes from
+  `field.json`'s `tmin`/`tmax`, which `scripts/real/sample_field.py` computes as the 2nd/98th
+  percentile of the temperature interpolated onto the **ground surface**: 18.000–18.746 °C. Pages 10
+  and 11 draw `field.grid.f32`, which is the same solve sampled through the *air* over the tile:
+  131,072 voxels, 18.00–32.49 °C, mean 21.80, median 20.31. Two different geometries, two different
+  ranges, and the pages were using the wrong one. On the synthetic dataset the mistake is invisible,
+  because `T(x, y, z)` spans 10–35 on the surface and 10–34.95 on the grid; on the real dataset it
+  destroyed both renders:
+  · **65.0%** of the voxels sat at or above `tmax`, clamping to the top of the ramp *and* the top of
+  the opacity curve, so page 10 drew a solid red-orange mass with a thin cyan rim instead of a plume.
+  · Page 11's isosurface slider spanned 18.030–18.717 °C, above which lay **78.4%** of the grid at
+  the low end and **65.3%** at the high end — every reachable contour enclosed most of the domain, so
+  the isosurface was a near box-filling slab at any slider position and the volume behind it never
+  showed. (Synthetic, for comparison: the same slider spanned 15.2% down to 0.01% of the grid.)
+  The solver output was never at fault, and neither was Cesium or vtk.js; both engines drew exactly
+  what they were handed. Fixed by taking the colour scale from the loaded grid's own `min`/`max` in
+  both pages — the same rule `field.json` already applies to the ground mesh, so each page now scales
+  to the data it actually draws. `loadGrid` moved ahead of `mountChrome` on both pages so the sliders
+  can present the range they drive (the `hasField` gate still runs first: with no stage 2 there is no
+  grid file to fetch), and `scaleMinBounds`/`scaleMaxBounds` now take the value rather than the Scene,
+  since pages 07/08 scale to the ground field and page 10 to the volume.
+  Measured after the fix. Page 10 on the real tile is now a broad translucent haze — yellow-green
+  through its body, amber over the densest blocks, a soft cyan fringe, and the globe graticule and
+  hill silhouette visible through it. Page 11's isosurface at the default 23.80 °C encloses **30.2%**
+  of the volume and renders as a scalloped lens of warm air over the built-up half of the tile with a
+  few detached islands to the south-west; across the slider the contour now runs from 67.1% of the
+  volume down to 0.0%, so the control spans something real. Cost on the synthetic renders, measured
+  by pixel comparison rather than asserted: page 10's canvas differs by a **maximum of 1** in any
+  channel (the ramp top moves 35 → 34.9516, 0.19% of the ramp); page 11's canvas has 119 pixels of
+  768,000 differing by more than 4 and 87 by more than 16, all of them on the isosurface silhouette,
+  where the contour value moves 20.000 → 19.981 °C. Both are invisible side by side. The slider
+  readouts do change on synthetic, deliberately: they now print the data's own extent, 34.95 and
+  19.98. One cosmetic residue, left alone: these sliders step by 1 °C, so the handle snaps to the
+  nearest whole degree while the readout carries the exact value (32.49 sits on the 32 notch on real,
+  34.95 on the 35 notch on synthetic) — the readout, not the handle, is what the render uses.
+  Header note for readers: `dataset.json`'s header line still shows the *ground* range (18.0–18.7 °C),
+  which is what pages 07/08/12 colour against; pages 10 and 11 say in their `expect:` text that they
+  carry their own scale and what it is.
 - Page 04 on the real tile: exactly as designed — two flat grey copies of the ground field mesh at
   ±`sideOffset(scene)` (left ScenegraphLayer, flat-lit and pale; right SimpleMeshLayer, lit and
   darker), and the probe values are identical to synthetic: ScenegraphLayer

@@ -19,8 +19,8 @@ if (requireWebGL2()) (async () => {
     claim: 'Because it fails at the shader, a small subclass that supplies its own shader does bind them. Cost: it leans on deck.gl internals that carry no stability promise, so it needs maintaining.',
     dataset: datasetChrome(scene),
     controls: [
-      {kind: 'range', id: 'min', label: 'Scale min (°C)', ...scaleMinBounds(scene), step: 1, value: tMin, onChange: v => { tMin = v; overlay?.setProps({layers: [build()]}); }},
-      {kind: 'range', id: 'max', label: 'Scale max (°C)', ...scaleMaxBounds(scene), step: 1, value: tMax, onChange: v => { tMax = v; overlay?.setProps({layers: [build()]}); }}
+      {kind: 'range', id: 'min', label: 'Scale min (°C)', ...scaleMinBounds(tMin), step: 1, value: tMin, onChange: v => { tMin = v; overlay?.setProps({layers: [build()]}); }},
+      {kind: 'range', id: 'max', label: 'Scale max (°C)', ...scaleMaxBounds(tMax), step: 1, value: tMax, onChange: v => { tMax = v; overlay?.setProps({layers: [build()]}); }}
     ]
   });
   ui.setProbe('field', scene.hasField);

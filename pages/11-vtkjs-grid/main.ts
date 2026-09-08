@@ -18,12 +18,20 @@ import {loadScene, datasetChrome} from '@lib/dataset';
 
 if (requireWebGL2()) (async () => {
   const scene = await loadScene();
-  const [t0, t1] = scene.colourRange, span = t1 - t0;
+  // Colour scale, opacity points and isosurface slider all come from the *volume's* own extent,
+  // not `scene.colourRange`. That range is the 2nd/98th percentile of the field on the ground
+  // surface, and this page draws the air above it: on the real tile it stops at 18.75 degC while
+  // the grid runs to 32.5, which put every reachable contour value below 65% of the volume and
+  // made the isosurface a box-filling slab (see NOTES.md). Loaded before the header so the slider
+  // spans the range it actually contours; without a field there is no grid file to fetch, so the
+  // gate below still runs first for that case.
+  const grid = scene.hasField ? await loadGrid(scene) : undefined;
+  const [t0, t1] = grid ? [grid.min, grid.max] : scene.colourRange, span = t1 - t0;
   let mc: any, rw: any;
   const ui = mountChrome({
     num: '11', title: 'VTK.js — one job',
     expect: scene.dataset === 'real'
-      ? 'one orange isosurface that all but fills the box, with the volume behind it hidden. Both the slider and the transfer function are scaled to the header range, which the pipeline measures on the *ground* mesh (18.0–18.7 °C), while this grid is air and runs to 32.5 °C: 65–78% of it is hotter than every value the slider can reach, so the contour encloses most of the domain wherever you put it. Not a rendering failure — vtk.js is drawing the surface it was asked for; the range it was given belongs to a different mesh. This page never loaded the unstructured mesh; it loaded the regular grid the pipeline wrote.'
+      ? 'the volume as a faint pale haze with a solid orange isosurface inside it: at the default 23.8 °C, a lens of warm air over the built-up half of the tile, scalloped at the edges, with a few detached islands to the south-west. The slider carries this page’s own scale, the grid’s 18.0–32.5 °C extent — the header’s 18.0–18.7 °C is the ground-surface range pages 07 and 08 use — and it spans something real: the contour encloses 67% of the volume at the bottom of the slider, 30% at the default and almost nothing at the top. This page never loaded the unstructured mesh; it loaded the regular grid the pipeline wrote.'
       : 'a faint translucent plume as a volume, with a solid orange isosurface visible at the slider temperature inside it. This page never loaded the unstructured mesh; it loaded the regular grid the pipeline wrote.',
     claim: 'Cannot display our simulation meshes at all — it has no concept of that kind of mesh. It stays useful for one thing: if we convert results to a regular grid first, it can draw them.',
     dataset: datasetChrome(scene),
@@ -31,43 +39,41 @@ if (requireWebGL2()) (async () => {
       onChange: v => { mc.setContourValue(v); rw.render(); }}]
   });
   ui.setProbe('field', scene.hasField);
-  if (!scene.hasField) { noFieldForThisDataset(ui, scene.name); return; }
+  if (!grid) { noFieldForThisDataset(ui, scene.name); return; }
   const container = document.createElement('div');
   container.style.cssText = 'position:absolute;inset:0';
   ui.canvasHost.prepend(container);
 
-  loadGrid(scene).then(grid => {
-    const image = vtkImageData.newInstance();
-    image.setDimensions(grid.dims);
-    image.setOrigin(grid.origin);
-    image.setSpacing(grid.spacing);
-    image.getPointData().setScalars(vtkDataArray.newInstance({name: 'temperature', values: grid.data, numberOfComponents: 1}));
+  const image = vtkImageData.newInstance();
+  image.setDimensions(grid.dims);
+  image.setOrigin(grid.origin);
+  image.setSpacing(grid.spacing);
+  image.getPointData().setScalars(vtkDataArray.newInstance({name: 'temperature', values: grid.data, numberOfComponents: 1}));
 
-    // rootContainer is a real runtime option (FullScreenRenderWindow.js model default) but missing from the 36.12.1 .d.ts, which only declares `container`.
-    const fs = vtkFullScreenRenderWindow.newInstance({rootContainer: container, containerStyle: {height: '100%', width: '100%', position: 'absolute'}, background: [0.95, 0.95, 0.94]} as any);
-    const renderer = fs.getRenderer(); rw = fs.getRenderWindow();
+  // rootContainer is a real runtime option (FullScreenRenderWindow.js model default) but missing from the 36.12.1 .d.ts, which only declares `container`.
+  const fs = vtkFullScreenRenderWindow.newInstance({rootContainer: container, containerStyle: {height: '100%', width: '100%', position: 'absolute'}, background: [0.95, 0.95, 0.94]} as any);
+  const renderer = fs.getRenderer(); rw = fs.getRenderWindow();
 
-    const ctf = vtkColorTransferFunction.newInstance();
-    for (const f of [0, 0.25, 0.5, 0.75, 1]) { const t = t0 + f * span; const [r, g, b] = colormap(t, t0, t1); ctf.addRGBPoint(t, r / 255, g / 255, b / 255); }
-    const ofun = vtkPiecewiseFunction.newInstance();
-    // Retuned in NOTES.md: the ambient field is most of the volume, so it must stay near-transparent.
-    for (const [f, a] of [[0, 0], [0.4, 0.002], [0.72, 0.02], [1, 0.12]]) ofun.addPoint(t0 + f * span, a);
+  const ctf = vtkColorTransferFunction.newInstance();
+  for (const f of [0, 0.25, 0.5, 0.75, 1]) { const t = t0 + f * span; const [r, g, b] = colormap(t, t0, t1); ctf.addRGBPoint(t, r / 255, g / 255, b / 255); }
+  const ofun = vtkPiecewiseFunction.newInstance();
+  // Retuned in NOTES.md: the ambient field is most of the volume, so it must stay near-transparent.
+  for (const [f, a] of [[0, 0], [0.4, 0.002], [0.72, 0.02], [1, 0.12]]) ofun.addPoint(t0 + f * span, a);
 
-    const vmapper = vtkVolumeMapper.newInstance(); vmapper.setInputData(image); vmapper.setSampleDistance(8);
-    const volume = vtkVolume.newInstance(); volume.setMapper(vmapper);
-    volume.getProperty().setRGBTransferFunction(0, ctf); volume.getProperty().setScalarOpacity(0, ofun);
-    renderer.addVolume(volume);
+  const vmapper = vtkVolumeMapper.newInstance(); vmapper.setInputData(image); vmapper.setSampleDistance(8);
+  const volume = vtkVolume.newInstance(); volume.setMapper(vmapper);
+  volume.getProperty().setRGBTransferFunction(0, ctf); volume.getProperty().setScalarOpacity(0, ofun);
+  renderer.addVolume(volume);
 
-    mc = vtkImageMarchingCubes.newInstance({contourValue: t0 + 0.4 * span, computeNormals: true, mergePoints: true});
-    mc.setInputData(image);
-    const smapper = vtkMapper.newInstance(); smapper.setInputConnection(mc.getOutputPort());
-    const actor = vtkActor.newInstance(); actor.setMapper(smapper); actor.getProperty().setColor(0.9, 0.6, 0.1);
-    renderer.addActor(actor);
+  mc = vtkImageMarchingCubes.newInstance({contourValue: t0 + 0.4 * span, computeNormals: true, mergePoints: true});
+  mc.setInputData(image);
+  const smapper = vtkMapper.newInstance(); smapper.setInputConnection(mc.getOutputPort());
+  const actor = vtkActor.newInstance(); actor.setMapper(smapper); actor.getProperty().setColor(0.9, 0.6, 0.1);
+  renderer.addActor(actor);
 
-    renderer.resetCamera(); renderer.getActiveCamera().elevation(-50); renderer.resetCameraClippingRange();
-    rw.render();
-    ui.probe('input: field.grid.f32 via vtkImageData. The 41×41 surface mesh and any tetrahedral mesh were never loaded — vtk.js has no mapper for vtkUnstructuredGrid.');
-    ui.probe('the grid conversion in scripts/generate.ts is the one step that feeds both this page and page 10.');
-    ui.ready();
-  });
+  renderer.resetCamera(); renderer.getActiveCamera().elevation(-50); renderer.resetCameraClippingRange();
+  rw.render();
+  ui.probe('input: field.grid.f32 via vtkImageData. The 41×41 surface mesh and any tetrahedral mesh were never loaded — vtk.js has no mapper for vtkUnstructuredGrid.');
+  ui.probe('the grid conversion in scripts/generate.ts is the one step that feeds both this page and page 10.');
+  ui.ready();
 })();

@@ -81,15 +81,17 @@ export const fieldView = (s: Scene) => ({center: s.anchor, zoom: s.zoom - 1.2, p
 export const sideOffset = (s: Scene) => 1.05 * s.extent;
 
 /**
- * Bounds for the two colour-scale sliders on pages 07, 08 and 10. The fixed 0–20 / 20–50 pair was
- * written for the synthetic range [10, 35]. The real dataset's 2nd/98th-percentile range is
- * [18.0, 18.75], and 18.75 falls *below* a 20–50 track: the browser pins the handle to the left
- * end while the readout beside it says 18.75, so the control contradicts itself on screen and the
- * first drag jumps the scale by more than its whole span. Widen only where the data needs it, so
- * the synthetic bounds come out exactly 0–20 and 20–50 as before.
+ * Bounds for the two colour-scale sliders on pages 07, 08 and 10, given the value each one starts
+ * on. The fixed 0–20 / 20–50 pair was written for the synthetic range [10, 35]. The real ground
+ * field's 2nd/98th-percentile range is [18.0, 18.75], and 18.75 falls *below* a 20–50 track: the
+ * browser pins the handle to the left end while the readout beside it says 18.75, so the control
+ * contradicts itself on screen and the first drag jumps the scale by more than its whole span.
+ * Widen only where the data needs it, so the synthetic bounds come out exactly 0–20 and 20–50 as
+ * before. Takes the value rather than the Scene because pages 07/08 scale to the ground field and
+ * page 10 scales to the volume grid — two different ranges off the same dataset.
  */
-export const scaleMinBounds = (s: Scene) => ({min: Math.min(0, s.colourRange[0]), max: Math.max(20, s.colourRange[0])});
-export const scaleMaxBounds = (s: Scene) => ({min: Math.min(20, s.colourRange[1]), max: Math.max(50, s.colourRange[1])});
+export const scaleMinBounds = (v: number) => ({min: Math.min(0, v), max: Math.max(20, v)});
+export const scaleMaxBounds = (v: number) => ({min: Math.min(20, v), max: Math.max(50, v)});
 
 async function renderExtentImage(scene: Scene, kind: 'dem' | 'map', size = 512): Promise<string> {
   const img = new ImageData(size, size);
