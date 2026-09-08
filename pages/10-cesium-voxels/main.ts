@@ -8,7 +8,7 @@ if (requireWebGL2()) {
   let shader: Cesium.CustomShader | undefined;
   const ui = mountChrome({
     num: '10', title: 'Cesium — volume rendering',
-    expect: 'a translucent 3-D plume over the hot spot, red at the core fading to blue and transparent. This is the temperature field as a volume, not a surface.',
+    expect: 'a translucent 3-D plume over the hot spot: a hot amber core fading through green and cyan to transparent. This is the temperature field as a volume, not a surface.',
     claim: 'it is the only engine that can currently draw volume data like a wind or heat field in 3D. Not the base map, but a real candidate for a dedicated simulation view.',
     controls: [
       {kind: 'range', id: 'min', label: 'Scale min (°C)', min: 0, max: 20, step: 1, value: 10, onChange: v => shader?.setUniform('u_min', v)},
@@ -45,7 +45,7 @@ if (requireWebGL2()) {
       fragmentShaderText: `
         ${COLORMAP_GLSL}
         void fragmentMain(FragmentInput fsInput, inout czm_modelMaterial material) {
-          float t = clamp((fsInput.metadata.temperature - u_min) / (u_max - u_min), 0.0, 1.0);
+          float t = clamp((fsInput.metadata.temperature - u_min) / max(u_max - u_min, 1e-3), 0.0, 1.0);
           material.diffuse = benchColormap(t);
           material.alpha = t * t * t * 0.35;
         }`
@@ -53,13 +53,14 @@ if (requireWebGL2()) {
 
     ui.probe('VoxelPrimitive + custom VoxelProvider over field.grid.f32 (64×64×32 float32, one level-0 tile). API marked experimental.');
     ui.probe('EXT_primitive_voxels lives on the CesiumGS 3d-tiles-next branch, as does EXT_structural_metadata.');
-    ui.probe('depthTest off, alpha = t³·0.35: the hottest air is at ground level, inside the hill, and a t²·0.9 ramp saturates the ray long before it reaches the core.');
+    ui.probe('alpha = t³·0.35, not t²·0.9: front-to-back, the cool near side saturates the ray long before it reaches the core.');
+    ui.probe('depthTest off: the hottest air is at ground level, inside the hill. Orbit behind the ridge and the plume shows through the hillside.');
 
     // The raymarch costs about a second a frame on a software rasteriser, which starves the globe's
     // tile refinement, so let the terrain settle first and then drop the volume in on top of it.
     whenTilesLoaded(viewer, () => {
       const prim = viewer.scene.primitives.add(new Cesium.VoxelPrimitive({provider, customShader: shader}));
-      prim.nearestSampling = false;
+      prim.nearestSampling = false;   // the default; kept explicit to document trilinear filtering
       prim.depthTest = false;
       // Registered before the first traversal update: it only tracks load progress while listened to.
       prim.initialTilesLoaded.addEventListener(() => {
