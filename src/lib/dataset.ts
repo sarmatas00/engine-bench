@@ -185,7 +185,14 @@ async function realScene(): Promise<Scene> {
     elevationImage: async () => ({
       dem: dataUrl('terrain-rgb.png', 'real'),
       map: dataUrl('basemap.png', 'real'),
-      bounds: terrain.bounds_lonlat as [number, number, number, number]
+      // NOT terrain.json's `bounds_lonlat`. That field is the true WGS84 position of the SW and NE
+      // corners of the EPSG:3006 box, and SWEREF99 TM grid north is 2.57 deg west of true north
+      // here, so those two corners do not bound the box: they describe a 475.90 x 521.69 m
+      // rectangle, not 500 x 500. TerrainLayer.bounds is an axis-aligned [W, S, E, N] rectangle,
+      // and every other layer on the page places metres with localToLngLat, which treats local
+      // metres as true-north. Use the same square they do, so the raster and the buildings share
+      // one frame (see NOTES.md; the 2.57 deg rotation itself is bench-wide and uniform).
+      bounds: extentLngLatBounds(scene)
     }),
     footprints: async () => fetchJson(dataUrl('footprints.geojson', 'real')),
     files, colourRange, relief, hasField,

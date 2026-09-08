@@ -1,5 +1,5 @@
 import {ScenegraphLayer, SimpleMeshLayer} from '@deck.gl/mesh-layers';
-import {mountChrome, requireWebGL2} from '@lib/chrome';
+import {mountChrome, requireWebGL2, noFieldForThisDataset} from '@lib/chrome';
 import {makeMap, makeOverlay, loadGltfMesh, origin, METERS, GLTF_ORIENTATION, whenIdle} from '@lib/deck-map';
 import {describeModel} from '@lib/probe';
 import {loadScene, datasetChrome, wideView, sideOffset} from '@lib/dataset';
@@ -14,6 +14,9 @@ if (requireWebGL2()) (async () => {
     claim: 'Two of them — mesh and point cloud — copy only a fixed list of attributes and discard everything else immediately. The third path, used for glTF models, is subtler: the values survive all the way to a live buffer on the graphics card, and fail only at the final lookup because the standard shader does not declare them.',
     dataset: datasetChrome(scene)
   });
+  ui.setProbe('field', scene.hasField);
+  if (!scene.hasField) { noFieldForThisDataset(ui, scene.name); return; }
+
   const map = makeMap(ui.canvasHost, scene, wideView(scene));
 
   class ProbedScenegraph extends ScenegraphLayer<any> {

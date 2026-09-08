@@ -18,7 +18,11 @@ maplibre-gl pinned to 5.24.0: @deck.gl/mapbox 9.4.0 interleaved mode reads `map.
 - Page 12 (PlayCanvas 2.22.0, `field-baked.glb`): contrary to the task facts' assumption ("PlayCanvas 2.22.0 ignores glTF COLOR_0 unless the material sets diffuseVertexColor"), the mesh rendered with correct vertex colours (blue-to-red gradient with a red/yellow hot spot) straight out of `instantiateRenderEntity()` — no material patch needed. Verified directly: built and screenshotted the page once with a `meshInstance.material.diffuseVertexColor = true; material.update();` loop applied after instantiation, and once with that loop entirely removed; the two screenshots were visually identical. `pc.Application` (deprecated in favour of `AppBase`/`createGraphicsDevice` but still present in 2.22.0) initialised and rendered cleanly under Playwright/SwiftShader with zero console errors either way, so this version's `ContainerHandler`/glTF parser must already set `diffuseVertexColor` on generated materials when a primitive has `COLOR_0`. Page 12 therefore ships without any vertex-colour workaround.
 - Page 10 (Cesium `VoxelPrimitive`, 1.145.0): the volumetric renderer is real and does render our 64×64×32 float grid, but "working volumetric renderer" understates the assembly. (a) `VoxelProvider` is an interface with an instantiation-throwing constructor and no public concrete implementation for in-memory data — the only shipped one is `Cesium3DTilesVoxelProvider`, which wants a 3D Tiles tileset with `EXT_primitive_voxels`/`EXT_structural_metadata` glTF content. Feeding a plain `Float32Array` means hand-rolling an object with 17 properties (`shape, dimensions, names, types, componentTypes, minimumValues, maximumValues, globalTransform, shapeTransform, minBounds, maxBounds, paddingBefore, paddingAfter, maximumTileCount, availableLevels, requestData`, plus the optional `metadataOrder`) that Cesium reads as plain properties, and both `VoxelPrimitive` and `VoxelProvider` are marked `@experimental` — outside the deprecation policy. (b) It is expensive: the ray-march runs at roughly one frame per second at 1280×800 under Playwright's SwiftShader, enough to starve the globe's own tile refinement, so page 10 adds the primitive only after the terrain has settled. `stepSize` (1 → 8) changes nothing there; the cost is shader-bound, not step-bound. (c) The volume is drawn as a full-screen ray-march compositing front-to-back, so the briefing's mental model of "the hot core shows red" needs `depthTest = false` (the hottest air in our field is at ground level, i.e. inside the hill) and a steeper opacity ramp than the obvious one — at `alpha = t²·0.9` the ray saturates on the cool near side and the core never reaches the screen. Even at `t³·0.35` the front-to-back composite still dilutes the handful of peak voxels with everything in front of them, so at any legible opacity the core reads amber, not the red the top of the colour scale implies.
 - Real tile `gothenburg-skansen-kronan` (500 m box, EPSG:3006 [318369, 6398890, 318869, 6399390],
-  relief 53.5 m, 217 footprints / 215 buildings), pages 01/02/03. Page 01's `fill-extrusion` drapes
+  relief 53.5 m, 217 LOD0 footprints in `footprints.geojson` — what page 01 draws — and 103 connected
+  components in the drawn LOD1 surface mesh, i.e. 103 welded building groups, which is what pages
+  02/03/05/06/09 draw), pages 01/02/03. (An earlier draft of this entry said "215 buildings"; that was
+  a stale Stage 1 count from before the Task 3b regeneration and never a measured figure. Re-measured
+  on the shipped data in Task 8: 217 and 103.) Page 01's `fill-extrusion` drapes
   correctly on real data: every footprint stands where the DEM puts it, and toggling Terrain moves
   the whole city with the ground. Pages 02 and 03 draw the same buildings re-based to z = 0 and
   produce the *same* buried silhouette as each other, so the mechanism (MapLibre never drapes a
@@ -52,7 +56,7 @@ maplibre-gl pinned to 5.24.0: @deck.gl/mapbox 9.4.0 interleaved mode reads `map.
   geometry.** `flatten_buildings` (`scripts/real/stage1_build.py:169`, old version) looped over
   face markers and did `positions[verts, 2] -= positions[verts, 2].min()` per marker. Adjacent
   buildings in the DTCC surface mesh share vertices — the `buildings` submesh is 103 connected
-  components for ~215 buildings — so a vertex shared by two markers was lowered twice, by two
+  components for 217 LOD0 footprints — so a vertex shared by two markers was lowered twice, by two
   different amounts, and the triangles around it stretched. Measured on the shipped (buggy) mesh:
   11,171 of 37,672 triangles in `buildings-flat` had their three vertices moved by amounts
   differing by more than 1 m (7,421 by more than 5 m, max 50.34 m); the tallest vertical triangle
@@ -71,3 +75,76 @@ maplibre-gl pinned to 5.24.0: @deck.gl/mapbox 9.4.0 interleaved mode reads `map.
   median drop 1.27 m, mean 2.84 m, max 50.34 m (a legitimate per-component base offset now, not a
   stretch) — it just no longer tears any triangle. Re-screenshotted pages 02/03 on `?dataset=real`:
   the hilltop now shows the same clean octagonal building page 06 draws, no spike.
+- **Defect found in Task 8, fixed in `src/lib/dataset.ts` — page 05 drew the real terrain in a
+  different frame from everything else on the page.** `realScene().elevationImage()` handed
+  deck.gl's `TerrainLayer` the `bounds_lonlat` field of `terrain.json`, which
+  `scripts/real/stage1_build.py:103` writes as `tf.transform(bounds[0], bounds[1])` and
+  `tf.transform(bounds[2], bounds[3])` — the true WGS84 lon/lat of the **SW and NE corners** of the
+  EPSG:3006 box. SWEREF99 TM grid north is 2.5684 deg west of true north at this tile (measured from
+  `dataset.json`'s origin with pyproj), so the 500 m grid square is rotated in lon/lat and those two
+  corners are not its bounding box: they describe a rectangle **475.90 m wide by 521.69 m tall**.
+  `TerrainLayer.bounds` is an axis-aligned `[W, S, E, N]` rectangle, so the raster was squeezed 4.8%
+  in longitude and stretched 4.3% in latitude against the SimpleMeshLayer blocks beside it, which
+  deck.gl places in metre offsets from the anchor. Displacement at the tile edge: **+12.06 / -12.03 m
+  east-west and -10.85 / +10.84 m north-south**, about 11 screen px at zoom 16.2. Measured on screen,
+  not just on paper: pages 05 and 06 share a camera and both draw the same 10 m contour rule over the
+  same DEM, so the contour marks should land on the same pixels. Cross-correlating the two masks over
+  the hill, page 05 before the fix peaked at a shift of (+15, -20) screen px with 4,130 px of overlap
+  at zero shift; after the fix it peaks at (+4, -4) px with 9,358 at zero shift — the residual is the
+  Delatin terrain mesh disagreeing with MapLibre's 256 px DEM tiles, not a frame error.
+  Fixed by handing `TerrainLayer` `extentLngLatBounds(scene)`, the same true-north 500 m square every
+  other layer and page already uses. `terrain.json` is left alone: as source metadata the reprojected
+  corners are correct, they are just not a bbox and not the bench's frame.
+- Consequence of the above worth carrying to the briefing: **the bench draws the real tile rotated
+  2.57 deg from true north.** Local metres in this repo are EPSG:3006 grid metres (building vertices
+  are easting/northing minus the origin, the DEM is sampled on the grid axes), while `src/lib/geo.ts`
+  converts local metres to lon/lat as a true-north equirectangular offset from the anchor. The two are
+  the same frame only at the anchor; at the tile corners they differ by 15.5-16.2 m. This is uniform
+  across every page and harmless for what the bench demonstrates — every engine gets the same
+  rotation, so no comparison between engines is affected — but the bench is not a georeferenced
+  product, and nothing in it should be screenshotted next to a real basemap.
+- Page 05 (deck.gl `TerrainLayer`) on the real tile: the terrain loads and drapes correctly, and it is
+  the only page fed the DEM at full resolution — 1024x1024 over 500 m, 0.49 m/px — where MapLibre gets
+  256 px tiles resampled through `scene.elevation`. That shows. The real DEM is not a smooth ridge:
+  3.76% of its pixels are steeper than 45 deg, 4,725 are steeper than 70 deg, and the steepest is
+  86.6 deg, because the DTCC terrain raster carries retaining walls, cut faces and building-shaped
+  steps (the footprint outlines are legible in a hillshade of it). At `meshMaxError: 2` the Delatin
+  mesh resolves those into a band of thin bright facets along the east flank of the Skansen Kronan
+  hill, which reads on screen as a fringe of white shards. It is the data and the tolerance, not a
+  bug, and it is left alone deliberately: retuning `meshMaxError` for the real tile would be tuning a
+  parameter to make the picture nicer. Page 06 does not show it because MapLibre never sees that
+  detail.
+- Page 05's `expect:` promised "a wide block tilts with the slope" in `offset` mode. Measured on the
+  real tile: the ground under one building group spans 0.70 m (median), 1.41 m (mean), 9.48 m (max),
+  which across the footprint is a tilt of 1.5 deg median and above 5 deg for only 9 of the 103 groups.
+  The lift is real and correct; the tilt is invisible. Real branch of the `expect:` says so.
+- Page 06 (pre-draped) on the real tile: the cleanest of the five. `blocks-draped.glb` puts every
+  building on the real ground, and the Skansen Kronan fortress sits as a single octagon on the hilltop
+  (component 4, centroid local (-72.2, -197.6), ground 50.50 m, height 5.13 m) — the same octagon
+  pages 02/03 draw once the Task 3b flatten fix landed. The detachment the page exists to show is much
+  milder here than on the synthetic ridge, and for a structural reason: exaggeration `e` moves the
+  ground under a building by `(e-1) x ground`, and the median ground under a building on this tile is
+  3.70 m against a median building height of 9.35 m. So at exaggeration 2.0 the median building takes
+  on 3.7 m of ground — 40% of its height, plainly visible but not a vanishing — while 30 of 103 go
+  under completely and the hilltop octagon is swallowed by 50.5 m. At 0.5 they float by 1.85 m median,
+  25.25 m at the hilltop. On the synthetic ridge the same slider moves the hill by up to 120 m.
+- Page 09 (Cesium) on the real tile: the mechanism reproduces, the story inverts. The polygon and the
+  line are `classificationType: TERRAIN` / `clampToGround` and both project per-pixel, correctly. But
+  the demo ring and line scale by `k = extent / 1000 = 0.25`, which on a 500 m tile puts the gold line
+  along `y = 0` from x = -225 m to +225 m, where the DEM only moves from 3.00 m to 5.80 m: **2.8 m of
+  relief over 450 m**, so the line renders dead straight and demonstrates nothing. The blue ring is
+  luckier — its corners sit at 46.92, 7.78, 2.03 and 1.53 m, so its west edge does fold 45 m down the
+  hill flank and the drape is obvious. The glTF model is the real correction. The synthetic page says
+  the clamp makes blocks "float clear"; on this tile the anchor's ground is 3.40 m, near the tile
+  floor of 0.00 m, against a 53.5 m relief, so the single clamp point mostly *buries* rather than
+  floats: of the 103 building groups, 55 sink into the ground (14 of them out of sight, worst 47.1 m)
+  and only 47 float, by at most 3.00 m — less than a third of the median 9.35 m building height, i.e.
+  barely visible. Only 17 of 103 are off by more than 5 m. So on a 500 m tile the model-origin clamp
+  error is not "floats clear", it is "correct to within a couple of metres for most of the tile and
+  catastrophic for the few buildings on the hill". Both `expect:` texts corrected.
+- Pages 04 and 12 are now gated on `scene.hasField` like 07, 08, 10 and 11, and added to
+  `FIELD_PAGES` in `tests/smoke.spec.ts`. Both gate before any engine is constructed: on
+  `?dataset=real` page 04 reports and finishes in 546 ms without building a MapLibre map, page 12 in
+  737 ms without constructing `pc.Application`. Their header `expect:` lines still describe the
+  synthetic field render while the body says there is no field — the same mismatch the four pages
+  gated in Task 6 already carry, and Task 12 Step 3's sweep covers all six.

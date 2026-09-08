@@ -1,5 +1,5 @@
 import * as pc from 'playcanvas';
-import {mountChrome, requireWebGL2} from '@lib/chrome';
+import {mountChrome, requireWebGL2, noFieldForThisDataset} from '@lib/chrome';
 import {loadScene, datasetChrome} from '@lib/dataset';
 
 if (requireWebGL2()) (async () => {
@@ -10,6 +10,9 @@ if (requireWebGL2()) (async () => {
     claim: 'No geographic support anywhere in the engine. Its only mapping project is one person\'s side project — 32 commits, dormant about ten months, and tied to a paid Google service.',
     dataset: datasetChrome(scene)
   });
+  ui.setProbe('field', scene.hasField);
+  if (!scene.hasField) { noFieldForThisDataset(ui, scene.name); return; }
+
   const canvas = document.createElement('canvas');
   ui.canvasHost.prepend(canvas);
 

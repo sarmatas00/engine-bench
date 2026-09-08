@@ -29,7 +29,9 @@ if (requireWebGL2()) (async () => {
 
   const ui = mountChrome({
     num: '05', title: 'Fix A1 — deck.gl owns the terrain',
-    expect: 'MapLibre is flat underneath; the hill is a deck.gl TerrainLayer. In "drape" the blocks are painted onto the surface and lose their height. In "offset" each vertex is lifted by the ground height, so a wide block tilts with the slope.',
+    expect: scene.dataset === 'real'
+      ? 'MapLibre is flat underneath; the Skansen Kronan hill is a deck.gl TerrainLayer built from the real DEM. In "drape" the buildings are painted flat onto the surface and lose their height. In "offset" each vertex is lifted by the ground height and they stand up again — but the ground under a building here spans only 0.7 m (median), so almost none of them visibly tilt.'
+      : 'MapLibre is flat underneath; the hill is a deck.gl TerrainLayer. In "drape" the blocks are painted onto the surface and lose their height. In "offset" each vertex is lifted by the ground height, so a wide block tilts with the slope.',
     claim: 'deck.gl will drape onto any layer we mark as terrain — it picks the target by a property, not by a fixed class. Cost: MapLibre drops to a flat background map, the feature is experimental, and draping discards height.',
     dataset: datasetChrome(scene),
     controls: [{kind: 'select', id: 'mode', label: 'terrainDrawMode', options: ['drape', 'offset'], value: 'drape',

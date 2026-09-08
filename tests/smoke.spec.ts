@@ -77,7 +77,7 @@ export const PAGES: PageSpec[] = [
   {slug: '12-playcanvas'}
 ];
 
-export const FIELD_PAGES = new Set(['07-fix-b1-shader', '08-fix-b2-baked', '10-cesium-voxels', '11-vtkjs-grid']);
+export const FIELD_PAGES = new Set(['04-values-lost', '07-fix-b1-shader', '08-fix-b2-baked', '10-cesium-voxels', '11-vtkjs-grid', '12-playcanvas']);
 
 for (const spec of PAGES) {
   test(spec.slug, async ({page}) => {
