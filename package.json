@@ -5,8 +5,9 @@
   "scripts": {
     "postinstall": "bun scripts/copy-cesium.ts",
     "dev": "vite",
-    "build": "bun run generate && vite build",
+    "build": "bun run generate && bun run generate:real && vite build",
     "generate": "bun scripts/generate.ts",
+    "generate:real": "bun scripts/generate-real.ts",
     "preview": "vite preview --port 4173 --strictPort",
     "test:unit": "bun test tests/unit",
     "test": "bun run test:unit && bun run build && playwright test"
