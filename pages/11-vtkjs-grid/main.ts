@@ -11,7 +11,7 @@ import vtkPiecewiseFunction from '@kitware/vtk.js/Common/DataModel/PiecewiseFunc
 import vtkImageMarchingCubes from '@kitware/vtk.js/Filters/General/ImageMarchingCubes';
 import vtkMapper from '@kitware/vtk.js/Rendering/Core/Mapper';
 import vtkActor from '@kitware/vtk.js/Rendering/Core/Actor';
-import {mountChrome, requireWebGL2} from '@lib/chrome';
+import {mountChrome, requireWebGL2, noFieldForThisDataset} from '@lib/chrome';
 import {loadGrid} from '@lib/grid';
 import {colormap} from '@lib/colormap';
 import {loadScene, datasetChrome} from '@lib/dataset';
@@ -28,6 +28,8 @@ if (requireWebGL2()) (async () => {
     controls: [{kind: 'range', id: 'iso', label: 'Isosurface (°C)', min: t0 + 0.04 * span, max: t1 - 0.04 * span, step: span / 25, value: t0 + 0.4 * span,
       onChange: v => { mc.setContourValue(v); rw.render(); }}]
   });
+  ui.setProbe('field', scene.hasField);
+  if (!scene.hasField) { noFieldForThisDataset(ui, scene.name); return; }
   const container = document.createElement('div');
   container.style.cssText = 'position:absolute;inset:0';
   ui.canvasHost.prepend(container);

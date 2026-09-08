@@ -1,5 +1,5 @@
 import {ScenegraphLayer, SimpleMeshLayer} from '@deck.gl/mesh-layers';
-import {mountChrome, requireWebGL2} from '@lib/chrome';
+import {mountChrome, requireWebGL2, noFieldForThisDataset} from '@lib/chrome';
 import {makeMap, makeOverlay, loadGltfMesh, origin, METERS, GLTF_ORIENTATION, whenIdle} from '@lib/deck-map';
 import {describeModel} from '@lib/probe';
 import {loadScene, datasetChrome, wideView, sideOffset} from '@lib/dataset';
@@ -17,6 +17,8 @@ if (requireWebGL2()) (async () => {
       {kind: 'range', id: 'max', label: 'Scale max (°C)', min: 20, max: 50, step: 1, value: tMax, disabled: true, onChange: () => {}}
     ]
   });
+  ui.setProbe('field', scene.hasField);
+  if (!scene.hasField) { noFieldForThisDataset(ui, scene.name); return; }
   const map = makeMap(ui.canvasHost, scene, wideView(scene));
 
   class ProbedScenegraph extends ScenegraphLayer<any> {

@@ -1,5 +1,5 @@
 import * as Cesium from 'cesium';
-import {mountChrome, requireWebGL2} from '@lib/chrome';
+import {mountChrome, requireWebGL2, noFieldForThisDataset} from '@lib/chrome';
 import {makeViewer, enuMatrix, whenTilesLoaded} from '@lib/cesium-setup';
 import {loadGrid} from '@lib/grid';
 import {COLORMAP_GLSL} from '@lib/colormap';
@@ -19,6 +19,8 @@ if (requireWebGL2()) (async () => {
       {kind: 'range', id: 'max', label: 'Scale max (°C)', min: 20, max: 50, step: 1, value: t1, onChange: v => shader?.setUniform('u_max', v)}
     ]
   });
+  ui.setProbe('field', scene.hasField);
+  if (!scene.hasField) { noFieldForThisDataset(ui, scene.name); return; }
   const viewer = makeViewer(ui.canvasHost, scene);
 
   loadGrid(scene).then(grid => {

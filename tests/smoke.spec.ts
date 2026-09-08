@@ -77,6 +77,8 @@ export const PAGES: PageSpec[] = [
   {slug: '12-playcanvas'}
 ];
 
+export const FIELD_PAGES = new Set(['07-fix-b1-shader', '08-fix-b2-baked', '10-cesium-voxels', '11-vtkjs-grid']);
+
 for (const spec of PAGES) {
   test(spec.slug, async ({page}) => {
     const errors: string[] = [];
@@ -88,6 +90,9 @@ for (const spec of PAGES) {
 
     const probe = await page.evaluate(() => (window as any).__bench.probe);
     expect(probe.webgl, 'page reported no WebGL2').not.toBe(false);
+    if (FIELD_PAGES.has(spec.slug)) {
+      expect(probe.field, 'a field page must report probe.field').not.toBeUndefined();
+    }
     expect(errors, errors.join('\n')).toEqual([]);
 
     await page.screenshot({path: `screens/${spec.slug}.png`, fullPage: true});

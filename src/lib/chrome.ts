@@ -76,3 +76,18 @@ export function requireWebGL2(): boolean {
   }
   return ok;
 }
+
+type Ui = ReturnType<typeof mountChrome>;
+
+/**
+ * Called by the four pages that need a temperature field when the active
+ * dataset has none. Says so on the page, records it for the smoke test and
+ * marks the page ready. Never substitutes another dataset's values.
+ */
+export function noFieldForThisDataset(ui: Ui, datasetName: string): false {
+  ui.probe(`no field for this dataset (${datasetName}) — stage 2 has not run, so there is nothing to draw here.`);
+  ui.probe('run: scripts/real/stage2_sim.sh && .venv/bin/python scripts/real/sample_field.py && bun run generate:real');
+  ui.setProbe('field', false);
+  ui.ready();
+  return false;
+}

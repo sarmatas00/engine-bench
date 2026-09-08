@@ -1,4 +1,4 @@
-import {mountChrome, requireWebGL2} from '@lib/chrome';
+import {mountChrome, requireWebGL2, noFieldForThisDataset} from '@lib/chrome';
 import {makeMap, makeOverlay, origin, METERS, GLTF_ORIENTATION, whenIdle} from '@lib/deck-map';
 import {describeModel} from '@lib/probe';
 import {TemperatureScenegraphLayer} from '@lib/temperature-layer';
@@ -21,6 +21,8 @@ if (requireWebGL2()) (async () => {
       {kind: 'range', id: 'max', label: 'Scale max (°C)', min: 20, max: 50, step: 1, value: tMax, onChange: v => { tMax = v; overlay?.setProps({layers: [build()]}); }}
     ]
   });
+  ui.setProbe('field', scene.hasField);
+  if (!scene.hasField) { noFieldForThisDataset(ui, scene.name); return; }
 
   class ProbedTemperature extends TemperatureScenegraphLayer {
     static layerName = 'ProbedTemperature';
