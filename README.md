@@ -19,6 +19,24 @@ blocks and a temperature field; every page draws that same scene in its engine.
     .venv/bin/pytest scripts/real/tests                          # Python unit tests
     bunx tsc --noEmit -p tsconfig.json   # typecheck
 
+    # real dataset (needs Docker for the field)
+    .venv/bin/python scripts/real/stage1_build.py   # tile: terrain, meshes, footprints
+    scripts/real/stage2_sim.sh                      # urban-heat solve in dtcc-sim:local
+    .venv/bin/python scripts/real/sample_field.py   # round trip + sample onto the ground mesh
+    bun run generate:real                           # glTF assembly
+    # then open any page with ?dataset=real
+
+`dtcc-sim`'s own `Dockerfile` (`~/Projects/dtcc/dtcc-sim`) does not build as shipped on an Apple
+Silicon machine under `--platform linux/amd64` — see `NOTES.md` under `## Findings` for the full
+diagnosis. Until DTCC fixes it upstream, build with two one-line patches: add `binutils` to the
+`mamba install` line (conda-forge's `compilers` metapackage has no plain `ar` on `PATH`, so CMake's
+archive step execs the literal string `CMAKE_AR-NOTFOUND`), and cap build parallelism before
+`pip install -e ".[service]"` (`ENV CMAKE_BUILD_PARALLEL_LEVEL=2` / `ENV MAKEFLAGS=-j2` — an
+unbounded emulated C++ build otherwise fans out to more concurrent compiles than this Mac's Docker
+VM can hold in memory). Patch without modifying the `dtcc-sim` clone, e.g. via `docker build -f -`
+on a patched copy of the Dockerfile piped to stdin, then tag it `dtcc-sim:local` so
+`scripts/real/stage2_sim.sh` picks it up.
+
 ## Pinned versions
 
 maplibre-gl 5.24.0 (not 6.x — see NOTES.md), deck.gl/luma.gl 9.4.0, three 0.185.1,

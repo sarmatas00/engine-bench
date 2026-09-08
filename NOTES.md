@@ -148,3 +148,48 @@ maplibre-gl pinned to 5.24.0: @deck.gl/mapbox 9.4.0 interleaved mode reads `map.
   737 ms without constructing `pc.Application`. Their header `expect:` lines still describe the
   synthetic field render while the body says there is no field — the same mismatch the four pages
   gated in Task 6 already carry, and Task 12 Step 3's sweep covers all six.
+- **DTCC's `dtcc-sim` image does not build as shipped on an Apple Silicon machine (`docker compose
+  build dtcc-sim` under `--platform linux/amd64`) — two separate, one-line-fixable defects in
+  `dtcc-sim/Dockerfile`, neither of which is a FEniCSx or TetGen problem.**
+  1. **Missing `ar`.** The vendored-TetGen build step fails while linking `libtet.a`:
+     ```
+     FAILED: [code=127] libtet.a
+     : && /opt/conda/bin/cmake -E rm -f libtet.a && CMAKE_AR-NOTFOUND qc libtet.a ...
+     /bin/sh: 1: CMAKE_AR-NOTFOUND: not found
+     ```
+     Cause: conda-forge's `compilers` metapackage does not put a plain `ar` on `PATH` (only a
+     `gcc-ar` wrapper), the Dockerfile never sets `CMAKE_AR`, and no conda activation script runs
+     inside a Docker `RUN` layer — so CMake's `find_program(CMAKE_AR)` resolves to the literal
+     string `CMAKE_AR-NOTFOUND`, which the shell then tries to exec. Fix: add `binutils` to the
+     `mamba install` line in `dtcc-sim/Dockerfile` (alongside `compilers`, `cmake`, `ninja`, ...) —
+     this supplies `/opt/conda/bin/ar`, after which CMake reports a real `AR` and the static
+     library links.
+  2. **Unbounded build parallelism OOMs under emulation.** With (1) fixed, the image can get all
+     the way to `pip install -e ".[service]"` (building the `dtcc-core` wheel, which compiles C++
+     extensions via scikit-build-core/CMake/Ninja) and be killed by the host for memory pressure —
+     ninja defaults to one job per core, and this Mac's Docker Desktop VM has 10 CPUs allocated to
+     an amd64-under-QEMU build, so the C++ compile fans out to far more concurrent memory-hungry
+     `g++`/`ld` processes than an emulated build can afford. Fix: bound the parallelism, e.g.
+     `ENV CMAKE_BUILD_PARALLEL_LEVEL=2` and `ENV MAKEFLAGS=-j2` in `dtcc-sim/Dockerfile` before the
+     `pip install -e ".[service]"` step (2 was sufficient on a 10-CPU host under emulation; a CI
+     runner with a fixed core count could pick a value from `nproc`).
+
+  Verified end to end: patched a copy of `dtcc-sim/Dockerfile` (via `docker build -f -` on stdin,
+  context only — the `dtcc-sim` clone itself was never modified, `git status --short` there stayed
+  clean throughout) with both one-line fixes, built `dtcc-sim:local` (4.33 GB, ~3 min build time
+  once Docker's layer cache had the earlier attempt's completed steps), confirmed
+  `python -c "import dtcc_core, dtcc_sim"` succeeds in it with TetGen available, and ran the actual
+  urban-heat solve against the bench's real tile through it (see Stage 2 in `README.md`) —
+  50,729 vertices, 182,331 cells, T 18.00–32.95 degC, `KSP` converged in 8 iterations. Both fixes
+  are one line each in `dtcc-sim/Dockerfile`; this note is written so a DTCC engineer can apply them
+  directly upstream.
+- The container's `dtcc_core.__version__` is the literal string `"unknown"` (no `__version__`
+  attribute is set on the package installed from
+  `git+https://github.com/dtcc-platform/dtcc-core.git@9774162563d94a038a9ae799495020101b8250d7`),
+  confirming the concern raised on Task 9's first pass: the brief's Interfaces section names the
+  `heat.meta.json` key `dtcc_core_revision`, but the code (correctly kept as transcribed, since
+  Task 10 reads what the code writes) writes `dtcc_core_version` from `getattr(dtcc_core,
+  "__version__", "unknown")` — which on this pin carries no revision information at all. The actual
+  pinned commit (`9774162563d94a038a9ae799495020101b8250d7`, an ancestor of the native venv's
+  `dtcc-core` HEAD `5cf56fa0a5f88659cd888010cd7121fe56f9577e`) has to be read from
+  `dtcc-sim/pyproject.toml`'s dependency pin, not from `heat.meta.json`, if a future task needs it.
