@@ -26,7 +26,10 @@ export function readMeshPair(dir: string, name: string): LoadedMesh {
     const sliced = bytes.slice(spec.offset, spec.offset + spec.length * (spec.type === 'u8' ? 1 : 4));
     if (spec.type === 'f32') return new Float32Array(sliced.buffer);
     if (spec.type === 'u32') return new Uint32Array(sliced.buffer);
-    return sliced;
+    if (spec.type === 'u8') return sliced;
+    // The byte-length arithmetic above assumes one of the three known types, so a new
+    // type in the on-disk format must fail here rather than hand back mis-sized bytes.
+    throw new Error(`${name}: array ${spec.name} has unknown type ${spec.type}`);
   };
   const byName = new Map(meta.arrays.map(a => [a.name, a]));
   const need = (n: string) => {
