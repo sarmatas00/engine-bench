@@ -2,14 +2,15 @@ export const R = 6378137;
 import {LON0, LAT0} from './scene';
 
 const DEG = Math.PI / 180;
-const cosLat0 = Math.cos(LAT0 * DEG);
 
 export function localToLngLat(x: number, y: number): [number, number] {
-  return [LON0 + x / (R * cosLat0) / DEG, LAT0 + y / R / DEG];
+  const c = Math.cos(LAT0 * DEG);
+  return [LON0 + x / (R * c) / DEG, LAT0 + y / R / DEG];
 }
 
 export function lngLatToLocal(lng: number, lat: number): [number, number] {
-  return [(lng - LON0) * DEG * R * cosLat0, (lat - LAT0) * DEG * R];
+  const c = Math.cos(LAT0 * DEG);
+  return [(lng - LON0) * DEG * R * c, (lat - LAT0) * DEG * R];
 }
 
 /** Lon/lat of pixel (px, py) in web-mercator tile z/x/y of `size` px. */
