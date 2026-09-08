@@ -93,8 +93,9 @@ def write_terrain_artifacts(out_dir, raster, *, bounds, name, crs, size=IMAGE_SI
     dtcc_io.save_raster(raster, str(out_dir / "terrain.tif"))
 
     grid = sample_raster_grid(raster, frame["origin"], frame["extent"], size) - z0
-    Image.fromarray(benchio.encode_terrain_rgb(grid), mode="RGB").save(out_dir / "terrain-rgb.png")
-    Image.fromarray(benchio.basemap_rgb(grid), mode="RGB").save(out_dir / "basemap.png")
+    # No `mode=`: it is deprecated in Pillow 13, and a (H, W, 3) uint8 array already infers RGB.
+    Image.fromarray(benchio.encode_terrain_rgb(grid)).save(out_dir / "terrain-rgb.png")
+    Image.fromarray(benchio.basemap_rgb(grid)).save(out_dir / "basemap.png")
 
     lon0, lat0 = anchor_lonlat(frame["origin"], crs)
     from pyproj import Transformer
