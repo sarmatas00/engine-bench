@@ -125,7 +125,6 @@ def distribution_revision(name: str) -> str:
     a git commit for a VCS install, a path for an editable one (whose git HEAD
     we then resolve). Falls back to the declared version.
     """
-    import json as _json
     import subprocess
     from importlib.metadata import distribution, PackageNotFoundError
 
@@ -133,10 +132,14 @@ def distribution_revision(name: str) -> str:
         dist = distribution(name)
     except PackageNotFoundError:
         return "not installed"
+    except Exception:
+        # This runs after the multi-minute FEM solve but before heat.meta.json
+        # is written; provenance must never be able to fail the run.
+        return "unknown"
     try:
         raw = dist.read_text("direct_url.json")
         if raw:
-            info = _json.loads(raw)
+            info = json.loads(raw)
             commit = info.get("vcs_info", {}).get("commit_id")
             if commit:
                 return commit
