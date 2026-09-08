@@ -7,7 +7,7 @@ if (requireWebGL2()) {
   let map: ReturnType<typeof makeMap>;
   const ui = mountChrome({
     num: '02', title: 'deck.gl floats (Limitation 1)',
-    expect: 'the same six blocks, now drawn by deck.gl, stay at sea level: buried in the ridge, floating off the flanks. Toggle terrain off and they look fine.',
+    expect: 'the same six blocks, now drawn by deck.gl, stay at sea level while the terrain rises around them: five vanish inside the hill and one just pokes through. Toggle terrain off and all six reappear on the flat map.',
     claim: 'with terrain enabled, "the deck.gl data with z=0 are rendered at the sea level and not aligned with the terrain surface".',
     controls: [{kind: 'toggle', id: 'terrain', label: 'Terrain', value: true, onChange: v => map.setTerrain(v ? {source: DEM_SOURCE, exaggeration: 1} : null)}]
   });
@@ -22,6 +22,7 @@ if (requireWebGL2()) {
     map.setTerrain({source: DEM_SOURCE, exaggeration: 1});
     ui.probe('MapLibre drapes only: background, fill, line, raster, hillshade, color-relief  (src/webgl/render_to_texture.ts:17)');
     ui.probe('Layer type "custom" — how deck.gl, Three.js or anything external attaches — is not in that list.');
+    ui.probe('h(x, y) ≥ 5 m across the whole scene, so sea-level geometry is always below ground here — buried, never floating.');
     whenIdle(map, () => ui.ready());
   });
 }
