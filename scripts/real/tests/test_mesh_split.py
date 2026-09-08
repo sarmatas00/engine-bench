@@ -48,12 +48,50 @@ def test_flatten_buildings_rebases_each_building_on_its_own_minimum():
     mesh = two_block_mesh()
     _, buildings = stage1_build.split_surface_mesh(mesh)
     sub = stage1_build.submesh(mesh, buildings, origin=[0.0, 0.0], z0=90.0)
-    face_markers = np.asarray(mesh.markers)[buildings]
-    flat = stage1_build.flatten_buildings(sub, face_markers)
+    flat = stage1_build.flatten_buildings(sub)
     assert np.allclose(flat["positions"][:, 2], 0.0)         # both blocks land on zero
     assert np.allclose(flat["positions"][:, :2], sub["positions"][:, :2])
     assert np.array_equal(flat["indices"], sub["indices"])
     assert not np.allclose(sub["positions"][:, 2], 0.0)      # the source is untouched
+
+
+def _edge_lengths(positions, indices):
+    return np.linalg.norm(positions[indices[:, 0]] - positions[indices[:, 1]], axis=1)
+
+
+def test_flatten_buildings_translates_welded_neighbours_without_deforming_them():
+    """Two buildings at different heights sharing a wall vertex.
+
+    Grouping by face marker would subtract twice at the shared vertex and stretch
+    the mesh. Grouping by connected component moves the welded pair as one unit,
+    so every edge keeps its length -- the invariant a translation cannot break.
+    """
+    positions = np.array([
+        [0.0, 0, 10], [1, 0, 10], [0, 1, 10], [1, 1, 10],   # low block, base 10
+        [1.0, 0, 30], [2, 0, 30], [2, 1, 30],                # tall block, base 30
+    ])
+    indices = np.array([[0, 1, 2], [1, 3, 2], [1, 4, 5], [1, 5, 6]])  # vertex 1 is shared
+    sub = {"positions": positions, "normals": np.zeros_like(positions), "indices": indices}
+    flat = stage1_build.flatten_buildings(sub)
+
+    assert np.allclose(_edge_lengths(flat["positions"], indices),
+                       _edge_lengths(positions, indices))
+    assert flat["positions"][:, 2].min() == 0.0
+    assert (flat["positions"][:, 2] >= 0.0).all()
+    # One welded unit, so the pair keeps its 20 m step rather than both landing on zero.
+    assert np.allclose(flat["positions"][:, 2].max(), 20.0)
+
+
+def test_flatten_buildings_lands_every_separate_building_on_zero():
+    """Disconnected buildings each get their own base."""
+    positions = np.array([
+        [0.0, 0, 10], [1, 0, 10], [0, 1, 10],
+        [5.0, 0, 30], [6, 0, 30], [5, 1, 30],
+    ])
+    indices = np.array([[0, 1, 2], [3, 4, 5]])
+    sub = {"positions": positions, "normals": np.zeros_like(positions), "indices": indices}
+    flat = stage1_build.flatten_buildings(sub)
+    assert np.allclose(flat["positions"][:, 2], 0.0)
 
 
 def test_submesh_computes_area_weighted_vertex_normals():

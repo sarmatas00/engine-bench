@@ -166,20 +166,33 @@ def submesh(mesh, face_mask, origin, z0) -> dict:
     return {"positions": positions, "normals": normals, "indices": indices}
 
 
-def flatten_buildings(sub, face_markers) -> dict:
-    """Move every building's vertices down so its lowest vertex sits at z = 0.
+def flatten_buildings(sub) -> dict:
+    """Move every building down so its lowest vertex sits at z = 0.
 
     This is the real-data analogue of the synthetic blocks.glb: buildings placed
     at sea level, which pages 02/03/09 draw against real terrain to show that
     z = 0 geometry is buried, not floating.
+
+    Buildings are grouped by connected component, NOT by face marker. Adjacent
+    buildings in a real tile share wall vertices, and a shared vertex belongs to
+    two markers: subtracting per marker moves it twice, which does not translate
+    the geometry, it deforms it. The invariant that catches this is edge length —
+    a translation cannot change it. On the Skansen Kronan tile the marker version
+    stretched the tallest vertical edge from 16.59 m to 50.34 m and left 11,171 of
+    37,672 triangles with vertices displaced by amounts differing by over a metre.
+    A welded pair has to move as one unit or the shared wall tears.
     """
+    from scipy.sparse import coo_matrix
+    from scipy.sparse.csgraph import connected_components
+
     positions = sub["positions"].copy()
     indices = sub["indices"]
-    face_markers = np.asarray(face_markers).reshape(-1)
-    if len(face_markers) != len(indices):
-        raise ValueError(f"{len(indices)} faces but {len(face_markers)} markers")
-    for marker in np.unique(face_markers):
-        verts = np.unique(indices[face_markers == marker])
+    n = len(positions)
+    edges = np.vstack([indices[:, [0, 1]], indices[:, [1, 2]], indices[:, [2, 0]]])
+    graph = coo_matrix((np.ones(len(edges)), (edges[:, 0], edges[:, 1])), shape=(n, n))
+    count, component = connected_components(graph, directed=False)
+    for c in range(count):
+        verts = np.flatnonzero(component == c)
         positions[verts, 2] -= positions[verts, 2].min()
     return {"positions": positions, "normals": sub["normals"], "indices": indices}
 
@@ -251,7 +264,7 @@ def build_stage1(out_dir=OUT, bounds_path=BOUNDS_PATH) -> dict:
     origin, z0 = meta["origin"], meta["z0"]
     ground = submesh(surface, ground_mask, origin, z0)
     buildings = submesh(surface, building_mask, origin, z0)
-    flat = flatten_buildings(buildings, np.asarray(surface.markers)[building_mask])
+    flat = flatten_buildings(buildings)
 
     out_dir = Path(out_dir)
     for name, sub in [("ground", ground), ("buildings", buildings), ("buildings-flat", flat)]:

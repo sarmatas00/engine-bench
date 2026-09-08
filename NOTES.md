@@ -34,8 +34,8 @@ maplibre-gl pinned to 5.24.0: @deck.gl/mapbox 9.4.0 interleaved mode reads `map.
   median building keeps 4.5 m of its 8.7 m height above the local ground, i.e. roughly half.
   (Counts are from `footprints.geojson` + `terrain-rgb.png`, the LOD0 heights; pages 02/03 draw the
   LOD1 mesh, so treat them as the shape of the result, not as a per-triangle census.) Vertex-level,
-  on the drawn mesh: 19,030 of 20,726 vertices are lowered by more than 1 m when `buildings` is
-  flattened into `buildings-flat` (median drop 2.93 m, mean 6.56 m, max 55.47 m).
+  on the drawn mesh: 18,477 of 20,726 vertices are lowered by more than 1 m when `buildings` is
+  flattened into `buildings-flat` (median drop 1.27 m, mean 2.84 m, max 50.34 m).
 - Framing confirmed: `zoom = 14.2 + Math.log2(EXTENT / extent)` = 16.2 frames the real 500 m tile the
   same way 14.2 frames the synthetic 2000 m one — far tile corner high in the canvas, near edge
   running off the bottom, in both. Spec §7's parenthetical "15.2" would have been a full zoom level
@@ -48,18 +48,26 @@ maplibre-gl pinned to 5.24.0: @deck.gl/mapbox 9.4.0 interleaved mode reads `map.
   hill and one just pokes through") and are false on the real tile. Made dataset-aware, with the
   real branch describing what the screenshot shows. The remaining ten pages still carry
   synthetic-only `expect:` text on `?dataset=real`; Task 12 Step 3 sweeps them.
-- **Defect, found but not fixed here — `blocks.glb` on the real dataset carries torn geometry.**
-  `flatten_buildings` (`scripts/real/stage1_build.py:169`) loops over face markers and does
-  `positions[verts, 2] -= positions[verts, 2].min()` per marker. Adjacent buildings in the DTCC
-  surface mesh share vertices — the `buildings` submesh is 103 connected components for ~215
-  buildings — so a vertex shared by two markers is lowered twice, by two different amounts, and the
-  triangles around it stretch. Measured: 11,171 of 37,672 triangles in `buildings-flat` have their
-  three vertices moved by amounts differing by more than 1 m (7,421 by more than 5 m, max 50.34 m);
-  the tallest vertical triangle edge grows from 16.59 m in `buildings` to 50.34 m in
-  `buildings-flat`. On screen it shows as spikes and cones where a clean building stands in page 06
-  (`blocks-draped.glb`, the un-flattened copy) — clearest at the hilltop, where page 06 draws a
-  clean octagon and pages 02/03 draw a 50 m cone. It is hidden in the shipped page 02/03 screenshots
-  because the hill buries it. It does not change what those pages demonstrate, but `blocks.glb` is
-  not a faithful "the same buildings at z = 0". A correct fix has to split shared vertices per
-  marker before re-basing, which means editing `stage1_build.py` and re-running Stage 1 — outside
-  this task's file list.
+- **Defect found in Task 7, fixed in Task 3b — `blocks.glb` on the real dataset carried torn
+  geometry.** `flatten_buildings` (`scripts/real/stage1_build.py:169`, old version) looped over
+  face markers and did `positions[verts, 2] -= positions[verts, 2].min()` per marker. Adjacent
+  buildings in the DTCC surface mesh share vertices — the `buildings` submesh is 103 connected
+  components for ~215 buildings — so a vertex shared by two markers was lowered twice, by two
+  different amounts, and the triangles around it stretched. Measured on the shipped (buggy) mesh:
+  11,171 of 37,672 triangles in `buildings-flat` had their three vertices moved by amounts
+  differing by more than 1 m (7,421 by more than 5 m, max 50.34 m); the tallest vertical triangle
+  edge grew from 16.59 m in `buildings` to 50.34 m in `buildings-flat`. On screen it showed as
+  spikes and cones where a clean building stands in page 06 (`blocks-draped.glb`, the un-flattened
+  copy) — clearest at the hilltop, where page 06 draws a clean octagon and pages 02/03 drew a 50 m
+  cone. It was hidden in the Task 7 page 02/03 screenshots because the hill buries it — **that spike
+  was our bug, not a real-data observation; any earlier note describing a hilltop spike as tile
+  behaviour is wrong and is corrected by this entry.**
+  Fixed by grouping vertices by connected component instead of by face marker, so a welded pair of
+  buildings moves as one rigid unit — the invariant that catches the old bug is edge length, which
+  a translation cannot change. Verified on the regenerated data: every edge length in
+  `buildings-flat` matches `buildings` exactly (`np.allclose` true), min z is `0.000000`, and the
+  tallest vertical edge is unchanged at 16.59 m in both meshes (not 50.34 m). Vertex-level, the
+  correct flatten still moves plenty of geometry — 18,477 of 20,726 vertices drop by more than 1 m,
+  median drop 1.27 m, mean 2.84 m, max 50.34 m (a legitimate per-component base offset now, not a
+  stretch) — it just no longer tears any triangle. Re-screenshotted pages 02/03 on `?dataset=real`:
+  the hilltop now shows the same clean octagonal building page 06 draws, no spike.
