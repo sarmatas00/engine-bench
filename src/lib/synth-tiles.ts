@@ -1,7 +1,7 @@
 import * as maplibregl from 'maplibre-gl';
 import type {StyleSpecification} from 'maplibre-gl';
-import {h, LON0, LAT0} from './scene';
-import {tileToLngLat, lngLatToLocal} from './geo';
+import {h, LON0, LAT0, EXTENT} from './scene';
+import {tileToLngLat, lngLatToLocal, localToLngLat} from './geo';
 
 export const DEM_SOURCE = 'dem';
 export const INITIAL_VIEW = {center: [LON0, LAT0] as [number, number], zoom: 14.2, pitch: 60, bearing: -20};
@@ -65,4 +65,35 @@ export function synthStyle(): StyleSpecification {
     },
     layers: [{id: 'basemap', type: 'raster', source: 'map'}]
   };
+}
+
+export function extentBounds(): [number, number, number, number] {
+  const [w, s] = localToLngLat(-EXTENT, -EXTENT);
+  const [e, n] = localToLngLat(EXTENT, EXTENT);
+  return [w, s, e, n];
+}
+
+export async function extentImage(kind: 'dem' | 'map', size = 512): Promise<string> {
+  const img = new ImageData(size, size);
+  for (let py = 0; py < size; py++) for (let px = 0; px < size; px++) {
+    // Row 0 is north. Sample in local metres directly; the bounds are the same rectangle.
+    const lx = -EXTENT + (2 * EXTENT * (px + 0.5)) / size;
+    const ly = EXTENT - (2 * EXTENT * (py + 0.5)) / size;
+    const e = h(lx, ly);
+    const o = (py * size + px) * 4;
+    if (kind === 'dem') {
+      const v = Math.round((e + 10000) / 0.1);
+      img.data[o] = (v >> 16) & 255; img.data[o + 1] = (v >> 8) & 255; img.data[o + 2] = v & 255;
+    } else {
+      const contour = Math.abs(((e % 10) + 10) % 10 - 5) > 4.6;
+      let r = 235, g = 235, b = 230;
+      if (e > 60) { r = 215; g = 205; b = 190; }
+      if (contour) { r -= 60; g -= 60; b -= 60; }
+      img.data[o] = r; img.data[o + 1] = g; img.data[o + 2] = b;
+    }
+    img.data[o + 3] = 255;
+  }
+  const c = document.createElement('canvas'); c.width = size; c.height = size;
+  c.getContext('2d')!.putImageData(img, 0, 0);
+  return c.toDataURL('image/png');
 }

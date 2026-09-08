@@ -21,7 +21,8 @@ export const PAGES: PageSpec[] = [
   }},
   {slug: '08-fix-b2-baked', extraChecks: async (_page, probe) => {
     expect((probe.simpleMesh as any).inBufferLayout).toBe(true);   // colors reach the GPU on the mesh path
-  }}
+  }},
+  {slug: '05-fix-a1-deck-terrain'}
 ];
 
 for (const spec of PAGES) {
