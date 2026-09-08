@@ -48,12 +48,6 @@ if (requireWebGL2()) {
   map.on('load', async () => {
     const mesh = await loadGltfMesh('/data/field-baked.glb');
     ui.probe(`glTF attributes in file: ${mesh.attributeNames.join(', ')}`);
-    // loadGltfMesh's Attr type ({value, size}) drops the glTF accessor's `normalized` flag.
-    // COLOR_0 here is a normalized Uint8 VEC3 accessor; without normalized:true, luma.gl's
-    // VertexFormatDecoder rejects a 3-component uint8 vertex format outright (throws "size: 3").
-    // Restore the flag on the object loadGltfMesh already returned — same attribute the file declares.
-    const color0 = (mesh.attributes as any).COLOR_0;
-    if (color0) color0.normalized = true;
     makeOverlay(map, [
       new ProbedScenegraph({id: 'sg', data: [0], scenegraph: '/data/field-baked.glb',
         coordinateSystem: METERS, coordinateOrigin: ORIGIN, getPosition: () => [-1050, 0, 0], getOrientation: GLTF_ORIENTATION, _lighting: 'flat'}),

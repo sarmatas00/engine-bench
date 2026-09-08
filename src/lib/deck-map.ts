@@ -26,7 +26,7 @@ export function makeOverlay(map: maplibregl.Map, layers: Layer[]): MapboxOverlay
 
 export function whenIdle(map: maplibregl.Map, cb: () => void) { map.once('idle', cb); }
 
-type Attr = {value: Float32Array; size: number};
+type Attr = {value: any; size: number; normalized?: boolean};
 /** glTF Y-up → local z-up: (x, y, z) → (x, -z, y). */
 function toZUp(a: Float32Array): Float32Array {
   const out = new Float32Array(a.length);
@@ -42,7 +42,9 @@ export async function loadGltfMesh(url: string) {
   const attributes: Record<string, Attr> = {};
   for (const [name, a] of Object.entries(raw)) {
     const value = a.value as Float32Array;
-    attributes[name] = name === 'POSITION' || name === 'NORMAL' ? {value: toZUp(value), size: 3} : {value, size: a.components};
+    attributes[name] = name === 'POSITION' || name === 'NORMAL'
+      ? {value: toZUp(value), size: 3, normalized: a.normalized}
+      : {value, size: a.components, normalized: a.normalized};
   }
   return {attributes, indices: {value: prim.indices!.value, size: 1 as const}, attributeNames};
 }
