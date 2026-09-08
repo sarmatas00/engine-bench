@@ -1,0 +1,26 @@
+import {test, expect, type Page} from '@playwright/test';
+
+type PageSpec = {slug: string; extraChecks?: (page: Page, probe: Record<string, unknown>) => Promise<void>};
+
+// One entry per page. Later tasks append here.
+export const PAGES: PageSpec[] = [
+  {slug: '00-index'}
+];
+
+for (const spec of PAGES) {
+  test(spec.slug, async ({page}) => {
+    const errors: string[] = [];
+    page.on('pageerror', e => errors.push(`pageerror: ${e.message}`));
+    page.on('console', m => { if (m.type() === 'error') errors.push(`console.error: ${m.text()}`); });
+
+    await page.goto(`/${spec.slug}/`);
+    await page.waitForFunction(() => (window as any).__bench?.ready === true, null, {timeout: 30_000});
+
+    const probe = await page.evaluate(() => (window as any).__bench.probe);
+    expect(probe.webgl, 'page reported no WebGL2').not.toBe(false);
+    expect(errors, errors.join('\n')).toEqual([]);
+
+    await page.screenshot({path: `screens/${spec.slug}.png`, fullPage: true});
+    if (spec.extraChecks) await spec.extraChecks(page, probe);
+  });
+}
