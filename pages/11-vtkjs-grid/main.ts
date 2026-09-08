@@ -22,7 +22,9 @@ if (requireWebGL2()) (async () => {
   let mc: any, rw: any;
   const ui = mountChrome({
     num: '11', title: 'VTK.js — one job',
-    expect: 'a faint translucent plume as a volume, with a solid orange isosurface visible at the slider temperature inside it. This page never loaded the unstructured mesh; it loaded the regular grid the pipeline wrote.',
+    expect: scene.dataset === 'real'
+      ? 'one orange isosurface that all but fills the box, with the volume behind it hidden. Both the slider and the transfer function are scaled to the header range, which the pipeline measures on the *ground* mesh (18.0–18.7 °C), while this grid is air and runs to 32.5 °C: 65–78% of it is hotter than every value the slider can reach, so the contour encloses most of the domain wherever you put it. Not a rendering failure — vtk.js is drawing the surface it was asked for; the range it was given belongs to a different mesh. This page never loaded the unstructured mesh; it loaded the regular grid the pipeline wrote.'
+      : 'a faint translucent plume as a volume, with a solid orange isosurface visible at the slider temperature inside it. This page never loaded the unstructured mesh; it loaded the regular grid the pipeline wrote.',
     claim: 'Cannot display our simulation meshes at all — it has no concept of that kind of mesh. It stays useful for one thing: if we convert results to a regular grid first, it can draw them.',
     dataset: datasetChrome(scene),
     controls: [{kind: 'range', id: 'iso', label: 'Isosurface (°C)', min: t0 + 0.04 * span, max: t1 - 0.04 * span, step: span / 25, value: t0 + 0.4 * span,

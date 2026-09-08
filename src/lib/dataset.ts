@@ -80,6 +80,17 @@ export const fieldView = (s: Scene) => ({center: s.anchor, zoom: s.zoom - 1.2, p
 /** Half the separation between the two side-by-side copies, in metres. */
 export const sideOffset = (s: Scene) => 1.05 * s.extent;
 
+/**
+ * Bounds for the two colour-scale sliders on pages 07, 08 and 10. The fixed 0–20 / 20–50 pair was
+ * written for the synthetic range [10, 35]. The real dataset's 2nd/98th-percentile range is
+ * [18.0, 18.75], and 18.75 falls *below* a 20–50 track: the browser pins the handle to the left
+ * end while the readout beside it says 18.75, so the control contradicts itself on screen and the
+ * first drag jumps the scale by more than its whole span. Widen only where the data needs it, so
+ * the synthetic bounds come out exactly 0–20 and 20–50 as before.
+ */
+export const scaleMinBounds = (s: Scene) => ({min: Math.min(0, s.colourRange[0]), max: Math.max(20, s.colourRange[0])});
+export const scaleMaxBounds = (s: Scene) => ({min: Math.min(20, s.colourRange[1]), max: Math.max(50, s.colourRange[1])});
+
 async function renderExtentImage(scene: Scene, kind: 'dem' | 'map', size = 512): Promise<string> {
   const img = new ImageData(size, size);
   for (let py = 0; py < size; py++) for (let px = 0; px < size; px++) {

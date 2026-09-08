@@ -50,6 +50,17 @@ export function mountChrome(opts: ChromeOptions) {
   };
 }
 
+/**
+ * Slider readout. The synthetic scene's values are whole numbers and print unchanged; the real
+ * dataset's colour range comes from a solver, so `String(value)` printed the 2nd percentile as
+ * "17.99999987228115". Two decimals, trailing zeros dropped — the same string as before wherever
+ * the value was already round.
+ */
+function readout(value: number | string): string {
+  const n = Number(value);
+  return Number.isFinite(n) ? String(Number(n.toFixed(2))) : String(value);
+}
+
 function renderControl(c: Control): HTMLElement {
   const label = document.createElement('label');
   label.htmlFor = c.id;
@@ -62,8 +73,8 @@ function renderControl(c: Control): HTMLElement {
     const el = document.createElement('input'); el.type = 'range'; el.id = c.id;
     el.min = String(c.min); el.max = String(c.max); el.step = String(c.step); el.value = String(c.value);
     el.disabled = !!c.disabled;
-    const out = document.createElement('output'); out.textContent = String(c.value);
-    el.oninput = () => { out.textContent = el.value; c.onChange(Number(el.value)); };
+    const out = document.createElement('output'); out.textContent = readout(c.value);
+    el.oninput = () => { out.textContent = readout(el.value); c.onChange(Number(el.value)); };
     label.appendChild(el); input = out;
   } else {
     const el = document.createElement('select'); el.id = c.id;

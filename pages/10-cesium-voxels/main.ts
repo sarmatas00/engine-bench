@@ -3,7 +3,7 @@ import {mountChrome, requireWebGL2, noFieldForThisDataset} from '@lib/chrome';
 import {makeViewer, enuMatrix, whenTilesLoaded} from '@lib/cesium-setup';
 import {loadGrid} from '@lib/grid';
 import {COLORMAP_GLSL} from '@lib/colormap';
-import {loadScene, datasetChrome} from '@lib/dataset';
+import {loadScene, datasetChrome, scaleMinBounds, scaleMaxBounds} from '@lib/dataset';
 
 if (requireWebGL2()) (async () => {
   const scene = await loadScene();
@@ -11,12 +11,14 @@ if (requireWebGL2()) (async () => {
   let shader: Cesium.CustomShader | undefined;
   const ui = mountChrome({
     num: '10', title: 'Cesium — volume rendering',
-    expect: 'a translucent 3-D plume over the hot spot: a hot amber core fading through green and cyan to transparent. This is the temperature field as a volume, not a surface.',
+    expect: scene.dataset === 'real'
+      ? 'the real 64×64×32 grid ray-marched as a volume — but at the default scale it is a solid red-orange mass, not a plume. The scale it starts on is the header range, which the pipeline measures on the *ground* mesh (18.0–18.7 °C); the air in this grid runs to 32.5 °C, so about two thirds of the voxels clamp to the top of the ramp at full opacity. Drag Scale max to about 33 and the same data reads as the translucent green-and-amber haze this page is meant to show. It is the field as a volume either way; only the scale changes.'
+      : 'a translucent 3-D plume over the hot spot: a hot amber core fading through green and cyan to transparent. This is the temperature field as a volume, not a surface.',
     claim: 'it is the only engine that can currently draw volume data like a wind or heat field in 3D. Not the base map, but a real candidate for a dedicated simulation view.',
     dataset: datasetChrome(scene),
     controls: [
-      {kind: 'range', id: 'min', label: 'Scale min (°C)', min: 0, max: 20, step: 1, value: t0, onChange: v => shader?.setUniform('u_min', v)},
-      {kind: 'range', id: 'max', label: 'Scale max (°C)', min: 20, max: 50, step: 1, value: t1, onChange: v => shader?.setUniform('u_max', v)}
+      {kind: 'range', id: 'min', label: 'Scale min (°C)', ...scaleMinBounds(scene), step: 1, value: t0, onChange: v => shader?.setUniform('u_min', v)},
+      {kind: 'range', id: 'max', label: 'Scale max (°C)', ...scaleMaxBounds(scene), step: 1, value: t1, onChange: v => shader?.setUniform('u_max', v)}
     ]
   });
   ui.setProbe('field', scene.hasField);

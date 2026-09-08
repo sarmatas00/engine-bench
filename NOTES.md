@@ -214,3 +214,81 @@ maplibre-gl pinned to 5.24.0: @deck.gl/mapbox 9.4.0 interleaved mode reads `map.
   caught it here because the round-trip measurement (dtcc-core#85) needed an attributable revision
   and a flat `"unknown"` in every run's `heat.meta.json` was conspicuous. `importlib.metadata`'s
   `direct_url.json` is the reliable source instead (see the fix above).
+- **Task 11, the six field pages on the real solve — what is actually on screen, and a correction to
+  the entry above.** An earlier entry (written from the numbers, before anything had been drawn)
+  predicted that normalising the ground field's 0.75 °C band onto the five-stop ramp would "paint a
+  full blue-to-red gradient across the mesh" and make pages 07/08/10/11 look like a dramatic
+  temperature swing. Measured on the shipped renders, that is wrong for the surface pages and
+  understated for the volume pages.
+  *Surface (pages 07, 08, 12).* The ground field is not merely narrow, it is degenerate: its median
+  is exactly 18.000 °C and 83.7% of the 6,288 ground vertices sit within 0.01 °C of 18.0, because
+  `ground_bc_type: dirichlet` pins them there. So the ramp is not spread across the mesh at all —
+  the surface renders deep blue nearly everywhere, with cyan-to-red rims a few metres wide hugging
+  the building walls (the Robin wall/roof BCs at 28/32 °C) and white gaps where the buildings
+  themselves stand. Classifying every on-ramp pixel of the page 07 screenshot by its position on the
+  ramp: 82.6% in the bottom tenth, 11.7% lower-middle, 2.9% upper-middle, 2.8% top tenth, median
+  ramp position 0.003. The synthetic page 07, measured the same way, is 83.0 / 12.0 / 4.3 / 0.7% —
+  i.e. **the two renders have nearly the same colour distribution**; the synthetic Gaussian hot spot
+  over a 2,000 m tile is just as blue. What differs is only what the ramp's two ends mean: 25 °C on
+  synthetic, 0.75 °C here. That is the whole of the misleading risk, and it is not visible in the
+  picture — which is why the header line carries the range (`18.0–18.7 °C`) and why pages 07 and 08
+  now say so in `expect:` as well. Demonstrated on screen: dragging page 07's Scale max to 30 °C — a
+  scale a reader would call ordinary — turns the entire surface uniformly blue with a few faint cyan
+  patches. Same data, honest scale, no picture.
+- **Page 07's colour-pixel assertion passes on the real dataset, and would pass on any field.**
+  Measured centre pixel on `?dataset=real`: RGB [42, 129, 185], channel spread **143** (threshold is
+  40). It is not a warm pixel: on the ramp that is position 0.068, i.e. 18.05 °C — the centre of the
+  tile is ordinary pinned ground. The spread is large because the ramp's *bottom* stop, (33, 102,
+  172), already has a channel spread of 139 on its own. So the assertion does exactly what its
+  comment claims — proves the surface is coloured rather than grey/white/black — and can never fail
+  for a coloured pixel on this colormap regardless of the field's dynamic range. No dataset-aware
+  threshold is needed in Task 12's matrix, and a passing assertion here must not be read as evidence
+  that the real field varies.
+- **Defect found in Task 11 (not fixed here, deliberately) — pages 10 and 11 colour a volume with
+  the ground mesh's colour range.** `scene.colourRange` comes from `field.json`'s `tmin`/`tmax`,
+  which `scripts/real/sample_field.py` computes as the 2nd/98th percentile of the temperature
+  interpolated onto the **ground surface**: 18.000–18.746 °C. Pages 10 and 11 draw
+  `field.grid.f32`, which is the same solve sampled through the *air* over the tile: 131,072 voxels,
+  18.00–32.49 °C, mean 21.80, median 20.31. The two ranges describe different things, and on the
+  synthetic dataset the difference is invisible because `T(x, y, z)` spans 10–35 on both the surface
+  and the grid. On the real dataset it dominates the render:
+  · **65.0%** of the voxels are at or above `tmax`, so they clamp to the top of the ramp *and* to the
+  top of the opacity curve. Page 10's default view is therefore a solid red-orange mass with a thin
+  cyan rim, not the translucent plume the page describes; page 11's isosurface slider spans
+  18.030–18.717 °C, above which lie **78.4%** of the grid at the low end and **65.3%** at the high
+  end, so the contour is a near box-filling slab at every slider position and the volume behind it
+  never shows. (Synthetic, for comparison: the same slider spans 15.2% down to 0.01% of the grid,
+  and 0.000% of voxels reach the top of the ramp.)
+  · It is a scale error, not a renderer or data problem, and it is reversible from the page: setting
+  page 10's Scale max to 33 °C — the grid's own top — turns the identical volume into the
+  translucent green-and-amber haze the briefing describes, with a faint hotter core. Screenshotted
+  both ways.
+  Left in place for now on purpose. The obvious fix — feeding pages 10/11 `field.grid.json`'s own
+  `min`/`max` instead of `scene.colourRange` — would move the synthetic render too (synthetic grid
+  max is 34.9516, not the 35 the pages use now), and Task 11 must not move the synthetic renders. It
+  is a pipeline decision: either `field.json` grows a separate volume range, or the volume pages read
+  the grid's. Recorded here, and both pages' `expect:` text now states the mismatch and its size on
+  screen, so nobody reads the red mass as a hot city.
+- Page 04 on the real tile: exactly as designed — two flat grey copies of the ground field mesh at
+  ±`sideOffset(scene)` (left ScenegraphLayer, flat-lit and pale; right SimpleMeshLayer, lit and
+  darker), and the probe values are identical to synthetic: ScenegraphLayer
+  `{loaded: true, inBufferLayout: true, inShaderLayout: false, inVsSource: false}`, SimpleMeshLayer
+  all three false. Page 08 likewise: right copy coloured from `COLOR_0`, left copy plain white,
+  `simpleMesh.inBufferLayout = true` / `scenegraph.inBufferLayout = false`. Page 12 renders the real
+  baked mesh cleanly in PlayCanvas space with no console errors and its API table's first row now
+  names the real anchor (`lon 11.9564, lat 57.6978`). Timings headless under SwiftShader: 04 1.7 s,
+  07 0.7 s, 08 1.0 s, 11 0.4 s, 12 0.4 s, 10 13.6–14.5 s (the ray-march, as documented above).
+- **Defect found in Task 11, fixed — the colour-scale sliders misreported the real scale.** Two
+  things, both visible only once a dataset with non-round values existed. (a) `renderControl`
+  printed `String(value)`, so the real range's 2nd percentile appeared beside the slider as
+  "17.99999987228115" and the 98th as "18.746469572546268". (b) The "Scale max" slider on pages 07,
+  08 and 10 was hard-coded to a 20–50 track, but the real `tmax` is 18.75 — *below* the track's
+  minimum — so the browser pinned the handle to the left end while the readout beside it said 18.75,
+  and the first drag would have jumped the scale by more than its entire span. Fixed with a two-
+  decimal readout in `src/lib/chrome.ts` and `scaleMinBounds`/`scaleMaxBounds` in
+  `src/lib/dataset.ts`, both written to be exact no-ops on the synthetic scene (whole-number values
+  print byte-identically; `[10, 35]` still yields 0–20 and 20–50). Verified rather than assumed:
+  synthetic pages 04, 06, 07, 08, 10, 11 and 12 screenshotted before and after the change are
+  pixel-identical, except page 08's probe panel, where the two probe blocks swapped order — a
+  pre-existing race between which layer's `draw()` fires first, same text either way — and ±1 of
+  SwiftShader noise inside page 11's volume raycast.
