@@ -6,7 +6,14 @@ type PageSpec = {slug: string; extraChecks?: (page: Page, probe: Record<string, 
 export const PAGES: PageSpec[] = [
   {slug: '00-index'},
   {slug: '01-maplibre-baseline'},
-  {slug: '02-deckgl-floats'}
+  {slug: '02-deckgl-floats'},
+  {slug: '04-values-lost', extraChecks: async (_page, probe) => {
+    const sg = probe.scenegraph as any, sm = probe.simpleMesh as any;
+    // ScenegraphLayer: value survives to the GPU buffer, fails only at the shader.
+    expect(sg).toMatchObject({loaded: true, inBufferLayout: true, inShaderLayout: false});
+    // SimpleMeshLayer: stripped by normalizeGeometryAttributes before any buffer exists.
+    expect(sm).toMatchObject({loaded: true, inBufferLayout: false, inShaderLayout: false});
+  }}
 ];
 
 for (const spec of PAGES) {
