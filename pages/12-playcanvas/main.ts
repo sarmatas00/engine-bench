@@ -11,6 +11,9 @@ if (requireWebGL2()) (async () => {
       : 'the baked temperature mesh, rendered well, in an arbitrary engine space. The list on the right is the point: nothing here can place it on the Earth.',
     claim: 'No geographic support anywhere in the engine. Its only mapping project is one person\'s side project — 32 commits, dormant about ten months, and tied to a paid Google service.',
     decision: 'Rejected, and not on rendering quality — the mesh renders correctly here. The engine has no CRS, no basemap, no terrain provider and no reprojection anywhere, and its only mapping plugin is one person\'s side project, dormant about ten months and tied to a paid Google service.',
+    findings: [
+      'Contrary to the plan\'s assumption that PlayCanvas 2.22.0 ignores glTF COLOR_0 unless the material sets diffuseVertexColor, the mesh rendered with correct vertex colours straight out of instantiateRenderEntity() with no material patch. Verified directly by building and screenshotting the page with and without a diffuseVertexColor loop; the two screenshots were identical. This version\'s glTF parser already sets it, so the page ships without a workaround.',
+    ],
     dataset: datasetChrome(scene)
   });
   ui.setProbe('field', scene.hasField);

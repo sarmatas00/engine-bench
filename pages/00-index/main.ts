@@ -52,6 +52,17 @@ const roundTrip = ds === 'real'
     + 'actually measures. Full record in <code>public/data/real/dataset.json</code> under '
     + '<code>stage2.roundtrip</code>.</div>'
   : '';
+// Findings that belong to the pipeline rather than to any one page. Kept here so nothing in
+// NOTES.md lives only in a file the meeting will not open.
+const pipeline: string[] = [
+  'maplibre-gl is pinned to 5.24.0, not 6.x: @deck.gl/mapbox 9.4.0 interleaved mode reads map.transform, which maplibre-gl 6.x removed from Map (verified on 6.8.0, map.transform === undefined). Every page in this bench depends on that pin.',
+  "DTCC's dtcc-sim image does not build as shipped on an Apple Silicon machine, and neither failure is about FEniCSx or TetGen. First, conda-forge's compilers metapackage puts no plain ar on PATH and the Dockerfile never sets CMAKE_AR, so CMake execs the literal string CMAKE_AR-NOTFOUND at the vendored TetGen link step; adding binutils fixes it. Second, the dtcc-core wheel build with unbounded ninja parallelism exhausts host memory under amd64 emulation; CMAKE_BUILD_PARALLEL_LEVEL=2 fixes it. Both are one line each in dtcc-sim/Dockerfile.",
+  'dtcc_core.__version__ does not exist on the installed package, so any tooling that records a version by reading it silently gets whatever default it passed. We only noticed because the round-trip measurement needed an attributable revision; the real commit is recoverable from pip\'s direct_url.json. A provenance trap worth fixing upstream.',
+  "The container's solve and Stage 1's raster disagree on the tile's terrain minimum by 0.12 m: heat.xdmf's volume mesh bottoms at 1.2397 m absolute, exactly 80.0 m of domain height above its own floor, while dataset.json's z0 — the value everything here treats as local zero — is 1.1192 m. Harmless against 53.45 m of relief (0.2% of it), and exactly the class of cross-revision fact worth recording rather than rediscovering.",
+  'The bench draws the real tile rotated 2.57° from true north. Local metres here are EPSG:3006 grid metres, while geo.ts converts them to lon/lat as a true-north offset from the anchor; the two agree only at the anchor and differ by 15.5–16.2 m at the tile corners. Uniform across every page and harmless for comparing engines, but this bench is not a georeferenced product and nothing in it should be screenshotted next to a real basemap.',
+  'Defect we found and fixed: the colour-scale sliders misreported the real scale. One printed 17.99999987228115, and the Scale max track was hard-coded 20–50 so it could not contain the real 18.75 — the handle pinned left while the number beside it read 18.75.'
+];
+const pipelineBlock = `<details class="findings"><summary>Pipeline findings, not specific to one page (${pipeline.length}) — also in NOTES.md</summary><ul>${pipeline.map(f => `<li>${f}</li>`).join('')}</ul></details>`;
 document.body.innerHTML = `
   <header class="bench"><h1>engine-bench</h1>
   <div class="expect">${blurb}</div>
@@ -59,7 +70,8 @@ document.body.innerHTML = `
   <div class="dataset">Dataset: <b>${ds}</b> ·
     <a href="/00-index/">synthetic</a> · <a href="/00-index/?dataset=real">real (Gothenburg tile)</a>
     — the real dataset needs <code>scripts/real/stage1_build.py</code> to have run.</div>
-  ${roundTrip}</header>
+  ${roundTrip}
+  ${pipelineBlock}</header>
   <main style="padding:14px;overflow:auto"><table style="border-collapse:collapse">
   <thead><tr><th align="left">Page</th><th align="left">What you should see</th><th align="left">What it decides</th></tr></thead>
   <tbody>${rows.map(([slug, t, e, , d]) => (sections[slug] ? `<tr><td colspan="3" style="padding:14px 0 4px;font-weight:600;border-bottom:1px solid #ccc">${sections[slug]}</td></tr>` : '') + `<tr><td style="padding:4px 12px 4px 0;white-space:nowrap"><a href="/${slug}/${q}">${slug.slice(0, 2)} · ${t}</a></td><td style="padding:4px 12px 4px 0">${(ds === 'real' && realExpect[slug]) || e}</td><td style="padding:4px 0">${d}</td></tr>`).join('')}</tbody>

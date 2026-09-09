@@ -17,6 +17,10 @@ if (requireWebGL2()) (async () => {
     claim: 'it attaches to MapLibre the same way, so it inherits the terrain limit exactly.',
     decision: 'Switching 3D engine does not escape Limitation 1. Three.js attaches through the same custom-layer route and fails identically. This removes \'use Three.js instead\' from the table of options.',
     correction: 'Titled \'floats\' after the briefing\'s wording. As on page 02, the geometry is buried, not floating.',
+    findings: [
+      'Draws the same buildings as page 02 and produces the same buried silhouette, so the mechanism — MapLibre never drapes a custom layer — reproduces exactly across two engines.',
+      'Three.js renders the blocks flat unlit red where page 02 is shaded. Same on the synthetic dataset, so it is an engine trait of this page\'s minimal material, not a real-data regression.',
+    ],
     dataset: datasetChrome(scene),
     controls: [{kind: 'toggle', id: 'terrain', label: 'Terrain', value: true, onChange: v => map.setTerrain(v ? {source: DEM_SOURCE, exaggeration: 1} : null)}]
   });

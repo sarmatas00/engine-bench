@@ -20,6 +20,11 @@ if (requireWebGL2()) (async () => {
       : 'the field mesh coloured by _TEMPERATURE, live. Drag the sliders and the colours move. Same file as page 04; the only difference is one subclass with its own shader.',
     claim: 'Because it fails at the shader, a small subclass that supplies its own shader does bind them. Cost: it leans on deck.gl internals that carry no stability promise, so it needs maintaining.',
     decision: 'B1 works and is genuinely small: one subclass supplying its own shader. It buys live control of the colour scale. The cost is that it leans on deck.gl internals that carry no stability promise, so it needs maintaining.',
+    findings: [
+      'The B1 fix on deck.gl 9.4.0 is one getShaders() override plus a draw() override to feed the uniform. One trap the briefing\'s \'genuinely small\' hides: the stock fragment shader has three fragColor assignments (PBR, textured flat, flat), so a naive first-match replace patches the dead PBR branch and ships a white mesh with a green probe. The anchor must be the exact flat-branch assignment, and each anchor needs its own no-op guard.',
+      'The real ground field is far flatter than the synthetic one, and this is physics rather than a defect. The solve spans 18.00–32.95 °C and the volume grid 18.00–32.49 °C, but the ground mesh sits on a Dirichlet boundary pinned at 18 °C, so it spans only 18.00–22.63 °C and its 2nd/98th-percentile colour range is 18.00–18.75 °C — a 0.75 °C band against the synthetic scene\'s fixed 25 °C span. Left as measured, not retuned.',
+      'The centre-pixel colour assertion passes on both datasets but proves less than it looks: the colormap\'s bottom stop already has a channel spread of 139 against a threshold of 40, so it cannot fail for any coloured pixel. It separates coloured from grey, white and black — not varied from uniform.',
+    ],
     dataset: datasetChrome(scene),
     controls: [
       {kind: 'range', id: 'min', label: 'Scale min (°C)', ...scaleMinBounds(tMin), step: 1, value: tMin, onChange: v => { tMin = v; overlay?.setProps({layers: [build()]}); }},

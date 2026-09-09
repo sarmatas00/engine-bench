@@ -37,6 +37,10 @@ if (requireWebGL2()) (async () => {
       : 'a faint translucent plume as a volume, with a solid orange isosurface visible at the slider temperature inside it. This page never loaded the unstructured mesh; it loaded the regular grid the pipeline wrote.',
     claim: 'Cannot display our simulation meshes at all — it has no concept of that kind of mesh. It stays useful for one thing: if we convert results to a regular grid first, it can draw them.',
     decision: 'vtk.js narrowed to one job, confirmed: it has no mapper for our simulation mesh type, but hand it a regular grid and it draws it. The grid conversion the briefing called the top gap and \'what I would investigate first\' now exists, and one step feeds both this page and page 10.',
+    findings: [
+      'The plan\'s opacity transfer function (10→0, 20→0.02, 35→0.35) accumulated enough opacity from the 10–20 °C ambient field to hide the isosurface at every slider value above about 15 °C. Retuned to 10→0, 20→0.002, 28→0.02, 35→0.12. vtk.js volume and surface compositing works; the defect was the numbers.',
+      'Defect we found and fixed (Task 11): like page 10, this page was scaling the volume to the ground surface\'s range. Now scaled to the grid\'s own range — the isosurface slider spans something real, enclosing 67.1% of the volume at its low end, 30.2% at the default and 0.0% at the top.',
+    ],
     dataset: datasetChrome(scene),
     controls: [{kind: 'range', id: 'iso', label: 'Isosurface (°C)', min: t0 + 0.04 * span, max: t1 - 0.04 * span, step: span / 25, value: t0 + 0.4 * span,
       onChange: v => { mc.setContourValue(v); rw.render(); }}]

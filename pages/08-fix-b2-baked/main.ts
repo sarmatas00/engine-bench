@@ -17,6 +17,9 @@ if (requireWebGL2()) (async () => {
     claim: 'Decide the colour scale when we generate the file, and ship colours instead of raw values. No client work at all, works in every viewer today, and it is exactly what the Table already does. Cost: no changing the colour scale in the browser.',
     decision: 'B2 works on the mesh path and is the cheapest fix for Limitation 2, which is why it is the MVP recommendation. No client code at all, and it is what the Table already does. Read the correction before confirming it.',
     correction: 'The briefing says baked colours \'work in every viewer today\'. On deck.gl 9.4.0 the glTF path (ScenegraphLayer) ignores COLOR_0 entirely — the white copy on the left — and the colour never reaches its GPU buffer at all. B2 holds for the mesh path only: SimpleMeshLayer, or Tile3DLayer mesh content. If the Twin needs the glTF path, B2 is not free.',
+    findings: [
+      'The probe detail behind the correction: SimpleMeshLayer\'s buffer layout is geometry, instancePositions, instanceColors, instanceModelMatrix, with the colours folded into the interleaved geometry entry\'s nested attributes. ScenegraphLayer\'s geometry entry has no colour attribute at all, because stock scenegraph-layer-vertex.glsl.ts never declares one. Probed values: mesh path all true, glTF path all false.',
+    ],
     dataset: datasetChrome(scene),
     controls: [
       {kind: 'range', id: 'min', label: 'Scale min (°C)', ...scaleMinBounds(tMin), step: 1, value: tMin, disabled: true, onChange: () => {}},

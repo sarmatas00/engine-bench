@@ -6,6 +6,9 @@ header.bench .expect { font-weight: 600; }
 header.bench .claim { color: #555; font-style: italic; }
 header.bench .decision { color: #16241d; border-left: 3px solid #2e5e4e; padding: 2px 0 2px 8px; }
 header.bench .correction { color: #5a4110; background: #fdf6e6; border-left: 3px solid #9a6b1f; padding: 2px 0 2px 8px; }
+header.bench .findings { font-size: 13px; color: #333; }
+header.bench .findings > summary { cursor: pointer; color: #2e5e4e; }
+header.bench .findings ul { margin: 6px 0 0; padding-left: 18px; display: grid; gap: 5px; max-height: 42vh; overflow: auto; }
 header.bench .dataset { color: #333; font-size: 13px; }
 header.bench .controls { display: flex; gap: 16px; flex-wrap: wrap; align-items: center; }
 header.bench .controls label { display: inline-flex; gap: 6px; align-items: center; }

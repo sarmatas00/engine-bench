@@ -15,6 +15,10 @@ if (requireWebGL2()) (async () => {
       : 'the deck.gl blocks now sit on the hill. Move the exaggeration slider away from 1.0 and they detach: the file was draped against one terrain version.',
     claim: 'Sample the elevation at each point of the mesh when we generate it, so what we publish already sits on the ground. Cost: a new pipeline step, artifacts tied to a terrain version, and no switching terrain on the fly.',
     decision: 'A2 works and is the cheapest fix for Limitation 1, which is why it is the MVP recommendation. Its cost is the exaggeration slider: the file is draped against one terrain version, so terrain cannot change at runtime.',
+    findings: [
+      'The cleanest of the five real-data pages: blocks-draped.glb puts every building on the real ground, and the Skansen Kronan fortress sits as a single octagon on the hilltop (component 4, centroid local (−72.2, −197.6), ground 50.50 m, height 5.13 m) — the same octagon pages 02/03 draw once the flatten fix landed.',
+      'The detachment this page exists to show is much milder on real data, for a structural reason: exaggeration e moves the ground under a building by (e−1) × ground, and the median ground under a building here is 3.70 m against a median building height of 9.35 m. At exaggeration 2.0 the median building takes on 3.7 m of ground, 40% of its height — plainly visible but not a vanishing — while 30 of 103 go under completely and the hilltop octagon is swallowed by 50.5 m. At 0.5 they float by 1.85 m median, 25.25 m at the hilltop. The synthetic ridge moves by up to 120 m on the same slider.',
+    ],
     dataset: datasetChrome(scene),
     controls: [{kind: 'range', id: 'exag', label: 'Terrain exaggeration', min: 0.5, max: 2, step: 0.05, value: 1,
       onChange: v => { exaggeration = v; map.setTerrain({source: DEM_SOURCE, exaggeration: v}); }}]

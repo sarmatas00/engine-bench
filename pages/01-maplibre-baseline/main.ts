@@ -14,6 +14,11 @@ if (requireWebGL2()) (async () => {
       : 'six extruded blocks standing on the hillside; toggle terrain and they stay on the ground.',
     claim: "MapLibre's own source, src/webgl/render_to_texture.ts, lists the only layer types it will drape over terrain: background, fill, line, raster, hillshade, color-relief.",
     decision: 'Control page. MapLibre\'s own layer types drape correctly, so any failure from page 02 onward is the external engine, not the map. Supports the recommendation to keep MapLibre as the base map.',
+    findings: [
+      'Real tile census: 217 LOD0 footprints in footprints.geojson — what this page draws — meshing to 103 welded building groups in the LOD1 surface mesh, which is what pages 02/03/05/06/09 draw. An earlier draft said 215 buildings; that was a stale Stage 1 count, never a measured figure.',
+      'fill-extrusion drapes correctly on real data: every footprint stands where the DEM puts it, and toggling Terrain moves the whole city with the ground.',
+      'Framing confirmed: zoom = 14.2 + log2(EXTENT / extent) = 16.2 frames the real 500 m tile the way 14.2 frames the synthetic 2000 m one. The design spec\'s parenthetical 15.2 would have been a full zoom level too wide.',
+    ],
     dataset: datasetChrome(scene),
     controls: [{kind: 'toggle', id: 'terrain', label: 'Terrain', value: true, onChange: v => map.setTerrain(v ? {source: DEM_SOURCE, exaggeration: 1} : null)}]
   });

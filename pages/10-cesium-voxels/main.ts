@@ -26,6 +26,11 @@ if (requireWebGL2()) (async () => {
     claim: 'it is the only engine that can currently draw volume data like a wind or heat field in 3D. Not the base map, but a real candidate for a dedicated simulation view.',
     decision: 'Why Cesium was reopened: it is the only engine here that draws volume data at all. That makes it a real candidate for a dedicated simulation view, and still not for the base map.',
     correction: '\'The only engine that can currently draw volume data\' is true but understates the assembly. There is no public way to hand it in-memory data: you hand-roll a 17-property provider object, both VoxelPrimitive and VoxelProvider are marked experimental and sit outside the deprecation policy, and the ray-march runs at roughly one frame per second under software rendering.',
+    findings: [
+      'Defect we found and fixed (Task 11): this page and page 11 were colouring the volume with the ground surface\'s colour range, which clamped 65% of voxels to the top stop and rendered a saturated red mass instead of a plume. Both now scale to the grid\'s own min and max. The fix also shifts the synthetic render, by at most 1 of 255 in any channel.',
+      'The briefing\'s mental model of \'the hot core shows red\' needs two non-obvious things. depthTest must be off, because the hottest air in our field is at ground level, i.e. inside the hill. And the opacity ramp must be steeper than the obvious one: at alpha = t²·0.9 the ray saturates on the cool near side and the core never reaches the screen. Even at t³·0.35 the front-to-back composite dilutes the peak voxels with everything in front of them, so at any legible opacity the core reads amber, not the red the top of the scale implies.',
+      'A diffusion solve over a 500 m box has no single sharp hot spot, so the warm body follows the built-up half of the tile rather than rising from one point. That is the solve, not the colour scale.',
+    ],
     dataset: datasetChrome(scene),
     controls: [
       {kind: 'range', id: 'min', label: 'Scale min (°C)', ...scaleMinBounds(t0), step: 1, value: t0, onChange: v => shader?.setUniform('u_min', v)},

@@ -11,6 +11,9 @@ export type ChromeOptions = {
   decision?: string;
   /** Only where the render disagrees with the briefing. The correction owed, with its numbers. */
   correction?: string;
+  /** Everything else NOTES.md records about this page: measurements, traps, defects we found and
+   *  fixed. Collapsed by default — the render is the point, but nothing is left only in a file. */
+  findings?: string[];
   dataset?: {text: string; otherLabel: string; otherHref: string}; controls?: Control[]};
 
 declare global { interface Window { __bench: {ready: boolean; probe: Record<string, unknown>} } }
@@ -26,6 +29,7 @@ export function mountChrome(opts: ChromeOptions) {
     <div class="claim">Briefing: “${opts.claim}”</div>
     ${opts.decision ? `<div class="decision"><b>What this decides:</b> ${opts.decision}</div>` : ''}
     ${opts.correction ? `<div class="correction"><b>Correction owed to the briefing:</b> ${opts.correction}</div>` : ''}
+    ${opts.findings?.length ? `<details class="findings"><summary>Findings recorded for this page (${opts.findings.length}) — also in NOTES.md</summary><ul>${opts.findings.map(f => `<li>${f}</li>`).join('')}</ul></details>` : ''}
     <div class="controls"></div>`;
   if (opts.dataset) {
     // Built as nodes, not markup: opts.dataset.text embeds the tile name from dataset.json,
