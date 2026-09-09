@@ -14,6 +14,7 @@ if (requireWebGL2()) (async () => {
       ? 'nothing — this dataset has no temperature field (stage 2 has not run), so there is no field mesh to load. See the probe panel below for how to generate one.'
       : 'two copies of the field mesh, both flat grey. Left: glTF path (ScenegraphLayer). Right: mesh path (SimpleMeshLayer). The temperature attribute is in the file and never reaches the screen.',
     claim: 'Two of them — mesh and point cloud — copy only a fixed list of attributes and discard everything else immediately. The third path, used for glTF models, is subtler: the values survive all the way to a live buffer on the graphics card, and fail only at the final lookup because the standard shader does not declare them.',
+    decision: 'Limitation 2 is real and silent: no error, no warning, just a flat grey model. The two failure modes differ, which matters for costing a fix — the mesh path strips the attribute before any buffer exists, while the glTF path carries it all the way to a live buffer on the graphics card and then never reads it. This is the page that forces the choice between B1, B2 and B3.',
     dataset: datasetChrome(scene)
   });
   ui.setProbe('field', scene.hasField);

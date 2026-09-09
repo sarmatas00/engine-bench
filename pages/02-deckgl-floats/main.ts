@@ -13,6 +13,8 @@ if (requireWebGL2()) (async () => {
       ? 'the same real buildings, now drawn by deck.gl, stay at z = 0 while the terrain rises around them: the ones on the hill vanish inside it and the ones on low ground keep only the height that clears the ground. Toggle terrain off and they all stand full height on the flat map.'
       : 'the same six blocks, now drawn by deck.gl, stay at sea level while the terrain rises around them: five vanish inside the hill and one just pokes through. Toggle terrain off and all six reappear on the flat map.',
     claim: 'with terrain enabled, "the deck.gl data with z=0 are rendered at the sea level and not aligned with the terrain surface".',
+    decision: 'Limitation 1 is real, and it holds on DTCC\'s own city data rather than only on a synthetic scene. The cause is a MapLibre constraint, not a deck.gl bug, so it binds anything we attach on top. This is the page that forces the choice between A1, A2 and A3.',
+    correction: 'The briefing says our data sits \'at sea level, floating above or below the ground\'. Both datasets are above sea level everywhere, so z = 0 geometry is buried, never floating. The mechanism is exactly as described; the word is wrong.',
     dataset: datasetChrome(scene),
     controls: [{kind: 'toggle', id: 'terrain', label: 'Terrain', value: true, onChange: v => map.setTerrain(v ? {source: DEM_SOURCE, exaggeration: 1} : null)}]
   });

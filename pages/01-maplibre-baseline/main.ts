@@ -13,6 +13,7 @@ if (requireWebGL2()) (async () => {
       ? 'every real building footprint on the tile extruded onto the hillside, each standing on the ground where the DEM puts it; toggle terrain and they stay on the ground.'
       : 'six extruded blocks standing on the hillside; toggle terrain and they stay on the ground.',
     claim: "MapLibre's own source, src/webgl/render_to_texture.ts, lists the only layer types it will drape over terrain: background, fill, line, raster, hillshade, color-relief.",
+    decision: 'Control page. MapLibre\'s own layer types drape correctly, so any failure from page 02 onward is the external engine, not the map. Supports the recommendation to keep MapLibre as the base map.',
     dataset: datasetChrome(scene),
     controls: [{kind: 'toggle', id: 'terrain', label: 'Terrain', value: true, onChange: v => map.setTerrain(v ? {source: DEM_SOURCE, exaggeration: 1} : null)}]
   });

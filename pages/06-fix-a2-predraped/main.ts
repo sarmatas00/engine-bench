@@ -14,6 +14,7 @@ if (requireWebGL2()) (async () => {
       ? 'the real buildings now sit on the real ground — most of them on the flat, a handful up on the Skansen Kronan hill. Move the exaggeration slider away from 1.0 and they detach: the file was draped against one terrain version. At 2.0 the ground rises by its own height, so the median building takes on 3.7 m of ground against its 9.4 m of height and the hilltop one is swallowed by 50 m.'
       : 'the deck.gl blocks now sit on the hill. Move the exaggeration slider away from 1.0 and they detach: the file was draped against one terrain version.',
     claim: 'Sample the elevation at each point of the mesh when we generate it, so what we publish already sits on the ground. Cost: a new pipeline step, artifacts tied to a terrain version, and no switching terrain on the fly.',
+    decision: 'A2 works and is the cheapest fix for Limitation 1, which is why it is the MVP recommendation. Its cost is the exaggeration slider: the file is draped against one terrain version, so terrain cannot change at runtime.',
     dataset: datasetChrome(scene),
     controls: [{kind: 'range', id: 'exag', label: 'Terrain exaggeration', min: 0.5, max: 2, step: 0.05, value: 1,
       onChange: v => { exaggeration = v; map.setTerrain({source: DEM_SOURCE, exaggeration: v}); }}]

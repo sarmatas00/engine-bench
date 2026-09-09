@@ -15,6 +15,8 @@ if (requireWebGL2()) (async () => {
       ? 'the same real buildings drawn by Three.js inside a MapLibre custom layer. With terrain on, the same ones are buried and the same ones poke through as on page 02 — the same buried result, from a different engine.'
       : 'the same six blocks drawn by Three.js inside a MapLibre custom layer. With terrain on, five are buried in the hill and one just pokes through — the same buried result as page 02.',
     claim: 'it attaches to MapLibre the same way, so it inherits the terrain limit exactly.',
+    decision: 'Switching 3D engine does not escape Limitation 1. Three.js attaches through the same custom-layer route and fails identically. This removes \'use Three.js instead\' from the table of options.',
+    correction: 'Titled \'floats\' after the briefing\'s wording. As on page 02, the geometry is buried, not floating.',
     dataset: datasetChrome(scene),
     controls: [{kind: 'toggle', id: 'terrain', label: 'Terrain', value: true, onChange: v => map.setTerrain(v ? {source: DEM_SOURCE, exaggeration: 1} : null)}]
   });

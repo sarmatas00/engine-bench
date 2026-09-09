@@ -12,6 +12,8 @@ if (requireWebGL2()) (async () => {
       ? 'a blue polygon draped on the real terrain — it folds down the hill flank, one corner at 47 m against 1.5–7.8 m for the other three — and a gold line that stays straight because the ground it crosses only moves 2.8 m. The red glTF blocks clamp at one point, the tile anchor, and the anchor sits near the tile floor at 3.4 m, so here they are mostly sunk rather than floating: of the 103 building groups, 55 sink in — 14 of them out of sight — 47 float, clearing by at most 3.0 m, and 1 lands level.'
       : 'a blue polygon and a yellow line wrapped perfectly over the ridge; the red glTF blocks clamp only at their shared origin point, so the ones on the flanks still float clear of it.',
     claim: 'The only one that follows terrain natively, but only for flat outlines and lines, not for 3D shapes — so it does not solve our case.',
+    decision: 'Why Cesium did not win the base map: it clamps flat outlines and lines to terrain natively, but a 3D model clamps at its origin only. It does not solve Limitation 1.',
+    correction: 'The briefing describes models floating clear of the terrain. On the real tile the single-point clamp mostly buries them instead: under the convention recorded in NOTES.md, 55 of 103 building groups sink, 14 out of sight, and the 47 that float do so by at most 3.00 m. Same mechanism, opposite appearance.',
     dataset: datasetChrome(scene)
   });
   const viewer = makeViewer(ui.canvasHost, scene);

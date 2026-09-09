@@ -10,6 +10,7 @@ if (requireWebGL2()) (async () => {
       ? 'nothing — this dataset has no temperature field (stage 2 has not run), so there is no baked mesh to load. See the probe panel below for how to generate one.'
       : 'the baked temperature mesh, rendered well, in an arbitrary engine space. The list on the right is the point: nothing here can place it on the Earth.',
     claim: 'No geographic support anywhere in the engine. Its only mapping project is one person\'s side project — 32 commits, dormant about ten months, and tied to a paid Google service.',
+    decision: 'Rejected, and not on rendering quality — the mesh renders correctly here. The engine has no CRS, no basemap, no terrain provider and no reprojection anywhere, and its only mapping plugin is one person\'s side project, dormant about ten months and tied to a paid Google service.',
     dataset: datasetChrome(scene)
   });
   ui.setProbe('field', scene.hasField);

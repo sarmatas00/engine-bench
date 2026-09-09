@@ -5,7 +5,12 @@ export type Control =
   | {kind: 'range'; id: string; label: string; min: number; max: number; step: number; value: number; disabled?: boolean; onChange: (v: number) => void}
   | {kind: 'select'; id: string; label: string; options: string[]; value: string; onChange: (v: string) => void};
 
-export type ChromeOptions = {num: string; title: string; expect: string; claim: string;
+export type ChromeOptions = {
+  num: string; title: string; expect: string; claim: string;
+  /** What this page settles for the meeting: the decision it informs, or the knowledge it buys. */
+  decision?: string;
+  /** Only where the render disagrees with the briefing. The correction owed, with its numbers. */
+  correction?: string;
   dataset?: {text: string; otherLabel: string; otherHref: string}; controls?: Control[]};
 
 declare global { interface Window { __bench: {ready: boolean; probe: Record<string, unknown>} } }
@@ -19,6 +24,8 @@ export function mountChrome(opts: ChromeOptions) {
     <h1><a href="/00-index/">engine-bench</a> · ${opts.num} · ${opts.title}</h1>
     <div class="expect">What you should see: ${opts.expect}</div>
     <div class="claim">Briefing: “${opts.claim}”</div>
+    ${opts.decision ? `<div class="decision"><b>What this decides:</b> ${opts.decision}</div>` : ''}
+    ${opts.correction ? `<div class="correction"><b>Correction owed to the briefing:</b> ${opts.correction}</div>` : ''}
     <div class="controls"></div>`;
   if (opts.dataset) {
     // Built as nodes, not markup: opts.dataset.text embeds the tile name from dataset.json,
@@ -30,7 +37,7 @@ export function mountChrome(opts: ChromeOptions) {
     link.href = opts.dataset.otherHref;
     link.textContent = `switch to ${opts.dataset.otherLabel}`;
     line.append(link);
-    header.querySelector('.claim')!.after(line);
+    header.querySelector('.controls')!.before(line);
   }
   const controls = header.querySelector('.controls')!;
   for (const c of opts.controls ?? []) controls.appendChild(renderControl(c));
