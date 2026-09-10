@@ -1,0 +1,36 @@
+{
+  "bin": "field.mesh.bin",
+  "vertexCount": 6288,
+  "indexCount": 26760,
+  "byteLength": 283104,
+  "arrays": [
+    {
+      "name": "positions",
+      "type": "f32",
+      "components": 3,
+      "offset": 0,
+      "length": 18864
+    },
+    {
+      "name": "normals",
+      "type": "f32",
+      "components": 3,
+      "offset": 75456,
+      "length": 18864
+    },
+    {
+      "name": "indices",
+      "type": "u32",
+      "components": 1,
+      "offset": 150912,
+      "length": 26760
+    },
+    {
+      "name": "temperature",
+      "type": "f32",
+      "components": 1,
+      "offset": 257952,
+      "length": 6288
+    }
+  ]
+}

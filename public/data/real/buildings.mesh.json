@@ -1,0 +1,29 @@
+{
+  "bin": "buildings.mesh.bin",
+  "vertexCount": 20726,
+  "indexCount": 113016,
+  "byteLength": 949488,
+  "arrays": [
+    {
+      "name": "positions",
+      "type": "f32",
+      "components": 3,
+      "offset": 0,
+      "length": 62178
+    },
+    {
+      "name": "normals",
+      "type": "f32",
+      "components": 3,
+      "offset": 248712,
+      "length": 62178
+    },
+    {
+      "name": "indices",
+      "type": "u32",
+      "components": 1,
+      "offset": 497424,
+      "length": 113016
+    }
+  ]
+}

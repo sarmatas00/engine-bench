@@ -1,0 +1,39 @@
+{
+  "unit": "degC",
+  "tmin": 17.99999987228115,
+  "tmax": 18.746469572546268,
+  "source": "dtcc-sim urban_heat",
+  "args": {
+    "mesh_max_mesh_size": 25.0,
+    "mesh_domain_height": 80.0,
+    "kappa": 1.0,
+    "sigma": 0.0,
+    "T_ambient": 18.0,
+    "degree": 1,
+    "wall_bc_type": "robin",
+    "wall_value": 28.0,
+    "wall_h": 1.0,
+    "roof_bc_type": "robin",
+    "roof_value": 32.0,
+    "roof_h": 1.0,
+    "ground_bc_type": "dirichlet",
+    "ground_value": 18.0,
+    "open_bc_type": "dirichlet",
+    "open_value": 18.0
+  },
+  "roundtrip": {
+    "vertices_before": 50729,
+    "vertices_after": 50729,
+    "cells_before": 182331,
+    "cells_after": 182331,
+    "field_name_before": "temperature",
+    "field_name_after": "temperature",
+    "dtype_before": "float64",
+    "dtype_after": "float64",
+    "count_before": 50729,
+    "count_after": 50729,
+    "field_present": true,
+    "max_abs_delta": 0.0,
+    "lossless": true
+  }
+}
