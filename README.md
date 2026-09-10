@@ -4,6 +4,9 @@ Screen-shareable evidence for the 2026-09-03 DTCC briefing "Two Threads, One Blo
 the MapLibre + deck.gl recommendation, its two limitations, the priced fixes, and the
 rejected engines — each as a page you can look at.
 
+**Live: <https://sarmatas00.github.io/engine-bench/00-index/>** — no install, both datasets.
+Add `?dataset=real` to any page for the Gothenburg tile.
+
 Two datasets, one switch. `?dataset=synthetic` (the default) draws the controlled scene from
 `src/lib/scene.ts`: a hill, six blocks, a formula temperature field, all offline. `?dataset=real`
 draws a 500 m Gothenburg tile built by `dtcc_core` with a steady-state urban-heat field solved by
@@ -28,6 +31,15 @@ with a printed reason, when the real dataset has not been generated.
     .venv/bin/python scripts/real/sample_field.py   # round trip + sample onto the ground mesh
     bun run generate:real                           # glTF assembly
     # then open any page with ?dataset=real
+
+## Deploy
+
+    bun run build:pages    # same build, with PAGES_BASE=/engine-bench/
+
+Every absolute path goes through `assetUrl` (`src/lib/dataset.ts`), which prefixes
+`import.meta.env.BASE_URL`. That is `/` for `dev`, `preview` and the test suite, and
+`/engine-bench/` only under `build:pages`, so hosting cannot drift the local numbers.
+Publish the resulting `dist/` to the `gh-pages` branch.
 
 `dtcc-sim`'s own `Dockerfile` (`~/Projects/dtcc/dtcc-sim`) does not build as shipped on an Apple
 Silicon machine under `--platform linux/amd64` — see `NOTES.md` under `## Findings` for the full
