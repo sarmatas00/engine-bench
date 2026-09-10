@@ -10,7 +10,8 @@
     "generate:real": "bun scripts/generate-real.ts",
     "preview": "vite preview --port 4173 --strictPort",
     "test:unit": "bun test tests/unit",
-    "test": "bun run test:unit && bun run build && playwright test"
+    "test": "bun run test:unit && bun run build && playwright test",
+    "build:pages": "PAGES_BASE=/engine-bench/ bun run build"
   },
   "dependencies": {
     "@deck.gl/core": "9.4.0",

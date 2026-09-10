@@ -69,8 +69,20 @@ export function currentDataset(): Dataset {
   return new URLSearchParams(location.search).get('dataset') === 'real' ? 'real' : 'synthetic';
 }
 
+/**
+ * Root-relative paths break when the site is served from a subpath. `import.meta.env.BASE_URL`
+ * is '/' for dev, preview and the test suite, and '/engine-bench/' in a Pages build; it always
+ * ends in a slash. Every absolute asset or page path in the bench goes through here.
+ */
+export function assetUrl(path: string): string {
+  // `import.meta.env` is Vite's; under `bun test` there is no Vite transform and BASE_URL is
+  // undefined, which would silently produce 'undefineddata/...'. Fall back to the root.
+  const base = import.meta.env?.BASE_URL ?? '/';
+  return `${base}${path.replace(/^\//, '')}`;
+}
+
 export function dataUrl(name: string, dataset: Dataset = currentDataset()): string {
-  return `/data/${dataset}/${name}`;
+  return assetUrl(`data/${dataset}/${name}`);
 }
 
 /** Page 04 and 08 put two copies side by side and pull back to see both. */

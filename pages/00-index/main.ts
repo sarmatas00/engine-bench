@@ -1,5 +1,5 @@
 import '@lib/chrome.css';
-import {currentDataset} from '@lib/dataset';
+import {assetUrl, currentDataset} from '@lib/dataset';
 
 const rows: [string, string, string, string, string][] = [
   ['01-maplibre-baseline', 'MapLibre baseline', 'Blocks follow the hill with terrain on.', "MapLibre's own layer types drape.", 'Control page. Keeps MapLibre as the base map.'],
@@ -68,12 +68,12 @@ document.body.innerHTML = `
   <div class="expect">${blurb}</div>
   <div class="decision"><b>How to use this:</b> every page states what you should see, the briefing claim it tests, and what it decides. Where the render disagrees with the briefing there is an amber <b>correction</b> block — those are the corrections owed before the meeting, and they are collected with their numbers in <code>NOTES.md</code>.</div>
   <div class="dataset">Dataset: <b>${ds}</b> ·
-    <a href="/00-index/">synthetic</a> · <a href="/00-index/?dataset=real">real (Gothenburg tile)</a>
+    <a href="${assetUrl('00-index/')}">synthetic</a> · <a href="${assetUrl('00-index/?dataset=real')}">real (Gothenburg tile)</a>
     — the real dataset needs <code>scripts/real/stage1_build.py</code> to have run.</div>
   ${roundTrip}
   ${pipelineBlock}</header>
   <main style="padding:14px;overflow:auto"><table style="border-collapse:collapse">
   <thead><tr><th align="left">Page</th><th align="left">What you should see</th><th align="left">What it decides</th></tr></thead>
-  <tbody>${rows.map(([slug, t, e, , d]) => (sections[slug] ? `<tr><td colspan="3" style="padding:14px 0 4px;font-weight:600;border-bottom:1px solid #ccc">${sections[slug]}</td></tr>` : '') + `<tr><td style="padding:4px 12px 4px 0;white-space:nowrap"><a href="/${slug}/${q}">${slug.slice(0, 2)} · ${t}</a></td><td style="padding:4px 12px 4px 0">${(ds === 'real' && realExpect[slug]) || e}</td><td style="padding:4px 0">${d}</td></tr>`).join('')}</tbody>
+  <tbody>${rows.map(([slug, t, e, , d]) => (sections[slug] ? `<tr><td colspan="3" style="padding:14px 0 4px;font-weight:600;border-bottom:1px solid #ccc">${sections[slug]}</td></tr>` : '') + `<tr><td style="padding:4px 12px 4px 0;white-space:nowrap"><a href="${assetUrl(`${slug}/${q}`)}">${slug.slice(0, 2)} · ${t}</a></td><td style="padding:4px 12px 4px 0">${(ds === 'real' && realExpect[slug]) || e}</td><td style="padding:4px 0">${d}</td></tr>`).join('')}</tbody>
   </table></main>`;
 window.__bench = {ready: true, probe: {}};

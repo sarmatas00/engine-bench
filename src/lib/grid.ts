@@ -1,10 +1,11 @@
+import {assetUrl} from './dataset';
 import type {Scene} from './dataset';
 
 export async function loadGrid(scene: Scene) {
   const metaRes = await fetch(scene.files.gridJson);
   if (!metaRes.ok) throw new Error(`field.grid.json: ${metaRes.status}`);
   const meta = await metaRes.json();
-  const dataRes = await fetch(meta.dataUrl);
+  const dataRes = await fetch(assetUrl(meta.dataUrl));
   if (!dataRes.ok) throw new Error(`field.grid.f32: ${dataRes.status}`);
   const data = new Float32Array(await dataRes.arrayBuffer());
   const [nx, ny, nz] = meta.dims;

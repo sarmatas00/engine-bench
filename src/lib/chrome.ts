@@ -1,4 +1,5 @@
 import './chrome.css';
+import {assetUrl} from './dataset';
 
 export type Control =
   | {kind: 'toggle'; id: string; label: string; value: boolean; onChange: (v: boolean) => void}
@@ -24,7 +25,7 @@ export function mountChrome(opts: ChromeOptions) {
   const header = document.createElement('header');
   header.className = 'bench';
   header.innerHTML = `
-    <h1><a href="/00-index/">engine-bench</a> · ${opts.num} · ${opts.title}</h1>
+    <h1><a href="${assetUrl('00-index/')}">engine-bench</a> · ${opts.num} · ${opts.title}</h1>
     <div class="expect">What you should see: ${opts.expect}</div>
     <div class="claim">Briefing: “${opts.claim}”</div>
     ${opts.decision ? `<div class="decision"><b>What this decides:</b> ${opts.decision}</div>` : ''}
