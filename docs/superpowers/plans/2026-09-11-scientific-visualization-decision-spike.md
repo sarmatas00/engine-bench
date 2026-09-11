@@ -10,6 +10,8 @@
 
 **Spec:** docs/superpowers/specs/2026-09-11-scientific-visualization-decision-spike-design.md
 
+**Companion plans:** docs/superpowers/plans/2026-09-11-vtk-wasm-feasibility-probe.md and docs/superpowers/plans/2026-09-11-dtcc-3d-assignment-teaching.md
+
 ## Global Constraints
 
 - Use real Gothenburg terrain and buildings plus clearly labelled synthetic DTCC smoke data.
@@ -21,7 +23,7 @@
 - Grid-node probes are bit-identical; interpolated tolerance is 1e-5 * max(field_span, 1).
 - Fixed alignment probes differ by no more than 5 cm after rebasing.
 - Target at least 30 FPS; sustained performance below 20 FPS fails the interactive-MVP gate.
-- VTK.wasm gets at most four focused hours and stays outside the main dependency graph.
+- VTK.wasm is governed by its companion plan and stays outside the main dependency graph.
 - Do not request more data from Anders until measurements identify a precise missing case.
 - No full prototype begins before measurements and DTCC feedback are reviewed.
 
@@ -40,7 +42,6 @@
 - tests/scientific.spec.ts: cross-renderer correctness and interaction tests.
 - scripts/measure-scientific.mjs: repeatable performance measurements.
 - docs/scientific-visualization-measurements.md: evidence and recommendation.
-- spikes/vtk-wasm/README.md: bounded probe record.
 
 ### Modify
 
@@ -544,40 +545,7 @@ git add scripts/measure-scientific.mjs tests/unit/scientific.test.ts package.jso
 git commit -m "perf: measure scientific renderer tradeoffs"
 ~~~
 
-### Task 9: Run the four-hour VTK.wasm probe
-
-**Files:**
-- Create: spikes/vtk-wasm/README.md
-- Create on success only: spikes/vtk-wasm/probe.html and probe.ts
-
-**Interfaces:**
-- Consumes: the same manifest/binary URLs.
-- Produces: reproducible yes/no evidence; no root dependency.
-
-- [ ] **Step 1: Record start time and success gate**
-
-The gate is: load the manifest, create one standalone session, register one canvas, show city plus one volume or slice, and report initialization time and transferred bytes.
-
-- [ ] **Step 2: Probe in a temporary package**
-
-Use a directory outside the repo and the current Kitware TypeScript guide. Do not add @kitware/vtk-wasm to root package.json.
-
-- [ ] **Step 3: Stop at four focused hours**
-
-On success, copy only minimal reproducible code. On failure, record the exact last success, error, runtime size, browser, and stop reason. Do not keep debugging.
-
-- [ ] **Step 4: Add the separate result to the report**
-
-VTK.wasm cannot rescue either main path or be selected during this spike.
-
-- [ ] **Step 5: Commit**
-
-~~~bash
-git add spikes/vtk-wasm docs/scientific-visualization-measurements.md
-git commit -m "docs: record VTK.wasm feasibility probe"
-~~~
-
-### Task 10: Publish evidence and prepare replies
+### Task 9: Publish evidence and prepare replies
 
 **Files:**
 - Modify: pages/00-index/main.ts, README.md, NOTES.md, and measurement report.
@@ -585,7 +553,7 @@ git commit -m "docs: record VTK.wasm feasibility probe"
 - Create outside repo: /Users/sarmatas/Projects/dtcc/messages/reply-dtcc-twin-1-scientific-spike.md
 
 **Interfaces:**
-- Consumes: verified measurements.
+- Consumes: verified main-path measurements and the documented VTK.wasm companion outcome.
 - Produces: hosted evidence and two unposted reply drafts.
 
 - [ ] **Step 1: Add the index section**
@@ -626,34 +594,6 @@ git add pages/00-index/main.ts README.md NOTES.md docs/scientific-visualization-
 git commit -m "docs: publish scientific renderer evidence"
 ~~~
 
-### Task 11: Build the deferred teaching workspace
-
-**Files:** Created outside the repo through the teach skill:
-- MISSION.md and RESOURCES.md
-- assets/course.css
-- reference/dtcc-3d-and-repository-map.html
-- lessons/0001-explain-the-dtcc-3d-assignment.html
-- lessons/0002-understand-the-renderer-limitations.html
-- lessons/0003-explain-the-scientific-visualization-spike.html
-- lessons/0004-rehearse-the-meeting-conversation.html
-- learning-records/0001-assignment-baseline.md
-
-**Interfaces:**
-- Consumes: final evidence, issue comments, meeting notes, repos, and primary documentation.
-- Produces: a stateful learning path for explaining the assignment in meetings.
-
-- [ ] **Step 1: Invoke teach after reply drafts are ready**
-
-Use the mission: explain the assignment, evidence, repo relationships, limitations, and architecture without relying on the agent during a meeting.
-
-- [ ] **Step 2: Build four short retrieval-based lessons**
-
-Lesson 1 teaches the assignment and Core/Sim-to-browser repository map. Lesson 2 teaches MapLibre custom-layer terrain limits, fields, shaders, picking, slices, streamlines, volume, and occlusion using the bench evidence. Lesson 3 teaches the compared architecture and how to interpret the measurements. Lesson 4 rehearses the issue history, Anders's proposal, the recommendation, and a two-minute meeting explanation. Each lesson uses equal-length-option quizzes or active recall rather than passive reading.
-
-- [ ] **Step 3: Open the lesson and wait for practice**
-
-Do not mark the learning record complete until the user responds to the retrieval exercise.
-
 ---
 
 ## Dependency and Execution Order
@@ -668,11 +608,9 @@ Do not mark the learning record complete until the user responds to the retrieva
 | 6 | 1-4 | Three.js needs the same contract |
 | 7 | 5-6 | Comparison requires both pages |
 | 8 | 7 | Measure only after correctness |
-| 9 | 2-3 | Reuse artifacts, not main renderers |
-| 10 | 7-9 | Report verified results only |
-| 11 | 10 | Teach from final evidence |
+| 9 | 7-8 plus VTK.wasm companion outcome | Report verified results only |
 
-Tasks 5 and 6 can run in parallel worktrees after Task 4. Tasks 8 and 9 can run in parallel after Task 7. All other tasks are sequential because they define or consume the same contracts.
+Tasks 5 and 6 can run in parallel worktrees after Task 4. The VTK.wasm companion can run after Task 3 while Tasks 5-8 proceed. All other core tasks are sequential because they define or consume the same contracts. The teaching companion begins after Task 9 produces final evidence and reply drafts.
 
 ## Full Verification
 
