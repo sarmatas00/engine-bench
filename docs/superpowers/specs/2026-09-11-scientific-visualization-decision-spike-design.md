@@ -100,8 +100,8 @@ The versioned manifest records:
 - real or synthetic data category;
 - field names, components, associations, units and ranges;
 - grid dimensions, spacing and axis ordering;
-- stable building and scientific-object identifiers;
-- artifact byte lengths and hashes;
+- separate DTCC IDs and source indices, with a two-load stability verdict;
+- scientific binary and referenced city/heat artifact byte lengths and hashes;
 - derivation links from browser artifacts to source DTCC objects.
 
 The initial evidence set contains:
@@ -132,6 +132,8 @@ Both paths implement the same user-visible workflow:
 | Occlusion | Buildings and scientific results share one depth model |
 | Provenance | Clearly distinguish real heat from synthetic smoke |
 
+Normal frontend builds consume and validate committed artifacts. Scientific regeneration is an explicit command that requires the DTCC Python environment.
+
 ## Correctness Gates
 
 A path fails the spike if:
@@ -149,6 +151,8 @@ A path fails the spike if:
 An explicit, documented experimental API may be measured as a qualified result,
 but cannot be presented as production-safe.
 
+The Three.js path must render opaque city depth first and terminate transparent-volume ray accumulation at that depth. Both passes remain inside one canvas.
+
 ## Measurements
 
 Run each path with identical artifacts, cameras, viewport sizes and hardware.
@@ -164,6 +168,7 @@ Record:
 - Chrome, Safari and Firefox results;
 - fixed numeric probe results;
 - fixed-camera alignment, transparency and occlusion screenshots.
+- 100 deterministic control/resize cycles with stable renderer-owned resource counts.
 
 Record unsupported measurements as unavailable. Do not replace missing browser
 instrumentation with estimates.
@@ -193,6 +198,7 @@ experience.
 - The browser loader validates manifest version, byte lengths, hashes, array
   dimensions and coordinate metadata.
 - A failed asset or unsupported GPU capability produces a visible error panel.
+- WebGL context loss stops measurement, disposes owned resources, and offers reload.
 - No renderer may silently substitute a different dataset or approximate a
   missing required capability.
 - Partial support is recorded as a failed or qualified measurement.
@@ -208,6 +214,8 @@ experience.
 - Cross-renderer probes assert the same IDs, coordinates and values.
 - Fixed-camera screenshots check alignment, transparency and occlusion.
 - Chrome, Safari and Firefox are reported separately.
+- Desktop correctness covers resize from 1280x800 to 1600x900 at DPR 1 and DPR 2.
+- Performance uses a fixed 30-frame warmup plus 180 forced-render orbit, with CPU and optional disjoint-safe GPU timings reported separately.
 - Performance measurement begins only after correctness passes.
 
 ## Execution Sequence

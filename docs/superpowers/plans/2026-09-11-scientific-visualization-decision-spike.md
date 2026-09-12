@@ -35,8 +35,12 @@
 
 - scripts/scientific/generate.py: serialize DTCC smoke products and manifest.
 - scripts/scientific/tests/test_generate.py: artifact and provenance tests.
-- src/lib/scientific.ts: neutral types, loading, validation, rebasing, and probes.
-- tests/unit/scientific.test.ts: loader and numeric-probe tests.
+- scripts/scientific/validate.ts: frontend-only integrity check for committed artifacts.
+- scripts/scientific/validate.test.ts: corrupt and valid artifact fixtures.
+- src/lib/scientific-data.ts: neutral types, loading, hashing, decoding, and coordinate validation.
+- src/lib/scientific-probes.ts: sampling, identity readout, alignment probes, probe types, and frame timing.
+- tests/unit/scientific-data.test.ts: artifact-boundary tests.
+- tests/unit/scientific-probes.test.ts: numeric, identity, alignment, and timing tests.
 - pages/13-vtkjs-scientific/index.html and main.ts: vtk.js path.
 - pages/14-threejs-scientific/index.html and main.ts: Three.js path.
 - tests/scientific.spec.ts: cross-renderer correctness and interaction tests.
@@ -45,12 +49,12 @@
 
 ### Modify
 
-- scripts/real/benchio.py: typed per-cell mesh arrays.
+- scripts/real/benchio.py: one generic aligned-array packer plus the mesh-pair compatibility wrapper.
 - scripts/real/stage1_build.py: preserve source building index and Building.id.
 - scripts/real/tests/test_benchio.py and test_mesh_split.py: identity tests.
 - src/lib/chrome.ts and tests/unit/chrome.test.ts: shared buttons and readouts.
 - pages/00-index/main.ts: add the paired evidence pages.
-- tests/smoke.spec.ts and playwright.config.ts: page and browser matrices.
+- tests/smoke.spec.ts and playwright.config.ts: legacy dataset-matrix pages, combined scientific pages, and browser matrices.
 - package.json, README.md, and NOTES.md: commands and verified evidence.
 
 ### Generated and committed
@@ -72,7 +76,7 @@
 
 **Interfaces:**
 - Consumes: surface face markers where marker >= 0 means city.buildings[marker].
-- Produces: cell_object_index: Uint32Array and objects: Array<{index:number,id:string}>.
+- Produces: cell_object_index: Uint32Array and objects: Array<{sourceIndex:number,dtccId:string}>, plus an observed two-load stability verdict.
 
 - [ ] **Step 1: Write the failing per-cell round-trip test**
 
@@ -84,14 +88,14 @@ def test_mesh_pair_round_trips_cell_arrays(tmp_path):
         normals=np.array([[0, 0, 1]] * 3, dtype=float),
         indices=np.array([[0, 1, 2]], dtype=np.uint32),
         cell_extra={"cell_object_index": (np.array([7]), "u32", 1)},
-        metadata={"objects": [{"index": 7, "id": "building-7"}]},
+        metadata={"objects": [{"sourceIndex": 7, "dtccId": "building-7"}]},
     )
     loaded = benchio.read_mesh_pair(tmp_path, "mesh")
     assert loaded["cell_object_index"].tolist() == [7]
-    assert meta["objects"] == [{"index": 7, "id": "building-7"}]
+    assert meta["objects"] == [{"sourceIndex": 7, "dtccId": "building-7"}]
 ~~~
 
-Add a mesh-split test with two markers and assert the selected values retain triangle order.
+Add a mesh-split test with two markers and assert the selected values retain triangle order. Add stable and unstable two-load identity fixtures: stable IDs produce stable_observed_two_loads; changed UUIDs produce unstable_observed and retain both mapping hashes.
 
 - [ ] **Step 2: Run the focused tests**
 
@@ -99,9 +103,16 @@ Run: .venv/bin/python -m pytest scripts/real/tests/test_benchio.py scripts/real/
 
 Expected: FAIL because cell_extra, metadata, and preserved face values do not exist.
 
-- [ ] **Step 3: Extend the artifact writer**
+- [ ] **Step 3: Extract one generic packer, then extend the artifact writer**
 
-Use this signature:
+Extract this low-level interface from the existing mesh writer:
+
+~~~python
+def pack_array_bundle(arrays: list[tuple[str, np.ndarray, str, int]]) -> tuple[bytes, list[dict]]:
+    """Return a four-byte-aligned blob and its typed array specifications."""
+~~~
+
+Keep type conversion, four-byte padding, offset calculation, duplicate-name rejection, and supported-type validation in that function. Add direct tests for empty input, mixed f32/u32/u8 arrays, duplicate names, and padding. Keep this mesh wrapper signature:
 
 ~~~python
 def write_mesh_pair(
@@ -110,14 +121,14 @@ def write_mesh_pair(
 ) -> dict:
 ~~~
 
-Validate vertex extras against len(positions) and cell extras against the triangle count. Reuse the existing aligned type writer. Reject metadata keys bin, vertexCount, indexCount, byteLength, and arrays.
+Validate vertex extras against len(positions) and cell extras against the triangle count. Delegate every byte-layout decision to pack_array_bundle. Reject metadata keys bin, vertexCount, indexCount, byteLength, and arrays.
 
 - [ ] **Step 4: Preserve canonical source identity**
 
 Have submesh optionally accept face values and return selected values without reordering. Write buildings with:
 
 ~~~python
-objects = [{"index": i, "id": str(b.id)} for i, b in enumerate(city.buildings)]
+objects = [{"sourceIndex": i, "dtccId": str(b.id)} for i, b in enumerate(city.buildings)]
 benchio.write_mesh_pair(
     out_dir, "buildings",
     positions=buildings["positions"], normals=buildings["normals"],
@@ -127,7 +138,7 @@ benchio.write_mesh_pair(
 )
 ~~~
 
-Do not add IDs to terrain or the flattened limitation-demo mesh.
+Do not add IDs to terrain or the flattened limitation-demo mesh. Load the source city twice with the same bounds before regeneration and compare sourceIndex-to-dtccId mappings. Write identityStability, both observed mapping hashes, and the audit timestamp into buildings.mesh.json. Never rename sourceIndex to an ID.
 
 - [ ] **Step 5: Test and regenerate**
 
@@ -139,11 +150,11 @@ scripts/real/stage2_sim.sh
 bun run generate:real
 ~~~
 
-Expected: one object index per building triangle and one non-empty unique DTCC ID per referenced index. Stage 2 and sampling are required because stage1_build.py resets the stage-2 marker; do not leave committed heat artifacts paired with a manifest that says no heat field exists.
+Expected: one source index per building triangle, one non-empty unique DTCC ID per referenced index within each load, and an explicit stable_observed_two_loads or unstable_observed verdict. When unstable, renderer picking continues with sourceIndex for parity while both pages report canonical traceability as failed. Stage 2 and sampling are required because stage1_build.py resets the stage-2 marker; do not leave committed heat artifacts paired with a manifest that says no heat field exists.
 
 - [ ] **Step 6: Check drift**
 
-Compare bounds, mesh counts, relief, field ranges, and the stage-2 round-trip record with the prior commit. IDs and generation timestamps may change. Any unexplained scientific or geometry change stops the task.
+Compare bounds, mesh counts, relief, field ranges, and the stage-2 round-trip record with the prior commit. Generation timestamps may change. ID drift must match unstable_observed and remain visible; unexplained scientific or geometry changes stop the task.
 
 - [ ] **Step 7: Commit**
 
@@ -157,6 +168,8 @@ git commit -m "feat: preserve DTCC building identity in mesh artifacts"
 **Files:**
 - Create: scripts/scientific/generate.py
 - Create: scripts/scientific/tests/test_generate.py
+- Create: scripts/scientific/validate.ts
+- Create: scripts/scientific/validate.test.ts
 - Create: public/data/scientific/scientific-manifest.json
 - Create: public/data/scientific/scientific.bin
 - Modify: package.json
@@ -179,6 +192,14 @@ def test_manifest_contract(generated):
     assert manifest["fields"]["temperature"]["unit"] == "degC"
     assert manifest["binary"]["byteLength"] == len(blob)
     assert hashlib.sha256(blob).hexdigest() == manifest["binary"]["sha256"]
+    assert {item["path"] for item in manifest["dependencies"]} == {
+        "../real/dataset.json",
+        "../real/ground.mesh.json", "../real/ground.mesh.bin",
+        "../real/buildings.mesh.json", "../real/buildings.mesh.bin",
+        "../real/field.json", "../real/field.grid.json", "../real/field.grid.f32",
+    }
+    assert all(item["byteLength"] > 0 and len(item["sha256"]) == 64
+               for item in manifest["dependencies"])
 ~~~
 
 Also assert four-byte alignment, in-range offsets, finite values, resolution cubed grid values, resolution squared slice samples, monotonic streamline offsets, and local positions inside the city frame.
@@ -204,26 +225,27 @@ lines = datasets.smoke(
 )
 ~~~
 
-Read velocity, speed, and pressure from the DTCC objects. Rebase by [origin_x, origin_y, z0]. Write arrays with type, components, offset, and length, then hash the final binary.
+Read velocity, speed, and pressure from the DTCC objects. Rebase by [origin_x, origin_y, z0]. Import pack_array_bundle from scripts/real/benchio.py and use it for type, component, offset, length, and alignment metadata. The scientific manifest owns domain meaning; benchio owns only byte layout. Hash the final binary.
 
 Do not assume VolumeMesh vertex order is grid order. Sort samples by z, then y, then x so x is fastest; assert every expected lattice coordinate occurs exactly once before writing the regular grid.
 
 - [ ] **Step 4: Record real provenance**
 
-Resolve dtcc-core through distribution direct_url.json or editable checkout HEAD. Reference ../real/field.grid.json for heat. Do not duplicate the heat binary or accept UI HTML from data.
+Resolve dtcc-core through distribution direct_url.json or editable checkout HEAD. Reference the existing city and heat files rather than copying them. Add a dependency record with path, byteLength, and SHA-256 for dataset.json, both terrain mesh files, both building mesh files, field.json, field.grid.json, and field.grid.f32. Do not accept UI HTML from data.
 
 - [ ] **Step 5: Add repeatable scripts**
 
 ~~~json
 "generate:scientific": ".venv/bin/python scripts/scientific/generate.py",
+"validate:scientific": "bun scripts/scientific/validate.ts",
 "test:scientific:python": ".venv/bin/python -m pytest scripts/scientific/tests -q"
 ~~~
 
-Run scientific generation after real generation in build. build:pages already delegates to build and must not invoke it a second time. Missing prerequisites produce an actionable non-zero exit and never skip.
+Keep generation explicit. Do not call generate:scientific from build or build:pages. Add validate:scientific before vite build so a browser-only clone verifies the committed manifest schema version, scientific binary, and every dependency byte length and SHA-256 without importing Python or dtcc-core. build:pages already delegates to build and must not validate twice.
 
 - [ ] **Step 6: Prove determinism and test**
 
-Run generation twice, record both manifest and binary SHA-256 values each time, and require exact matches. Then run bun run test:scientific:python.
+Run generation twice, record both manifest and binary SHA-256 values each time, and require exact matches. Run bun run test:scientific:python, bun test scripts/scientific/validate.test.ts, and bun run validate:scientific. The validator test includes a valid fixture plus wrong schema, wrong length, missing binary, and wrong hash cases.
 
 - [ ] **Step 7: Commit**
 
@@ -235,28 +257,27 @@ git commit -m "feat: generate shared DTCC scientific artifacts"
 ### Task 3: Load and validate artifacts in the browser
 
 **Files:**
-- Create: src/lib/scientific.ts
-- Create: tests/unit/scientific.test.ts
+- Create: src/lib/scientific-data.ts
+- Create: tests/unit/scientific-data.test.ts
 
 **Interfaces:**
-- Produces: loadScientificBundle, decodeScientificBundle, probeGridNode, sampleGridTrilinear, loadMeshPair, and objectIdForCell.
+- Produces: loadScientificBundle, decodeScientificBundle, and loadMeshPair.
 
 - [ ] **Step 1: Write failing loader tests**
 
-Cover schema version, hash/length mismatch, array overlap/range/alignment, non-finite values, components, streamline offsets, missing IDs, 5 cm alignment, boundary clamping, and fetch errors.
+Cover schema version, main and dependency hash/length mismatch, array overlap/range/alignment, non-finite values, components, streamline offsets, missing sourceIndex/dtccId values, both identity-stability verdicts, 5 cm coordinate-frame alignment, and fetch errors.
 
 ~~~typescript
-test('grid-node probes preserve float32 bits', () => {
+test('decodes building identity without collapsing its two meanings', () => {
   const fixture = scientificFixture();
   const bundle = decodeScientificBundle(fixture.manifest, fixture.blob);
-  expect(probeGridNode(bundle.smoke.grid, [1, 1, 1]))
-    .toBe(bundle.smoke.grid.speed[13]);
+  expect(bundle.city.objects.get(7)).toEqual({sourceIndex: 7, dtccId: 'building-7'});
 });
 ~~~
 
 - [ ] **Step 2: Run and confirm failure**
 
-Run: bun test tests/unit/scientific.test.ts
+Run: bun test tests/unit/scientific-data.test.ts
 
 Expected: module-not-found failure.
 
@@ -274,7 +295,12 @@ export type ScientificGrid = {
 
 export type ScientificBundle = {
   manifest: ScientificManifest;
-  city: {terrain: MeshPair; buildings: MeshPair; objectIds: Map<number, string>};
+  city: {
+    terrain: MeshPair;
+    buildings: MeshPair;
+    objects: Map<number, {sourceIndex: number; dtccId: string}>;
+    identityStability: 'stable_observed_two_loads' | 'unstable_observed';
+  };
   smoke: {grid: ScientificGrid; slice: SliceData; streamlines: StreamlineData};
   heat: {grid: ScientificGridRef};
 };
@@ -284,18 +310,18 @@ Do not import renderer libraries.
 
 - [ ] **Step 4: Implement strict loading**
 
-Validate metadata before typed-array views. Fetch via assetUrl; errors include URL and HTTP status. Verify SHA-256 through crypto.subtle.digest in the browser path.
+Validate metadata before typed-array views. Fetch every declared dependency via assetUrl; errors include URL and HTTP status. Verify the scientific binary and every dependency through crypto.subtle.digest before constructing renderer objects.
 
-- [ ] **Step 5: Implement probes and IDs**
+- [ ] **Step 5: Complete identity and coordinate decoding**
 
-Index x-fastest as x + nx * (y + ny * z). Trilinear sampling clamps at boundaries. Missing cell_object_index or object-map entries throw and never fabricate IDs.
+Build the sourceIndex-to-object map and validate every cell_object_index against it. Missing entries throw and never fabricate IDs. Validate the shared origin and artifact bounds against the 5 cm contract before returning ScientificBundle.
 
 - [ ] **Step 6: Verify and commit**
 
 ~~~bash
-bun test tests/unit/scientific.test.ts
+bun test tests/unit/scientific-data.test.ts
 bunx tsc --noEmit
-git add src/lib/scientific.ts tests/unit/scientific.test.ts
+git add src/lib/scientific-data.ts tests/unit/scientific-data.test.ts
 git commit -m "feat: validate and load scientific artifacts"
 ~~~
 
@@ -304,46 +330,64 @@ git commit -m "feat: validate and load scientific artifacts"
 **Files:**
 - Modify: src/lib/chrome.ts
 - Modify: tests/unit/chrome.test.ts
-- Modify: src/lib/scientific.ts
-- Modify: tests/unit/scientific.test.ts
+- Create: src/lib/scientific-probes.ts
+- Create: tests/unit/scientific-probes.test.ts
 
 **Interfaces:**
-- Produces: button controls, safe readouts, ScientificProbe, and FrameSampler.
+- Produces: button controls, safe readouts, ScientificProbe, and a deterministic BenchmarkDriver.
 
 - [ ] **Step 1: Write failing UI tests**
 
-Test one callback per button click and textContent-only readouts. Define:
+Test one callback per button click, textContent-only readouts, grid indexing, trilinear boundary clamping, identity lookup under both stability verdicts, alignment probes, deterministic camera interpolation, forced-frame sampling, disjoint GPU sample rejection, resource snapshots, and context loss. Define:
 
 ~~~typescript
 export type ScientificProbe = {
   renderer: 'vtkjs' | 'threejs';
+  status: 'ready' | 'context-lost' | 'failed';
   canvasCount: number;
   field: true;
   provenance: {smoke: 'synthetic'; heat: 'simulation'};
-  selectedObjectId?: string;
+  selectedObject?: {sourceIndex: number; dtccId: string; traceability: 'stable' | 'run-local'};
   selectedValue?: {field: string; value: number; unit: string; world: [number, number, number]};
-  frameTimesMs: number[];
+  benchmark?: {
+    cpuFrameTimesMs: number[];
+    gpuFrameTimesMs: number[] | null;
+    cameraPath: 'orbit-v1';
+    forcedFrames: 180;
+  };
+  resources: {
+    buffers: number;
+    textures: number;
+    renderTargets: number;
+    listeners: number;
+    observers: number;
+  };
+  measurementValid: boolean;
 };
 ~~~
 
 - [ ] **Step 2: Run and confirm failure**
 
-Run: bun test tests/unit/chrome.test.ts tests/unit/scientific.test.ts
+Run: bun test tests/unit/chrome.test.ts tests/unit/scientific-probes.test.ts
 
 - [ ] **Step 3: Implement the smallest UI extension**
 
 Add a button Control variant and return setReadout(label, value) from mountChrome. Keep camera, picking, transfer functions, and GPU code in page modules.
 
-- [ ] **Step 4: Implement identical frame sampling**
+Implement probeGridNode, sampleGridTrilinear, objectRefForCell, and alignmentDistance in scientific-probes.ts. Index x-fastest grids as x + nx * (y + ny * z). Always return sourceIndex and dtccId separately; map unstable_observed to run-local traceability and a visible warning.
 
-Ignore 30 warmup frames and retain the next 180 requestAnimationFrame deltas. Publish raw deltas; aggregate later.
+Add attachContextLoss(canvas, handlers). It prevents the default event, stops BenchmarkDriver, sets status to context-lost and measurementValid to false, invokes renderer-specific disposal, shows a visible failure, and exposes a reload button. It does not reconstruct GPU state.
+
+- [ ] **Step 4: Implement an identical forced-render benchmark**
+
+Define camera path orbit-v1 as 30 warmup frames followed by 180 measured frames around fixed target/radius/elevation values. Each page exposes window.__bench.runBenchmark(), applies the same interpolated camera pose, forces one completed render, and records CPU wall time. When EXT_disjoint_timer_query_webgl2 is available, record GPU duration separately and reject disjoint samples; otherwise publish gpuFrameTimesMs as null. Idle requestAnimationFrame callbacks never count as rendered frames.
 
 - [ ] **Step 5: Verify and commit**
 
 ~~~bash
-bun test tests/unit/chrome.test.ts tests/unit/scientific.test.ts
+bun test tests/unit/chrome.test.ts tests/unit/scientific-probes.test.ts
 bunx tsc --noEmit
-git add src/lib/chrome.ts src/lib/scientific.ts tests/unit/chrome.test.ts tests/unit/scientific.test.ts
+git add src/lib/chrome.ts src/lib/scientific-probes.ts tests/unit/chrome.test.ts tests/unit/scientific-probes.test.ts
 git commit -m "feat: add shared scientific controls and probes"
 ~~~
 
@@ -355,12 +399,12 @@ git commit -m "feat: add shared scientific controls and probes"
 - Modify: tests/smoke.spec.ts
 
 **Interfaces:**
-- Consumes: ScientificBundle and shared controls.
+- Consumes: ScientificBundle from scientific-data.ts and controls/probes from scientific-probes.ts.
 - Produces: /13-vtkjs-scientific/ and a vtkjs ScientificProbe.
 
-- [ ] **Step 1: Register a failing smoke test**
+- [ ] **Step 1: Add a combined-page mode and register a failing smoke test**
 
-Add the page to PAGES and FIELD_PAGES. Assert renderer vtkjs, one canvas, both provenance categories, a non-empty selected ID, and an m/s selected value.
+Extend PageSpec with mode?: 'matrix' | 'combined', defaulting to matrix. Keep the current synthetic/real loop for matrix entries and run combined entries once without a dataset query. Add this page with mode combined; do not add it to FIELD_PAGES. Assert renderer vtkjs, one canvas, both provenance categories, non-empty selectedObject.sourceIndex/dtccId values with the expected traceability label, and an m/s selected value.
 
 - [ ] **Step 2: Confirm missing-page failure**
 
@@ -386,11 +430,11 @@ Use vtkImageMapper/vtkImageSlice for the z slice, vtkVolumeMapper for volume, an
 
 - [ ] **Step 4: Add interaction and readback**
 
-Use vtk cell picking and resolve cells through cell_object_index. Sample fields through the shared trilinear function. Add slice, color range, opacity, streamlines, camera reset, and data-case controls.
+Use vtk cell picking and resolve cells through cell_object_index. Sample fields through the shared trilinear function. Add slice, color range, opacity, streamlines, camera reset, and data-case controls. Resize the render window and camera through one ResizeObserver tied to canvasHost; dispose the observer with the renderer.
 
 - [ ] **Step 5: Expose probes and visible errors**
 
-Record one fixed pick, node/interpolated probes, alignment landmarks, APIs, frame samples, and canvas count. Route failures through reportFailure.
+Record one fixed pick, node/interpolated probes, alignment landmarks, APIs, frame samples, status, measurementValid, and canvas count. Route startup failures through reportFailure. Attach context-loss handling to the drawing canvas and dispose vtk render-window/session resources on loss.
 
 - [ ] **Step 6: Verify and commit**
 
@@ -411,12 +455,12 @@ git commit -m "feat: add vtk.js scientific reference scene"
 - Modify: tests/smoke.spec.ts
 
 **Interfaces:**
-- Consumes: the same bundle, controls, cameras, probes, and gates as Task 5.
+- Consumes: ScientificBundle from scientific-data.ts; slice, color-range, opacity, streamline, camera-reset, and data-case controls from scientific-probes.ts; the fixed camera and numeric/alignment probe coordinates declared by the approved spec.
 - Produces: /14-threejs-scientific/ and a threejs ScientificProbe.
 
 - [ ] **Step 1: Register failing parity checks**
 
-Use the Task 5 assertions with renderer threejs and require exactly one canvas.
+Add 14-threejs-scientific to PAGES with mode combined and no FIELD_PAGES membership. Assert renderer threejs, canvasCount 1, provenance {smoke: synthetic, heat: simulation}, a selected object containing separate sourceIndex and dtccId fields with the expected traceability label, and a selected speed value whose unit is m/s.
 
 - [ ] **Step 2: Confirm missing-page failure**
 
@@ -424,7 +468,9 @@ Run: bun run build && bunx playwright test tests/smoke.spec.ts --grep "14-threej
 
 - [ ] **Step 3: Build one Three.js scene**
 
-Use one WebGLRenderer, PerspectiveCamera, and OrbitControls. Convert neutral city arrays to BufferGeometry and retain triangle-to-building lookup. Use Data3DTexture. The installed public addon three/addons/shaders/VolumeShader.js is a measured starting point, but it only supplies maximum-intensity and isosurface modes; it does not satisfy transparent front-to-back compositing. Write the smallest compositing shader needed for the gate and count every retained or changed GLSL line against Three.js.
+Use one WebGLRenderer, PerspectiveCamera, and OrbitControls. Convert neutral city arrays to BufferGeometry and retain the triangle-to-building lookup. Use Data3DTexture. The installed public addon three/addons/shaders/VolumeShader.js is a measured starting point, but it only supplies maximum-intensity and isosurface modes; it does not satisfy transparent front-to-back compositing. Write the smallest correct front-to-back compositor and count every retained or changed GLSL line against Three.js.
+
+Render terrain and buildings into an opaque depth texture before the volume pass. Reconstruct the opaque world/view distance in the volume shader and stop ray accumulation at that distance. Keep both passes inside the same WebGLRenderer and canvas. Use one ResizeObserver to update renderer size, camera aspect/projection, device-pixel ratio, and depth-target dimensions from the same CSS size; dispose the observer and target with the renderer.
 
 Render the slice as a DataTexture plane and Core-precomputed streamlines as lines/tubes. Do not integrate streamlines in-browser.
 
@@ -434,7 +480,7 @@ Use Raycaster.faceIndex for canonical building selection. Sample values through 
 
 - [ ] **Step 5: Expose equivalent probes**
 
-Use identical probe positions, camera, warmup/sample windows, provenance, and alignment landmarks.
+Use identical probe positions, camera, warmup/sample windows, provenance, alignment landmarks, status, and measurementValid. Attach context-loss handling and dispose geometries, materials, textures, depth target, controls, and renderer resources on loss.
 
 - [ ] **Step 6: Verify and commit**
 
@@ -464,13 +510,15 @@ git commit -m "feat: add Three.js scientific comparison scene"
 expect(vtk.fixedGridNode.bits).toBe(three.fixedGridNode.bits);
 expect(Math.abs(vtk.interpolated.value - three.interpolated.value))
   .toBeLessThanOrEqual(1e-5 * Math.max(vtk.fieldSpan, 1));
-expect(vtk.selectedObjectId).toBe(three.selectedObjectId);
+expect(vtk.selectedObject).toEqual(three.selectedObject);
 expect(distance(vtk.alignment.world, three.alignment.world)).toBeLessThanOrEqual(0.05);
 expect(vtk.canvasCount).toBe(1);
 expect(three.canvasCount).toBe(1);
 ~~~
 
-Also test all controls, provenance labels, corrupt/missing data errors, and real heat.
+Also test all controls, provenance labels, corrupt/missing data errors, real heat, and a fixed ray where the volume lies partly behind a building. That ray must accumulate only samples in front of the opaque depth. Force WebGL loss through WEBGL_lose_context in Chromium, with a synthetic webglcontextlost event fallback for browsers without the extension; both pages must show reload, set status context-lost, stop sampling, and set measurementValid false. Run the flow at DPR 1 and DPR 2, resize from 1280x800 to 1600x900 after ready, and assert drawing-buffer dimensions, camera projection, depth-target dimensions, IDs, and numeric probes remain correct.
+
+Run 100 deterministic cycles of slice position, color range, volume opacity, streamline visibility, data-case switching, and alternating viewport sizes. Compare renderer-owned resource counters before and after the first warm cycle; cycles 2-100 must not increase buffers, textures, render targets, listeners, or observers. Record Chromium heap data when available, but never fail another browser for exposing no heap API.
 
 - [ ] **Step 2: Run Chromium and observe failures**
 
@@ -482,11 +530,11 @@ Normalize cameras, controls, fixed probes, errors, and probe output. Do not tune
 
 - [ ] **Step 4: Add occlusion evidence**
 
-Capture fixed outside and behind-building views. Keep screenshots in ignored screens/. Assert targeted depth behavior rather than committing regenerated images.
+Capture fixed outside and behind-building views. Keep screenshots in ignored screens/. Assert the Three.js depth-prepass texture is active and compare the known behind-building pixel/probe with vtk.js; do not rely on screenshots alone or commit regenerated images.
 
 - [ ] **Step 5: Run browser matrix**
 
-Add chromium, firefox, and webkit projects when absent. Run the scientific suite in all three and the full smoke suite once.
+Add chromium, firefox, and webkit projects when absent. Run the scientific suite in all three at DPR 1, then run its resize/DPR case at DPR 2. Run the full smoke suite once. Tablet, mobile, and touch layouts remain outside scope.
 
 - [ ] **Step 6: Run complete regression**
 
@@ -508,25 +556,25 @@ git commit -m "test: compare scientific renderers end to end"
 
 **Files:**
 - Create: scripts/measure-scientific.mjs
-- Modify: tests/unit/scientific.test.ts
+- Modify: tests/unit/scientific-probes.test.ts
 - Modify: package.json
 - Create: docs/scientific-visualization-measurements.md
 
 **Interfaces:**
-- Consumes: built pages and raw frameTimesMs.
+- Consumes: built pages and BenchmarkDriver CPU/GPU samples.
 - Produces: machine-readable JSON plus the measurement table.
 
 - [ ] **Step 1: Write aggregation tests**
 
-Feed known frame times and assert warmup exclusion, p50, p95, minimum FPS, and classifications below 20, 20-30, and at least 30 FPS.
+Feed known CPU and GPU times and assert warmup exclusion, disjoint rejection, p50, p95, minimum FPS, null GPU fallback, and classifications below 20, 20-30, and at least 30 FPS.
 
 - [ ] **Step 2: Confirm missing-export failure**
 
-Run: bun test tests/unit/scientific.test.ts
+Run: bun test tests/unit/scientific-probes.test.ts
 
 - [ ] **Step 3: Implement repeatable measurement**
 
-Run three cold 1280x800 browser contexts per page. Record navigation-to-ready, 180 frame deltas, resource transfer sizes, dist bundle sizes, and performance.memory only when supported. Unsupported memory is null.
+Run three cold 1280x800, DPR 1 browser contexts per page. After ready, invoke runBenchmark() and record its 180 forced-render CPU samples plus GPU samples when available. Also record navigation-to-ready, resource transfer sizes, dist bundle sizes, 100-cycle resource stability, and performance.memory only when supported. Unsupported GPU/memory data is null. Reject the run when status is not ready, measurementValid is false, fewer than 180 CPU samples exist, any GPU sample is disjoint, or resource counters grow after the warm cycle. Keep DPR 2 and resize checks in the correctness suite so timings remain comparable.
 
 Add: "measure:scientific": "bun run build:pages && node scripts/measure-scientific.mjs".
 
@@ -536,12 +584,12 @@ Per path count non-blank unique TypeScript, custom GLSL, data copies, adapters, 
 
 - [ ] **Step 5: Populate evidence without choosing early**
 
-Record correctness, browsers, load p50, frame p50/p95, minimum FPS, transfer/bundle size, code burden, copies, and API stability. Mark unavailable measurements.
+Record correctness, browsers, load p50, CPU frame p50/p95, GPU frame p50/p95 when available, minimum sustained FPS, transfer/bundle size, code burden, copies, and API stability. Mark unavailable measurements.
 
 - [ ] **Step 6: Commit**
 
 ~~~bash
-git add scripts/measure-scientific.mjs tests/unit/scientific.test.ts package.json docs/scientific-visualization-measurements.md
+git add scripts/measure-scientific.mjs tests/unit/scientific-probes.test.ts package.json docs/scientific-visualization-measurements.md
 git commit -m "perf: measure scientific renderer tradeoffs"
 ~~~
 
@@ -629,3 +677,128 @@ Use portless for manual development:
 ~~~bash
 portless engine-bench-scientific bun run dev --host 0.0.0.0
 ~~~
+
+## What Already Exists
+
+- scripts/real/benchio.py already implements aligned typed-array packing; Task 1 deepens and reuses it instead of creating a second packer.
+- stage1_build.py already retains surface-mesh markers long enough to map faces back to city.buildings.
+- DTCC Core already provides VolumeMesh, FieldSlice, StreamlineCollection, units, CRS metadata, and deterministic smoke generation.
+- page 11 already proves vtk.js regular-grid volume and isosurface rendering.
+- Three.js already provides Data3DTexture and a public volume-shader addon, while the review confirmed transparent depth-aware compositing still requires custom work.
+- chrome.ts already provides safe page framing and controls; the plan adds only the missing button/readout lifecycle.
+- smoke.spec.ts already health-checks all Vite entries, console errors, WebGL2, and screenshots.
+- GitHub Pages subpath support, committed real data, and the public hosted bench already work.
+
+## Test Coverage Diagram
+
+~~~text
+ARTIFACT GENERATION                                  BROWSER / USER FLOW
+[PLAN] generic aligned packer                       [PLAN] combined page health mode
+  |-- valid mixed arrays                              |-- vtk.js page loads once
+  |-- padding and offsets                             |-- Three.js page loads once
+  |-- invalid dtype / duplicate name                  '-- legacy pages keep 2-case matrix
+  '-- per-cell count mismatch
+                                                   [PLAN] trusted load boundary
+[PLAN] building identity                              |-- all dependency hashes
+  |-- stable across two loads                         |-- corrupt/missing data -> visible error
+  |-- unstable -> run-local warning                   |-- 5 cm coordinate gate
+  '-- marker -> sourceIndex -> dtccId                  '-- no fabricated identity
+
+[PLAN] smoke / heat artifacts                       [PLAN] renderer parity [E2E]
+  |-- deterministic complete lattice                  |-- one canvas each
+  |-- units / fields / provenance                     |-- same IDs and scalar values
+  |-- x-fastest ordering                              |-- controls and data cases
+  '-- complete dependency hash table                  |-- slice / lines / volume
+                                                      |-- opaque depth / occlusion
+                                                      |-- context loss -> invalid run
+                                                      |-- resize + DPR 1/2
+                                                      '-- 100-cycle resource stability
+
+                                                   [PLAN] performance
+                                                     |-- fixed orbit, forced renders
+                                                     |-- CPU and optional GPU time
+                                                     |-- disjoint samples rejected
+                                                     '-- only correctness-valid runs reported
+~~~
+
+Coverage before implementation: 0 planned paths implemented. Plan coverage: every diagram branch has an explicit unit, Python, E2E, or measurement assertion. Test-plan artifact: /Users/sarmatas/.gstack/projects/engine-bench/sarmatas-main-eng-review-test-plan-20260912-125915.md.
+
+## Failure Modes
+
+| Failure | Test | Handling | User-visible result |
+|---|---|---|---|
+| DTCC IDs change between loads | Two-load Python audit | Retain sourceIndex and mark traceability failed | Run-local warning |
+| Mixed regenerated artifacts | Hash/length fixtures and build validator | Abort before Vite build or renderer construction | Exact dependency error |
+| Incomplete smoke lattice | Python generator invariant | Abort generation | Exact missing/duplicate coordinate |
+| Renderer loses field meaning | Cross-renderer value/unit assertions | Fail correctness gate | Failed-path report |
+| Building/field misalignment | Fixed landmarks within 5 cm | Fail correctness gate | Alignment failure |
+| Three.js volume bleeds through buildings | Known ray and depth-prepass probe | Fail correctness gate | Occlusion failure |
+| WebGL context loss | Forced extension/event test | Stop benchmark, dispose, offer reload | Visible context-lost panel |
+| Resize or Retina mismatch | DPR 1/2 resize E2E | Resize all coupled resources together | Test failure before evidence |
+| Repeated controls leak resources | 100-cycle counters | Reject measurement | Resource-growth failure |
+| Unsupported browser feature | Three-browser matrix | Qualified result, no approximation | Visible unsupported state |
+| Performance run is idle or disjoint | Forced render and GPU-query checks | Reject sample/run | Measurement omitted with reason |
+
+Critical silent gaps after review: 0.
+
+## NOT in Scope
+
+- Production dtcc-twin integration; the spike returns evidence only.
+- MapLibre integration; it remains a possible discovery and region-selection surface.
+- A new canonical DTCC exchange contract; the manifest is local evidence infrastructure.
+- Real-time simulation execution or a physically validated Gothenburg wind model.
+- Mobile/touch UX and multi-tile scalability.
+- Automatic WebGL context restoration.
+- Selecting or building the full prototype before DTCC feedback.
+- VTK.wasm implementation details and teaching artifacts, which live in companion plans.
+
+## TODOS.md Updates
+
+No TODOS.md exists. All approved deferred work is captured in the two companion plans, so no additional TODO entry is proposed.
+
+## Worktree Parallelization Strategy
+
+| Step | Modules touched | Depends on |
+|---|---|---|
+| Artifact foundation | scripts/real, scripts/scientific, public/data | - |
+| Shared browser boundary | src/lib, tests/unit | Artifact foundation |
+| vtk.js path | pages/13-vtkjs-scientific, tests | Shared boundary |
+| Three.js path | pages/14-threejs-scientific, tests | Shared boundary |
+| Parity and performance | tests, scripts, docs | Both renderer paths |
+| Evidence and replies | pages/00-index, docs, root messages | Measurements + VTK.wasm companion |
+
+Lane A: artifact foundation -> shared browser boundary.
+Lane B: vtk.js path after Lane A.
+Lane C: Three.js path after Lane A, parallel with Lane B.
+Lane D: parity after B+C, then main-path measurement in parallel with the VTK.wasm companion.
+Final: merge evidence, prepare replies, then begin the teaching companion.
+
+Conflict flag: Lanes B and C both edit tests/smoke.spec.ts. Add both combined page registrations in Task 4 before branching, or coordinate that single shared-file edit explicitly.
+
+## Implementation Tasks
+
+- [ ] T1 (P1, human: ~2h / Codex: ~20m) - Plans - Keep core, VTK.wasm, and teaching completion states separate.
+- [ ] T2 (P1, human: ~1h / Codex: ~15m) - Build - Make scientific regeneration explicit and validate committed artifacts during normal builds.
+- [ ] T3 (P1, human: ~2h / Codex: ~20m) - Identity - Audit DTCC IDs across two loads and preserve sourceIndex separately.
+- [ ] T4 (P1, human: ~2h / Codex: ~20m) - Provenance - Hash every referenced city and heat dependency.
+- [ ] T5 (P1, human: ~2-4d / Codex: ~2-4h) - Three.js - Terminate volume rays at opaque city depth.
+- [ ] T6 (P2, human: ~1h / Codex: ~15m) - Shared code - Split artifact loading from probes and measurement.
+- [ ] T7 (P2, human: ~2h / Codex: ~20m) - Serialization - Reuse one generic aligned-array packer.
+- [ ] T8 (P1, human: ~2h / Codex: ~20m) - Tests - Add combined-page mode to the smoke matrix.
+- [ ] T9 (P1, human: ~0.5d / Codex: ~30m) - Runtime - Handle WebGL context loss visibly and invalidate measurements.
+- [ ] T10 (P1, human: ~1d / Codex: ~1h) - Rendering - Verify desktop resize and DPR 1/2.
+- [ ] T11 (P1, human: ~1-2d / Codex: ~1-2h) - Performance - Force identical camera/render work and verify 100-cycle resource stability.
+
+## GSTACK REVIEW REPORT
+
+| Review | Trigger | Why | Runs | Status | Findings |
+|--------|---------|-----|------|--------|----------|
+| CEO Review | /plan-ceo-review | Scope and strategy | 0 | - | Not run |
+| Codex Review | /codex review | Independent second opinion | 0 | - | Not run |
+| Eng Review | /plan-eng-review | Architecture and tests | 1 | CLEAR | 11 issues resolved, 0 critical gaps |
+| Design Review | /plan-design-review | UI and UX gaps | 0 | - | Not run |
+| DX Review | /plan-devex-review | Developer experience gaps | 0 | - | Not run |
+
+**VERDICT:** ENG CLEARED for implementation planning; external posts remain approval-gated.
+
+NO UNRESOLVED DECISIONS
