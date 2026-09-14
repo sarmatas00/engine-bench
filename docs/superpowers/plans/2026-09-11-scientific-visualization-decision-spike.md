@@ -6,7 +6,7 @@
 
 **Architecture:** DTCC Core generates canonical smoke, slice, streamline, and provenance data over the existing Gothenburg bounds. A shared browser loader validates neutral arrays and metadata, then independent vtk.js and Three.js pages render the same artifacts in one scene each. Automated probes compare IDs, values, alignment, depth, interaction, browser behavior, performance, and custom-code burden.
 
-**Tech Stack:** Python 3.11, dtcc-core 5cf56fa baseline, NumPy, Bun, TypeScript 5.9.2, Vite 8.2.2, Three.js 0.185.1, vtk.js 36.12.1, Playwright 1.63.0.
+**Tech Stack:** Python 3.11, dtcc-core 4c8d621 (runtime 5ca2ca4, post-#85; was 5cf56fa), dtcc-sim e24a1f2, NumPy, Bun, TypeScript 5.9.2, Vite 8.2.2, Three.js 0.185.1, vtk.js 36.12.1, Playwright 1.63.0.
 
 **Spec:** docs/superpowers/specs/2026-09-11-scientific-visualization-decision-spike-design.md
 
@@ -26,6 +26,9 @@
 - VTK.wasm is governed by its companion plan and stays outside the main dependency graph.
 - Do not request more data from Anders until measurements identify a precise missing case.
 - No full prototype begins before measurements and DTCC feedback are reviewed.
+- Revised 2026-09-14 after dtcc-core#85 closed: regenerate on published develop, Core 4c8d621 natively (editable checkout) and dtcc-sim e24a1f2 in the container, which pins Core runtime 5ca2ca4. 5ca2ca4..4c8d621 is docs-only, so both sides run identical Core code. Do not float to later develop commits without a recorded diff.
+- Take field association (vertex, cell, ...) from Core's Field.association; never assert it in the manifest independently.
+- FieldSlice and StreamlineCollection are explicitly unsupported by Core native exchange (docs/design/model-inventory.md). The local manifest must carry their full context (slice axis/position, seeds, integration parameters, time, domain, metadata), not only arrays.
 
 ---
 
@@ -77,6 +80,10 @@
 **Interfaces:**
 - Consumes: surface face markers where marker >= 0 means city.buildings[marker].
 - Produces: cell_object_index: Uint32Array and objects: Array<{sourceIndex:number,dtccId:string}>, plus an observed two-load stability verdict.
+
+- [ ] **Step 0: Upgrade to post-#85 Core and Sim**
+
+Before any code change, snapshot the committed pre-upgrade metrics (bounds, mesh counts, relief, field ranges, stage2.roundtrip) from public/data/real/dataset.json. In ../dtcc-core, confirm only untracked files are present, then `git checkout 4c8d621` and reinstall the editable package into engine-bench/.venv (scikit-build-core rebuilds the C++ extension). In ../dtcc-sim, check out e24a1f2 and rebuild with `DOCKER_PLATFORM=linux/amd64 docker compose build dtcc-sim`. Verify benchio.distribution_revision reports 4c8d621 natively and 5ca2ca4 in the container. Stage 2 still round-trips through heat.xdmf, which Core retains; legacy .pb is gone and must not be reintroduced.
 
 - [ ] **Step 1: Write the failing per-cell round-trip test**
 
@@ -154,7 +161,7 @@ Expected: one source index per building triangle, one non-empty unique DTCC ID p
 
 - [ ] **Step 6: Check drift**
 
-Compare bounds, mesh counts, relief, field ranges, and the stage-2 round-trip record with the prior commit. Generation timestamps may change. ID drift must match unstable_observed and remain visible; unexplained scientific or geometry changes stop the task.
+Compare bounds, mesh counts, relief, field ranges, and the stage-2 round-trip record with the Step 0 snapshot. Generation timestamps and Core/Sim revisions change by design. Record any Core-upgrade drift in NOTES.md with both revisions, because the posted dtcc-twin#1 and dtcc-core#85 comments quote pre-upgrade numbers. ID drift must match unstable_observed and remain visible; unexplained scientific or geometry changes stop the task.
 
 - [ ] **Step 7: Commit**
 
@@ -225,7 +232,7 @@ lines = datasets.smoke(
 )
 ~~~
 
-Read velocity, speed, and pressure from the DTCC objects. Rebase by [origin_x, origin_y, z0]. Import pack_array_bundle from scripts/real/benchio.py and use it for type, component, offset, length, and alignment metadata. The scientific manifest owns domain meaning; benchio owns only byte layout. Hash the final binary.
+Read velocity, speed, and pressure from the DTCC objects, including each Field's unit and association (Core 4c8d621 sets association="vertex"; fail generation if it is empty). Record the slice and streamline context Core exposes (axis, position, seeds, count, steps, step size, time, period, domain, metadata) in the manifest beside their arrays. Rebase by [origin_x, origin_y, z0]. Import pack_array_bundle from scripts/real/benchio.py and use it for type, component, offset, length, and alignment metadata. The scientific manifest owns domain meaning; benchio owns only byte layout. Hash the final binary.
 
 Do not assume VolumeMesh vertex order is grid order. Sort samples by z, then y, then x so x is fastest; assert every expected lattice coordinate occurs exactly once before writing the regular grid.
 
@@ -658,7 +665,7 @@ git commit -m "docs: publish scientific renderer evidence"
 | 8 | 7 | Measure only after correctness |
 | 9 | 7-8 plus VTK.wasm companion outcome | Report verified results only |
 
-Tasks 5 and 6 can run in parallel worktrees after Task 4. The VTK.wasm companion can run after Task 3 while Tasks 5-8 proceed. All other core tasks are sequential because they define or consume the same contracts. The teaching companion begins after Task 9 produces final evidence and reply drafts.
+Tasks 5 and 6 can run in parallel worktrees after Task 4. The VTK.wasm companion can run after Task 3 while Tasks 5-8 proceed. All other core tasks are sequential because they define or consume the same contracts. Revised 2026-09-14: the teaching companion runs all four lessons before Task 1; lesson 4 is revised after Task 9 produces final evidence and reply drafts.
 
 ## Full Verification
 
@@ -682,7 +689,7 @@ portless engine-bench-scientific bun run dev --host 0.0.0.0
 
 - scripts/real/benchio.py already implements aligned typed-array packing; Task 1 deepens and reuses it instead of creating a second packer.
 - stage1_build.py already retains surface-mesh markers long enough to map faces back to city.buildings.
-- DTCC Core already provides VolumeMesh, FieldSlice, StreamlineCollection, units, CRS metadata, and deterministic smoke generation.
+- DTCC Core already provides VolumeMesh, FieldSlice, StreamlineCollection, units, explicit field association, CRS metadata, and deterministic smoke generation. After #85, VolumeMesh round-trips natively as `.dtcc` (float64 typed arrays); FieldSlice and StreamlineCollection are Python objects only and fail native serialization by design.
 - page 11 already proves vtk.js regular-grid volume and isosurface rendering.
 - Three.js already provides Data3DTexture and a public volume-shader addon, while the review confirmed transparent depth-aware compositing still requires custom work.
 - chrome.ts already provides safe page framing and controls; the plan adds only the missing button/readout lifecycle.
@@ -745,7 +752,7 @@ Critical silent gaps after review: 0.
 
 - Production dtcc-twin integration; the spike returns evidence only.
 - MapLibre integration; it remains a possible discovery and region-selection surface.
-- A new canonical DTCC exchange contract; the manifest is local evidence infrastructure.
+- A new canonical DTCC exchange contract; the manifest is local evidence infrastructure. Core now owns that contract (`DTCC.ModelFile` v6, LinkML 0.9.0); browser decoding of `.dtcc` is Core's unpublished follow-up F3, not this spike.
 - Real-time simulation execution or a physically validated Gothenburg wind model.
 - Mobile/touch UX and multi-tile scalability.
 - Automatic WebGL context restoration.
@@ -771,7 +778,7 @@ Lane A: artifact foundation -> shared browser boundary.
 Lane B: vtk.js path after Lane A.
 Lane C: Three.js path after Lane A, parallel with Lane B.
 Lane D: parity after B+C, then main-path measurement in parallel with the VTK.wasm companion.
-Final: merge evidence, prepare replies, then begin the teaching companion.
+Final: merge evidence, prepare replies, then revise teaching lesson 4 with measured numbers.
 
 Conflict flag: Lanes B and C both edit tests/smoke.spec.ts. Add both combined page registrations in Task 4 before branching, or coordinate that single shared-file edit explicitly.
 

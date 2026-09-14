@@ -12,7 +12,8 @@
 
 ## Global Constraints
 
-- Begin only after the core decision spike produces verified evidence and reply drafts.
+- Revised 2026-09-14: all four lessons run before spike implementation, so Spyros can discuss the assignment, the dtcc-core#85 model overhaul, and the spike design first. Lesson 4 teaches the talk track with explicit "pending measurement" slots; revise lesson 4 and the claim-to-evidence table once the core spike produces verified evidence and reply drafts.
+- Include dtcc-core#85 closeout (Core 4c8d621): native `.dtcc` ModelFile v6, LinkML schema 0.9.0, float64 typed arrays, explicit field association, FieldSlice/StreamlineCollection explicitly unsupported, follow-up drafts F1-F4 unpublished.
 - Follow /Users/sarmatas/.agents/skills/teach/SKILL.md and its format references.
 - Keep lessons short and focused on one meeting capability each.
 - Use high-trust primary sources and cite claims in every lesson.
