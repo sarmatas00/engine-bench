@@ -665,7 +665,7 @@ git commit -m "docs: publish scientific renderer evidence"
 | 8 | 7 | Measure only after correctness |
 | 9 | 7-8 plus VTK.wasm companion outcome | Report verified results only |
 
-Tasks 5 and 6 can run in parallel worktrees after Task 4. The VTK.wasm companion can run after Task 3 while Tasks 5-8 proceed. All other core tasks are sequential because they define or consume the same contracts. Revised 2026-09-14: the teaching companion runs all four lessons before Task 1; lesson 4 is revised after Task 9 produces final evidence and reply drafts.
+Tasks 5 and 6 can run in parallel worktrees after Task 4. The VTK.wasm companion can run after Task 3 while Tasks 5-8 proceed. All other core tasks are sequential because they define or consume the same contracts. Revised 2026-09-14: the teaching companion runs its full twelve-lesson platform and 3D course before Task 1; lesson 12 is revised after Task 9 produces final evidence and reply drafts.
 
 ## Full Verification
 
@@ -778,7 +778,7 @@ Lane A: artifact foundation -> shared browser boundary.
 Lane B: vtk.js path after Lane A.
 Lane C: Three.js path after Lane A, parallel with Lane B.
 Lane D: parity after B+C, then main-path measurement in parallel with the VTK.wasm companion.
-Final: merge evidence, prepare replies, then revise teaching lesson 4 with measured numbers.
+Final: merge evidence, prepare replies, then revise teaching lesson 12 with measured numbers.
 
 Conflict flag: Lanes B and C both edit tests/smoke.spec.ts. Add both combined page registrations in Task 4 before branching, or coordinate that single shared-file edit explicitly.
 
