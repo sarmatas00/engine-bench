@@ -12,14 +12,14 @@
 
 ## Global Constraints
 
-- Revised 2026-09-14: the full twelve-lesson course runs before spike implementation (Task 1). Lesson 12 teaches the talk track with explicit "pending measurement" slots; revise lesson 12 and the claim-to-evidence table once the core spike produces verified evidence and reply drafts.
+- Revised 2026-09-15: all twelve lessons are prepared up front and studied asynchronously alongside spike implementation; progress is self-recorded in PROGRESS.md and reviewed on request. Lesson 12 teaches the talk track with explicit "pending measurement" slots; revise lesson 12 and the claim-to-evidence table once the core spike produces verified evidence and reply drafts.
 - Follow /Users/sarmatas/.agents/skills/teach/SKILL.md and its format references (MISSION, RESOURCES, LEARNING-RECORD, GLOSSARY).
 - Keep each lesson short and focused on one capability with one tangible win.
 - Ground every claim in the local repository source, repository docs, or high-trust primary sources, and cite it in the lesson. Never teach DTCC internals from parametric knowledge; read the code first.
 - Build storage strength through recall, spacing, and interleaving; later lessons open with retrieval questions from earlier ones.
 - Quiz options must have equal word counts and, where practical, equal character counts.
 - Do not mark a learning record complete until the user attempts its exercise. Adapt later lessons to observed gaps.
-- Store teaching artifacts at /Users/sarmatas/Projects/dtcc, outside all DTCC git clones.
+- Store teaching artifacts at /Users/sarmatas/Projects/dtcc/learning, outside all DTCC git clones.
 - Exercises are read-only against shared state: never write into engine-bench/public/data, never run stage1_build.py or stage2_sim.sh against committed outputs, never change branches or revisions in the DTCC clones. Use a scratch directory and existing artifacts (heat.xdmf, field and mesh JSON/binaries) instead of rerunning the solver.
 - The local .venv runs pre-#85 Core 5cf56fa until spike Task 1 Step 0. Teach post-#85 facts from Core 4c8d621 via `git show 4c8d621:<path>` and label which revision each exercise runs against.
 - Include dtcc-core#85 closeout (Core 4c8d621): native `.dtcc` ModelFile v6, LinkML schema 0.9.0, float64 typed arrays, explicit field association, FieldSlice/StreamlineCollection explicitly unsupported, follow-up drafts F1-F4 unpublished.
@@ -162,7 +162,7 @@ Open each lesson and reference document, verify navigation, typography, printing
 
 - [ ] **Step 2: Deliver lessons in order**
 
-Open lesson 1 for the user. Deliver the next lesson only after the user attempts the current exercise; spread lessons across sessions where possible for spacing.
+All lessons are available from learning/index.html. The learner self-paces, one lesson per sitting, and records attempts in PROGRESS.md; review and adapt remaining lessons when asked.
 
 - [ ] **Step 3: Give immediate feedback**
 

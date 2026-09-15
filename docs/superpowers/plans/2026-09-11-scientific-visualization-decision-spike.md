@@ -665,7 +665,7 @@ git commit -m "docs: publish scientific renderer evidence"
 | 8 | 7 | Measure only after correctness |
 | 9 | 7-8 plus VTK.wasm companion outcome | Report verified results only |
 
-Tasks 5 and 6 can run in parallel worktrees after Task 4. The VTK.wasm companion can run after Task 3 while Tasks 5-8 proceed. All other core tasks are sequential because they define or consume the same contracts. Revised 2026-09-14: the teaching companion runs its full twelve-lesson platform and 3D course before Task 1; lesson 12 is revised after Task 9 produces final evidence and reply drafts.
+Tasks 5 and 6 can run in parallel worktrees after Task 4. The VTK.wasm companion can run after Task 3 while Tasks 5-8 proceed. All other core tasks are sequential because they define or consume the same contracts. Revised 2026-09-15: the teaching companion is prepared up front and studied asynchronously alongside Tasks 1-9; lesson 12 is revised after Task 9 produces final evidence and reply drafts.
 
 ## Full Verification
 
