@@ -94,6 +94,50 @@ def test_flatten_buildings_lands_every_separate_building_on_zero():
     assert np.allclose(flat["positions"][:, 2], 0.0)
 
 
+def test_building_height_resolves_the_pair_the_way_core_does():
+    """At dtcc-core 4c8d621 `Building.height` is an alias for `measured_height`.
+
+    This pipeline's heights are computed from the point cloud, and Core stores
+    those as `estimated_height`, so `building.height` is None for a downloaded
+    tile and the old `float(building.height)` raises. Core resolves the pair in
+    builder/model_conversion.py as "the estimate wins, the measurement is the
+    fallback", and the extruded mesh is built from the estimate -- so the
+    footprint height has to agree with the geometry beside it.
+    """
+    from dtcc_core.model import Building
+
+    assert stage1_build.building_height(
+        Building(id="b", attributes={"estimated_height": 8.0})) == 8.0
+    assert stage1_build.building_height(
+        Building(id="b", attributes={"measured_height": 12.5})) == 12.5
+    both = Building(id="b", attributes={"estimated_height": 8.0, "measured_height": 12.5})
+    assert stage1_build.building_height(both) == 8.0
+    assert stage1_build.building_height(Building(id="b")) is None
+
+
+def test_submesh_returns_the_selected_face_values_in_triangle_order():
+    """The face values have to line up with the compacted triangles one for one.
+
+    `submesh` reorders nothing, so selecting the marker array with the same mask
+    that selected the faces is what makes triangle k of the output describe the
+    same source object as marker k. A reordering here would silently attribute
+    every triangle to the wrong building.
+    """
+    mesh = two_block_mesh()
+    _, buildings = stage1_build.split_surface_mesh(mesh)
+    markers = np.asarray(mesh.markers).reshape(-1)
+    sub = stage1_build.submesh(mesh, buildings, origin=[0.0, 0.0], z0=90.0,
+                               face_values=markers)
+    assert sub["face_values"].tolist() == [0, 0, 1, 1]
+    assert len(sub["face_values"]) == len(sub["indices"])
+
+
+def test_submesh_omits_face_values_when_none_are_asked_for():
+    mesh = two_block_mesh()
+    ground, _ = stage1_build.split_surface_mesh(mesh)
+    assert "face_values" not in stage1_build.submesh(mesh, ground, origin=[0.0, 0.0], z0=90.0)
+
+
 def test_submesh_computes_area_weighted_vertex_normals():
     v = np.array([[0.0, 0, 0], [1, 0, 0], [0, 1, 0]])
     mesh = Mesh(vertices=v, faces=np.array([[0, 1, 2]]), markers=np.array([-2]))

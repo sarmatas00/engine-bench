@@ -150,9 +150,16 @@ def split_surface_mesh(mesh):
     return ~buildings, buildings
 
 
-def submesh(mesh, face_mask, origin, z0) -> dict:
-    """Compact the masked faces into a standalone mesh in the local frame."""
-    faces = np.asarray(mesh.faces)[np.asarray(face_mask)]
+def submesh(mesh, face_mask, origin, z0, face_values=None) -> dict:
+    """Compact the masked faces into a standalone mesh in the local frame.
+
+    face_values: one value per face of the *source* mesh. The very same mask that
+    selects the faces selects these, and nothing downstream reorders either, so
+    output triangle k keeps the value of the source face it came from. That
+    correspondence is the whole basis for attributing a triangle to an object.
+    """
+    face_mask = np.asarray(face_mask)
+    faces = np.asarray(mesh.faces)[face_mask]
     used = np.unique(faces)
     remap = np.full(len(mesh.vertices), -1, dtype=np.int64)
     remap[used] = np.arange(len(used))
@@ -172,7 +179,15 @@ def submesh(mesh, face_mask, origin, z0) -> dict:
     lengths = np.linalg.norm(normals, axis=1)
     lengths[lengths == 0] = 1.0
     normals /= lengths[:, None]
-    return {"positions": positions, "normals": normals, "indices": indices}
+
+    out = {"positions": positions, "normals": normals, "indices": indices}
+    if face_values is not None:
+        values = np.asarray(face_values).reshape(-1)
+        if values.size != len(mesh.faces):
+            raise ValueError(f"face_values has {values.size} values "
+                             f"for {len(mesh.faces)} source faces")
+        out["face_values"] = values[face_mask]
+    return out
 
 
 def flatten_buildings(sub) -> dict:
@@ -206,6 +221,26 @@ def flatten_buildings(sub) -> dict:
     return {"positions": positions, "normals": sub["normals"], "indices": indices}
 
 
+def building_height(building):
+    """The height dtcc-core itself would use for a building, or None.
+
+    At dtcc-core 4c8d621 (post-#85) `Building.height` became an alias for
+    `measured_height`, which is only set when the *source data* carried a
+    measurement. The height this pipeline computes from the point cloud
+    (`compute_building_heights`) is stored as `estimated_height`, so on a
+    downloaded tile `building.height` is None and the previous
+    `float(building.height)` raises a TypeError.
+
+    Core resolves the pair itself in builder/model_conversion.py, and this
+    follows that rule exactly rather than inventing a second one: the estimate
+    wins when present, the measurement is the fallback. That is also the value
+    the surface mesh beside these footprints was extruded from.
+    """
+    height = (building.measured_height if building.estimated_height is None
+              else building.estimated_height)
+    return None if height is None else float(height)
+
+
 def footprints_geojson(city, crs) -> dict:
     """LOD0 footprints in lon/lat with a `height` property, for page 01."""
     from pyproj import Transformer
@@ -218,11 +253,19 @@ def footprints_geojson(city, crs) -> dict:
         polygon = footprint.to_polygon(simplify=0.0)
         if polygon.is_empty:
             continue
+        height = building_height(building)
+        if height is None:
+            # Spec section 9: fail loudly. Page 01 extrudes by this value, and there is
+            # no honest substitute for a height the source never supplied.
+            raise RuntimeError(
+                f"building {building.id} has neither an estimated_height nor a "
+                f"measured_height; page 01 extrudes footprints by this value"
+            )
         ring = list(polygon.exterior.coords)
         lons, lats = tf.transform([c[0] for c in ring], [c[1] for c in ring])
         features.append({
             "type": "Feature",
-            "properties": {"height": float(building.height)},
+            "properties": {"height": height},
             "geometry": {"type": "Polygon", "coordinates": [[[lon, lat] for lon, lat in zip(lons, lats)]]},
         })
     return {"type": "FeatureCollection", "features": features}

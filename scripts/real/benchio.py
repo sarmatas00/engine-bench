@@ -7,7 +7,9 @@ definition of the file formats.
 
 from __future__ import annotations
 
+import hashlib
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
@@ -19,6 +21,10 @@ TERRAIN_RGB_SCALE = 0.1
 
 _NP_DTYPES = {"f32": np.float32, "u32": np.uint32, "u8": np.uint8}
 _ITEM_SIZE = {"f32": 4, "u32": 4, "u8": 1}
+
+# The keys write_mesh_pair owns. Caller metadata is merged into the same json object,
+# so these have to stay off limits or a caller could redescribe the binary layout.
+_RESERVED_METADATA_KEYS = ("bin", "vertexCount", "indexCount", "byteLength", "arrays")
 
 
 def encode_terrain_rgb(heights: np.ndarray) -> np.ndarray:
@@ -53,14 +59,48 @@ def basemap_rgb(heights: np.ndarray) -> np.ndarray:
     return np.clip(rgb, 0, 255).astype(np.uint8)
 
 
-def write_mesh_pair(out_dir, name: str, *, positions, normals, indices, extra=None) -> dict:
+def pack_array_bundle(arrays: list[tuple[str, np.ndarray, str, int]]) -> tuple[bytes, list[dict]]:
+    """Return a four-byte-aligned blob and its typed array specifications.
+
+    arrays: [(name, values, 'f32'|'u32'|'u8', components)], packed in declaration
+    order. Every offset and the total length are padded to a multiple of 4 so a
+    Uint32Array view over the buffer is always legal on the JS side.
+
+    This is the one place that decides byte layout. Everything about the on-disk
+    encoding -- type conversion, padding, offsets, duplicate names, which types
+    exist -- lives here so a second writer cannot drift from the first.
+    """
+    blob = bytearray()
+    specs = []
+    seen = set()
+    for name, values, kind, components in arrays:
+        if kind not in _NP_DTYPES:
+            raise ValueError(f"{name}: unsupported array type {kind!r}, "
+                             f"expected one of {sorted(_NP_DTYPES)}")
+        if name in seen:
+            raise ValueError(f"{name}: duplicate array name")
+        seen.add(name)
+        values = np.ascontiguousarray(values, dtype=_NP_DTYPES[kind]).reshape(-1)
+        while len(blob) % 4:
+            blob.append(0)
+        specs.append({"name": name, "type": kind, "components": int(components),
+                      "offset": len(blob), "length": int(values.size)})
+        blob += values.tobytes()
+    while len(blob) % 4:
+        blob.append(0)
+    return bytes(blob), specs
+
+
+def write_mesh_pair(out_dir, name: str, *, positions, normals, indices,
+                    extra=None, cell_extra=None, metadata=None) -> dict:
     """Write <name>.mesh.json + <name>.mesh.bin and return the json dict.
 
     positions/normals: (N, 3) float. indices: (M, 3) or (M*3,) integer.
-    extra: {array_name: (values, 'f32'|'u8', components)}, one value per vertex.
-    Arrays are concatenated in declaration order; every offset is 4-byte aligned
-    and the total length is padded to a multiple of 4 so a Uint32Array view over
-    the buffer is always legal on the JS side.
+    extra: {array_name: (values, 'f32'|'u32'|'u8', components)}, one value per vertex.
+    cell_extra: the same, but one value per *triangle* -- this is how a per-face
+    property such as which object a triangle belongs to survives to the browser.
+    metadata: extra top-level json keys (e.g. the object table the cell indices
+    point into). Byte layout is delegated entirely to pack_array_bundle.
     """
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -74,29 +114,31 @@ def write_mesh_pair(out_dir, name: str, *, positions, normals, indices, extra=No
         raise ValueError(f"{name}: index count {indices.size} is not a multiple of 3")
     if indices.size and int(indices.max()) >= len(positions):
         raise ValueError(f"{name}: index {int(indices.max())} out of range for {len(positions)} vertices")
+    triangles = indices.size // 3
 
     planned = [("positions", positions, "f32", 3), ("normals", normals, "f32", 3),
                ("indices", indices, "u32", 1)]
     for key, (values, kind, components) in (extra or {}).items():
-        values = np.ascontiguousarray(values, dtype=_NP_DTYPES[kind]).reshape(-1)
-        if values.size != len(positions) * components:
-            raise ValueError(f"{name}.{key}: {values.size} values for {len(positions)} vertices x {components}")
+        size = np.asarray(values).size
+        if size != len(positions) * components:
+            raise ValueError(f"{name}.{key}: {size} values for {len(positions)} vertices x {components}")
+        planned.append((key, values, kind, components))
+    for key, (values, kind, components) in (cell_extra or {}).items():
+        size = np.asarray(values).size
+        if size != triangles * components:
+            raise ValueError(f"{name}.{key}: {size} values for {triangles} triangles x {components}")
         planned.append((key, values, kind, components))
 
-    blob = bytearray()
-    arrays = []
-    for key, values, kind, components in planned:
-        while len(blob) % 4:
-            blob.append(0)
-        arrays.append({"name": key, "type": kind, "components": components,
-                       "offset": len(blob), "length": int(values.size)})
-        blob += np.ascontiguousarray(values, dtype=_NP_DTYPES[kind]).tobytes()
-    while len(blob) % 4:
-        blob.append(0)
+    blob, arrays = pack_array_bundle(planned)
 
     meta = {"bin": f"{name}.mesh.bin", "vertexCount": int(len(positions)),
             "indexCount": int(indices.size), "byteLength": len(blob), "arrays": arrays}
-    (out_dir / f"{name}.mesh.bin").write_bytes(bytes(blob))
+    for key, value in (metadata or {}).items():
+        if key in _RESERVED_METADATA_KEYS:
+            raise ValueError(f"{name}: metadata key {key!r} describes the mesh format "
+                             f"and cannot be overridden")
+        meta[key] = value
+    (out_dir / f"{name}.mesh.bin").write_bytes(blob)
     (out_dir / f"{name}.mesh.json").write_text(json.dumps(meta, indent=2) + "\n")
     return meta
 
@@ -152,6 +194,33 @@ def distribution_revision(name: str) -> str:
     except Exception:
         pass
     return dist.version or "unknown"
+
+
+def identity_mapping_hash(mapping) -> str:
+    """Stable sha256 over one observed source-index -> DTCC-id mapping."""
+    payload = json.dumps([[int(k), str(v)] for k, v in sorted(mapping.items())],
+                         separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def audit_identity_stability(first, second) -> dict:
+    """Compare two observed source-index -> DTCC-id mappings of the same source data.
+
+    Observational, never fatal. DTCC object IDs are only ever *observed* to be
+    stable across loads, never guaranteed, so drift is a verdict the renderer
+    pages report rather than an error that stops the pipeline. Both hashes are
+    recorded either way: when the IDs do drift they are the only evidence left
+    of what the two loads actually saw.
+    """
+    first_hash = identity_mapping_hash(first)
+    second_hash = identity_mapping_hash(second)
+    return {
+        "identityStability": ("stable_observed_two_loads" if first_hash == second_hash
+                              else "unstable_observed"),
+        "firstLoadHash": first_hash,
+        "secondLoadHash": second_hash,
+        "auditedAt": datetime.now(timezone.utc).isoformat(),
+    }
 
 
 def load_dataset_json(out_dir) -> dict:

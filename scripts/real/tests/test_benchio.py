@@ -1,5 +1,6 @@
 import json
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -74,6 +75,96 @@ def test_uint8_extra_is_padded_to_a_four_byte_boundary(tmp_path):
     assert meta["byteLength"] % 4 == 0
     back = benchio.read_mesh_pair(tmp_path, "baked")
     assert np.array_equal(back["colors"].reshape(3, 3), colors)
+
+
+def test_pack_array_bundle_packs_nothing_for_no_arrays():
+    blob, specs = benchio.pack_array_bundle([])
+    assert blob == b""
+    assert specs == []
+
+
+def test_pack_array_bundle_aligns_every_offset_and_pads_the_tail():
+    # 3 uint8s then a uint32 array: the u8 run has to be padded to 4 bytes or the
+    # Uint32Array view over the next offset is unaligned and illegal on the JS side.
+    blob, specs = benchio.pack_array_bundle([
+        ("flags", np.array([1, 2, 3], dtype=np.uint8), "u8", 1),
+        ("ids", np.array([7, 8], dtype=np.uint32), "u32", 1),
+        ("temps", np.array([1.5, 2.5], dtype=np.float64), "f32", 1),
+    ])
+    assert [s["name"] for s in specs] == ["flags", "ids", "temps"]
+    assert [s["offset"] for s in specs] == [0, 4, 12]
+    assert [s["length"] for s in specs] == [3, 2, 2]
+    assert len(blob) == 20 and len(blob) % 4 == 0
+    assert np.frombuffer(blob[4:12], dtype=np.uint32).tolist() == [7, 8]
+    # f32 is the on-disk type: the float64 input is converted, not reinterpreted.
+    assert np.allclose(np.frombuffer(blob[12:20], dtype=np.float32), [1.5, 2.5])
+
+
+def test_pack_array_bundle_rejects_a_duplicate_name():
+    with pytest.raises(ValueError, match="duplicate"):
+        benchio.pack_array_bundle([
+            ("ids", np.zeros(1, dtype=np.uint32), "u32", 1),
+            ("ids", np.zeros(1, dtype=np.uint32), "u32", 1),
+        ])
+
+
+def test_pack_array_bundle_rejects_an_unsupported_type():
+    with pytest.raises(ValueError, match="f64"):
+        benchio.pack_array_bundle([("temps", np.zeros(1), "f64", 1)])
+
+
+def test_mesh_pair_round_trips_cell_arrays(tmp_path):
+    meta = benchio.write_mesh_pair(
+        tmp_path, "mesh",
+        positions=np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0]], dtype=float),
+        normals=np.array([[0, 0, 1]] * 3, dtype=float),
+        indices=np.array([[0, 1, 2]], dtype=np.uint32),
+        cell_extra={"cell_object_index": (np.array([7]), "u32", 1)},
+        metadata={"objects": [{"sourceIndex": 7, "dtccId": "building-7"}]},
+    )
+    loaded = benchio.read_mesh_pair(tmp_path, "mesh")
+    assert loaded["cell_object_index"].tolist() == [7]
+    assert meta["objects"] == [{"sourceIndex": 7, "dtccId": "building-7"}]
+
+
+def test_write_mesh_pair_validates_cell_extras_against_the_triangle_count(tmp_path):
+    # One value per *triangle*, not per vertex: a cell array sized like the vertices
+    # would still pack, and every triangle would then be attributed to the wrong object.
+    with pytest.raises(ValueError, match="1 triangles"):
+        benchio.write_mesh_pair(
+            tmp_path, "mesh",
+            positions=np.zeros((3, 3)), normals=np.zeros((3, 3)),
+            indices=np.array([[0, 1, 2]]),
+            cell_extra={"cell_object_index": (np.array([1, 2, 3]), "u32", 1)},
+        )
+
+
+def test_write_mesh_pair_rejects_metadata_that_would_overwrite_the_format(tmp_path):
+    with pytest.raises(ValueError, match="byteLength"):
+        benchio.write_mesh_pair(
+            tmp_path, "mesh",
+            positions=np.zeros((3, 3)), normals=np.zeros((3, 3)),
+            indices=np.array([[0, 1, 2]]),
+            metadata={"byteLength": 0},
+        )
+
+
+def test_identity_audit_reports_stable_when_two_loads_agree():
+    mapping = {0: "a-uuid", 1: "b-uuid"}
+    audit = benchio.audit_identity_stability(mapping, dict(mapping))
+    assert audit["identityStability"] == "stable_observed_two_loads"
+    assert audit["firstLoadHash"] == audit["secondLoadHash"]
+    assert datetime.fromisoformat(audit["auditedAt"]).tzinfo is not None
+
+
+def test_identity_audit_reports_unstable_and_keeps_both_hashes():
+    # Same buildings, freshly minted UUIDs: the geometry is identical and only the
+    # identity drifted, so both hashes have to survive as the evidence for that.
+    audit = benchio.audit_identity_stability({0: "a-uuid", 1: "b-uuid"},
+                                             {0: "a-uuid", 1: "DIFFERENT"})
+    assert audit["identityStability"] == "unstable_observed"
+    assert audit["firstLoadHash"] != audit["secondLoadHash"]
+    assert audit["firstLoadHash"] and audit["secondLoadHash"]
 
 
 def test_patch_dataset_json_merges_without_dropping_keys(tmp_path):
