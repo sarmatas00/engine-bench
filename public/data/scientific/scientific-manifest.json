@@ -260,8 +260,10 @@
       "dataCategory": "simulation",
       "source": "dtcc-sim urban_heat",
       "unit": "degC",
-      "tmin": 17.99999989500044,
-      "tmax": 18.7647502942796,
+      "surfaceTmin": 17.99999989500044,
+      "surfaceTmax": 18.7647502942796,
+      "surfaceSampling": "ground mesh (public/data/real/field.json)",
+      "gridRangeSource": "public/data/real/field.grid.json",
       "association": null
     }
   },

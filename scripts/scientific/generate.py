@@ -535,12 +535,22 @@ def generate(real_dir: Path = REAL_DIR) -> tuple:
                 "slice": slice_case,
                 "streamlines": streamline_case,
             },
+            # Two samplings of the same solve live side by side here, and they
+            # do NOT share a range: the volume grid reaches 32.26 degC while the
+            # ground-mesh surface sampling reaches 18.76. An unlabelled `tmax`
+            # in this block is a trap -- a consumer colouring the volume by it
+            # would clamp everything above 18.76 to the top of the ramp and get
+            # a saturated blob that looks plausible. So each range says which
+            # sampling it describes, and the grid's own range stays where it is
+            # measured, in field.grid.json.
             "heat": {
                 "dataCategory": "simulation",
                 "source": heat_source,
                 "unit": heat_unit,
-                "tmin": heat_meta.get("tmin"),
-                "tmax": heat_meta.get("tmax"),
+                "surfaceTmin": heat_meta.get("tmin"),
+                "surfaceTmax": heat_meta.get("tmax"),
+                "surfaceSampling": "ground mesh (public/data/real/field.json)",
+                "gridRangeSource": "public/data/real/field.grid.json",
                 "association": None,
             },
         },

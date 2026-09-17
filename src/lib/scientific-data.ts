@@ -133,8 +133,15 @@ export type ScientificManifest = {
       dataCategory: string;
       source: string | null;
       unit: string;
-      tmin: number | null;
-      tmax: number | null;
+      // Named for their sampling on purpose. The volume grid and the ground
+      // mesh are two samplings of the same solve with different ranges (32.26
+      // vs 18.76 degC), so a bare `tmax` here would invite colouring the volume
+      // by the surface range. The grid's own range comes from field.grid.json,
+      // which is where it is measured -- see heat.grid below.
+      surfaceTmin: number | null;
+      surfaceTmax: number | null;
+      surfaceSampling: string;
+      gridRangeSource: string;
       association: string | null;
     };
   };

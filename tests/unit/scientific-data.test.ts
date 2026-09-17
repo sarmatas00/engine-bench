@@ -174,7 +174,10 @@ function scientificManifest(overrides?: Partial<ScientificManifest>): Scientific
     },
     cases: {
       smoke: {dataCategory: 'synthetic', dtccCoreRevision: 'test', grid: smoke.grid, slice: smoke.slice, streamlines: smoke.streamlines},
-      heat: {dataCategory: 'simulation', source: 'test-sim', unit: 'degC', tmin: 10, tmax: 20, association: null},
+      heat: {dataCategory: 'simulation', source: 'test-sim', unit: 'degC',
+             surfaceTmin: 10, surfaceTmax: 20,
+             surfaceSampling: 'ground mesh (test)', gridRangeSource: 'field.grid.json (test)',
+             association: null},
     },
     dependencies: [],
     binary: {path: 'scientific.bin', byteLength: smoke.bytes.byteLength, sha256: ''},
