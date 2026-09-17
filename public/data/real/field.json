@@ -1,7 +1,7 @@
 {
   "unit": "degC",
-  "tmin": 17.99999987228115,
-  "tmax": 18.746469572546268,
+  "tmin": 17.99999989500044,
+  "tmax": 18.7647502942796,
   "source": "dtcc-sim urban_heat",
   "args": {
     "mesh_max_mesh_size": 25.0,
@@ -22,16 +22,16 @@
     "open_value": 18.0
   },
   "roundtrip": {
-    "vertices_before": 50729,
-    "vertices_after": 50729,
-    "cells_before": 182331,
-    "cells_after": 182331,
+    "vertices_before": 45733,
+    "vertices_after": 45733,
+    "cells_before": 164154,
+    "cells_after": 164154,
     "field_name_before": "temperature",
     "field_name_after": "temperature",
     "dtype_before": "float64",
     "dtype_after": "float64",
-    "count_before": 50729,
-    "count_after": 50729,
+    "count_before": 45733,
+    "count_after": 45733,
     "field_present": true,
     "max_abs_delta": 0.0,
     "lossless": true

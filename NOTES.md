@@ -11,7 +11,7 @@ maplibre-gl pinned to 5.24.0: @deck.gl/mapbox 9.4.0 interleaved mode reads `map.
 
 ## Findings
 
-- dtcc-core#85 round trip on `gothenburg-skansen-kronan` (`save_volume_mesh` in the dtcc-sim container -> `load_volume_mesh` natively): **no loss**. vertices 50729 -> 50729, cells 182331 -> 182331, field `temperature` -> `temperature`, dtype float64 -> float64, max |dT| 0.0. Full record in `public/data/real/dataset.json` under `stage2.roundtrip`.
+- dtcc-core#85 round trip on `gothenburg-skansen-kronan` (`save_volume_mesh` in the dtcc-sim container -> `load_volume_mesh` natively): **no loss**. vertices 45733 -> 45733, cells 164154 -> 164154, field `temperature` -> `temperature`, dtype float64 -> float64, max |dT| 0.0. Full record in `public/data/real/dataset.json` under `stage2.roundtrip`.
 - The container's solve and Stage 1's raster disagree on the tile's terrain minimum by 0.12 m — measured while verifying the frame, not a defect to fix. `heat.xdmf`'s volume mesh (loaded natively with `load_volume_mesh`) has z in `[1.2397061261541102, 81.2397061261541]`, a domain height of exactly `mesh_domain_height` = 80.0 m above *its own* terrain floor of 1.2397 m. `public/data/real/dataset.json`'s `z0` — Stage 1's raster minimum, the value everything in this bench treats as the tile's local zero — is 1.1191982915663998 m. The two floors differ by 0.1205 m: the container solved its mesh against a terrain sample that was not bit-for-bit the same minimum Stage 1 recorded from the raster. Harmless against 53.45 m of relief (0.2% of it), but it is exactly the class of cross-revision fact this file exists to hold, so it is recorded here rather than left to be rediscovered.
 - **Superseded by the Task 11 entry below (measured on the shipped renders): the prediction in this
   bullet that pages 07/08/10/11 "will *look* like a dramatic temperature swing across the surface"
@@ -390,3 +390,66 @@ maplibre-gl pinned to 5.24.0: @deck.gl/mapbox 9.4.0 interleaved mode reads `map.
   a broad haze, not a sharp plume). The other nine rows are true on both datasets and were left
   alone. Pages 04 and 12 were checked and need no dataset branch: their `expect:` text describes
   what both renders do, and both were confirmed against the real screenshots.
+
+## Post-#85 Core upgrade: measured drift (2026-09-17, spike Task 1)
+
+Regenerated on native Core `4c8d621` (was `5cf56fa`) and container Core `5ca2ca4`
+(was `9774162`), same tile, same bounds, same solver arguments. The posted
+dtcc-twin#1 and dtcc-core#85 comments quote the pre-upgrade numbers, so this is
+what changed and what did not.
+
+**No drift at all on the native side.** Bit-identical, to full precision:
+`bounds`, `origin`, `extent`, `anchor_lonlat`, `z0`, `relief.zmin/zmax/relief`,
+`cell_size`, and every surface mesh count — `ground` 6288 vertices / 8920
+triangles, `buildings` 20726 / 37672, `buildings-flat` 20726 / 37672. The
+`buildings.mesh.bin` grew from 949,488 to 1,100,176 bytes, which is exactly the
+new `cell_object_index` array (37,672 triangles x 4 bytes = 150,688) and nothing
+else.
+
+**Drift is confined to the container-side volume mesh:**
+
+| metric | pre-upgrade (9774162) | post-upgrade (5ca2ca4) | change |
+| --- | --- | --- | --- |
+| volume vertices | 50729 | 45733 | -4996 (-9.85%) |
+| volume cells | 182331 | 164154 | -18177 (-9.97%) |
+| field tmin | 17.99999987228115 | 17.99999989500044 | +2.3e-08 |
+| field tmax | 18.746469572546268 | 18.7647502942796 | +0.0183 degC (+0.098%) |
+
+The `tmax` move follows the mesh change; the discretization is coarser, so the
+sampled maximum lands differently. `tmin` is pinned by the Dirichlet ground and
+open boundaries at 18.0 and does not move.
+
+**Why this is the container Core upgrade and not our workaround.** The R6
+classification cast (see below) is provably selection-neutral: on 200k synthetic
+points, `classification == 2` selects the same 66,870 points before and after the
+cast, and the values round-trip exactly. Independently, the native terrain raster
+— built from the same point cloud with that same cast applied — is bit-identical
+to pre-upgrade down to `z0 = 1.1191982915663998`. The only thing that changed on
+the volume side is container Core itself.
+
+**The dtcc-core#85 round-trip claim still holds** on the upgraded stack:
+`vertices_before/after` and `cells_before/after` agree, `field_present` true,
+`dtype` float64 both ways, `max_abs_delta` 0.0, `lossless` true.
+
+**Identity verdict: `unstable_observed`.** Loading the same bounds twice produces
+different DTCC building UUIDs, so the footprint tiles this tile is cut from do
+not carry an `id` property and `Object.id` falls back to a fresh `uuid4()` per
+load. Renderer picking must therefore continue on `sourceIndex`, and both pages
+must report canonical traceability as failed. This is measured, not assumed --
+both mapping hashes are recorded in `buildings.mesh.json`.
+
+**Identity coverage is partial, and visibly so.** 215 source buildings condition
+down to 103 regions; the mesh carries 206 markers, because
+`_split_ground_mesh_building_components` appends one marker per split component
+and never reports the parent it split from. So 103 markers carry DTCC ids
+(30,958 triangles) and 103 do not (6,714 triangles, 17.8% of the building
+geometry). Those 103 are recorded as empty `objects` entries, which says "no
+conditioned region behind this marker" rather than guessing one. Their parent
+region is recoverable only by geometry (the split children lie inside the parent
+footprint), which has not been done and is not implied anywhere in the artifact.
+
+**R6 workaround, to be removed.** `benchio.integer_classification` plus
+`stage1_build.prepare_city` (native) and `solve.patch_terrain_raster_classification`
+(container) work around an upstream regression that stops both Core and dtcc-sim
+from building the tile at all. Draft report: `docs/upstream/dtcc-core-classification-dtype.md`.
+Nothing has been posted.

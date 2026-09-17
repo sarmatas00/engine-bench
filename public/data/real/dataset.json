@@ -24,8 +24,8 @@
   },
   "cell_size": 2.0,
   "stages": {
-    "stage1": "2026-09-08T19:14:06.012757+00:00",
-    "stage2": "2026-09-08T20:40:12.238549+00:00"
+    "stage1": "2026-09-17T15:32:38.935743+00:00",
+    "stage2": "2026-09-17T15:36:12.080940+00:00"
   },
   "stage2": {
     "args": {
@@ -47,25 +47,25 @@
       "open_value": 18.0
     },
     "roundtrip": {
-      "vertices_before": 50729,
-      "vertices_after": 50729,
-      "cells_before": 182331,
-      "cells_after": 182331,
+      "vertices_before": 45733,
+      "vertices_after": 45733,
+      "cells_before": 164154,
+      "cells_after": 164154,
       "field_name_before": "temperature",
       "field_name_after": "temperature",
       "dtype_before": "float64",
       "dtype_after": "float64",
-      "count_before": 50729,
-      "count_after": 50729,
+      "count_before": 45733,
+      "count_after": 45733,
       "field_present": true,
       "max_abs_delta": 0.0,
       "lossless": true
     },
-    "solver_dtcc_core_revision": "9774162563d94a038a9ae799495020101b8250d7",
-    "native_dtcc_core_revision": "5cf56fa0a5f88659cd888010cd7121fe56f9577e",
+    "solver_dtcc_core_revision": "5ca2ca410f24763591dc62c7b61f870cef13f717",
+    "native_dtcc_core_revision": "4c8d6217964a27e9ab363aa41e86001dd87f8f2c",
     "field": {
-      "tmin": 17.99999987228115,
-      "tmax": 18.746469572546268,
+      "tmin": 17.99999989500044,
+      "tmax": 18.7647502942796,
       "unit": "degC"
     }
   }

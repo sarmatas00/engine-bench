@@ -196,6 +196,53 @@ def distribution_revision(name: str) -> str:
     return dist.version or "unknown"
 
 
+def integer_classification(pointcloud):
+    """Restore an integer LAS classification dtype on a downloaded point cloud.
+
+    Workaround for an upstream dtcc-core regression (ledger ruling R6; the
+    report is drafted at docs/upstream/dtcc-core-classification-dtype.md).
+    At Core 4c8d621:
+
+      * `PointCloud.classification` defaults to `np.empty(0)`, which is float64
+        (model/geometry/pointcloud.py:35);
+      * `io.load_pointcloud`'s list path seeds a fresh `PointCloud()` and merges
+        into it, so `np.concatenate` upcasts the loader's uint8 to float64
+        (io/pointcloud.py:154, model/geometry/pointcloud.py:166);
+      * `download_pointcloud` always takes that list path
+        (io/data/wrapper.py, the 'lidar' branch);
+      * post-#85 `build_terrain_raster` newly requires `dtype.kind in "iu"` and
+        raises otherwise (builder/geometry_builders/terrain.py:321-323). The
+        guard does not exist at 5cf56fa, so this is new in the upgrade.
+
+    Only the dtype is wrong -- the values are whole numbers and the length is
+    right -- so this casts and never rounds. A fractional class would mean
+    something we do not understand about the source, and rounding it would
+    silently reclassify a point.
+
+    Remove this function and go back to Core's shared helper once the upstream
+    fix lands.
+    """
+    points = np.asarray(pointcloud.points)
+    classification = np.asarray(pointcloud.classification)
+    if classification.shape != (len(points),):
+        raise ValueError(
+            f"{len(points)} points but {classification.size} classifications; "
+            f"build_terrain_raster(ground_only=True) requires one per point")
+    if classification.dtype.kind in "iu":
+        return pointcloud
+    if not np.isfinite(classification).all():
+        raise ValueError("point cloud classification contains non-finite values")
+    rounded = np.rint(classification)
+    if not np.array_equal(rounded, classification):
+        bad = classification[rounded != classification]
+        raise ValueError(
+            f"point cloud classification is not integral (e.g. {bad[0]}); "
+            f"refusing to round a LAS class into a different one")
+    fits_uint8 = classification.size and rounded.min() >= 0 and rounded.max() <= 255
+    pointcloud.classification = rounded.astype(np.uint8 if fits_uint8 else np.int32)
+    return pointcloud
+
+
 def identity_mapping_hash(mapping) -> str:
     """Stable sha256 over one observed source-index -> DTCC-id mapping."""
     payload = json.dumps([[int(k), str(v)] for k, v in sorted(mapping.items())],

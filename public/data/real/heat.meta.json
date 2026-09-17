@@ -6,16 +6,16 @@
     318869.0,
     6399390.0
   ],
-  "vertices": 50729,
-  "cells": 182331,
+  "vertices": 45733,
+  "cells": 164154,
   "field": {
     "name": "temperature",
     "unit": "degC",
     "dtype": "float64",
-    "count": 50729,
-    "min": 17.999999852416245,
-    "max": 32.95301610756346,
-    "mean": 26.11123898229059
+    "count": 45733,
+    "min": 17.999999876920903,
+    "max": 33.40870697822927,
+    "mean": 25.928026176922955
   },
   "field_names": [
     "temperature"
@@ -38,6 +38,6 @@
     "open_bc_type": "dirichlet",
     "open_value": 18.0
   },
-  "dtcc_core_revision": "9774162563d94a038a9ae799495020101b8250d7",
-  "solved_at": "2026-09-08T20:18:51.176647+00:00"
+  "dtcc_core_revision": "5ca2ca410f24763591dc62c7b61f870cef13f717",
+  "solved_at": "2026-09-17T15:35:51.863807+00:00"
 }

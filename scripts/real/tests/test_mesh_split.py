@@ -143,3 +143,151 @@ def test_submesh_computes_area_weighted_vertex_normals():
     mesh = Mesh(vertices=v, faces=np.array([[0, 1, 2]]), markers=np.array([-2]))
     sub = stage1_build.submesh(mesh, np.array([True]), origin=[0.0, 0.0], z0=0.0)
     assert np.allclose(sub["normals"], np.array([0.0, 0.0, 1.0]))
+
+
+def test_building_objects_fans_out_a_merged_region_to_every_source_building():
+    """A surface face marker indexes a *conditioned region*, not city.buildings.
+
+    With merge_buildings=True (the default this pipeline gets) Core merges
+    adjacent footprints before meshing, so one region can stand for several
+    source buildings. Ruling R5 says we publish that fan-out honestly rather
+    than picking one of them and stamping its UUID on the whole region.
+    """
+    from dtcc_core.model import Building
+
+    buildings = [Building(id="uuid-a"), Building(id="uuid-b"), Building(id="uuid-c")]
+    source_map = [[0], [1, 2]]          # region 1 merged buildings 1 and 2
+    objects = stage1_build.building_objects(source_map, buildings, marker_count=2)
+
+    assert objects == [
+        {"sourceIndexes": [0], "dtccIds": ["uuid-a"]},
+        {"sourceIndexes": [1, 2], "dtccIds": ["uuid-b", "uuid-c"]},
+    ]
+
+
+def test_building_objects_records_split_added_markers_as_empty():
+    """_split_ground_mesh_building_components can append markers past the region count.
+
+    Those markers have no conditioned region behind them and therefore no source
+    building. An empty entry says exactly that; inventing an ID for them is the
+    fabrication R5 exists to prevent.
+    """
+    from dtcc_core.model import Building
+
+    buildings = [Building(id="uuid-a")]
+    objects = stage1_build.building_objects([[0]], buildings, marker_count=3)
+
+    assert objects[0] == {"sourceIndexes": [0], "dtccIds": ["uuid-a"]}
+    assert objects[1] == {"sourceIndexes": [], "dtccIds": []}
+    assert objects[2] == {"sourceIndexes": [], "dtccIds": []}
+
+
+def test_building_objects_rejects_a_source_index_outside_the_building_list():
+    from dtcc_core.model import Building
+
+    try:
+        stage1_build.building_objects([[0], [7]], [Building(id="uuid-a")], marker_count=2)
+    except ValueError as exc:
+        assert "7" in str(exc)
+    else:
+        raise AssertionError("a source index past the end of city.buildings must not pass silently")
+
+
+def test_integer_classification_casts_an_integral_float_array_to_uint8():
+    """dtcc-core 4c8d621 cannot build the tile without this cast (ledger R6).
+
+    PointCloud.classification defaults to np.empty(0), which is float64, and
+    io.load_pointcloud's list path merges the loader's uint8 into that float64
+    seed. Post-#85 build_terrain_raster then rejects the non-integer dtype
+    (terrain.py:321-323). The values are already whole numbers; only the dtype
+    is wrong.
+    """
+    from dtcc_core.model import PointCloud
+
+    pc = PointCloud(points=np.zeros((3, 3)),
+                    classification=np.array([1.0, 2.0, 7.0], dtype=np.float64))
+    fixed = stage1_build.integer_classification(pc)
+
+    assert fixed.classification.dtype.kind in "iu"
+    assert fixed.classification.tolist() == [1, 2, 7]
+    assert len(fixed.points) == 3
+
+
+def test_integer_classification_leaves_an_already_integer_array_alone():
+    from dtcc_core.model import PointCloud
+
+    original = np.array([1, 2, 7], dtype=np.uint8)
+    pc = PointCloud(points=np.zeros((3, 3)), classification=original)
+    fixed = stage1_build.integer_classification(pc)
+
+    assert fixed.classification.dtype == np.uint8
+    assert fixed.classification.tolist() == [1, 2, 7]
+
+
+def test_integer_classification_refuses_to_round_a_non_integral_value():
+    """Rounding here would silently reclassify a point. Fail loudly instead."""
+    from dtcc_core.model import PointCloud
+
+    pc = PointCloud(points=np.zeros((2, 3)),
+                    classification=np.array([1.0, 2.5], dtype=np.float64))
+    try:
+        stage1_build.integer_classification(pc)
+    except ValueError as exc:
+        assert "2.5" in str(exc) or "integral" in str(exc)
+    else:
+        raise AssertionError("a fractional LAS classification must not be rounded into a class")
+
+
+def test_integer_classification_refuses_a_length_mismatch():
+    from dtcc_core.model import PointCloud
+
+    pc = PointCloud(points=np.zeros((3, 3)),
+                    classification=np.array([1.0, 2.0], dtype=np.float64))
+    try:
+        stage1_build.integer_classification(pc)
+    except ValueError as exc:
+        assert "3" in str(exc) and "2" in str(exc)
+    else:
+        raise AssertionError("one classification per point is the guard's other half")
+
+
+def test_identity_mapping_pairs_each_source_index_with_its_dtcc_id():
+    """The two-load audit compares these mappings, so it must be a plain observation."""
+    from dtcc_core.model import Building
+
+    class FakeCity:
+        buildings = [Building(id="uuid-a"), Building(id="uuid-b")]
+
+    assert stage1_build.identity_mapping(FakeCity()) == {0: "uuid-a", 1: "uuid-b"}
+
+
+def test_compose_marker_sources_walks_the_whole_chain():
+    """marker -> conditioned region -> city.buildings, not marker -> city.buildings.
+
+    Between the conditioned regions and the face markers Core clips each region
+    to the raster bounds and then renormalizes the coverage
+    (meshes.py:2258-2283). Both layers are identity on the Skansen Kronan tile,
+    but neither is guaranteed to be, so the composition is done rather than
+    assumed.
+    """
+    # marker 0 <- region 1; marker 1 <- regions 0 and 2 (a renormalization merge)
+    marker_regions = [[1], [0, 2]]
+    source_map = [[0], [1, 2], [3]]
+    assert stage1_build.compose_marker_sources(marker_regions, source_map) == [
+        [1, 2], [0, 3],
+    ]
+
+
+def test_compose_marker_sources_deduplicates_a_repeated_source_building():
+    marker_regions = [[0, 1]]
+    source_map = [[4], [4]]
+    assert stage1_build.compose_marker_sources(marker_regions, source_map) == [[4]]
+
+
+def test_compose_marker_sources_rejects_a_region_outside_the_conditioned_set():
+    try:
+        stage1_build.compose_marker_sources([[9]], [[0]])
+    except ValueError as exc:
+        assert "9" in str(exc)
+    else:
+        raise AssertionError("a region index past the conditioned set must not pass silently")

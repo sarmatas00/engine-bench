@@ -33,10 +33,44 @@ ARGS = dict(
 )
 
 
+def patch_terrain_raster_classification():
+    """Apply the R6 classification cast inside the container, at Core's boundary.
+
+    The upstream regression this works around is not confined to our stage 1.
+    `dtcc_sim.urban_heat` builds its own city through
+    `dtcc_core.datasets.city_volume_mesh` -> `prepare_city_from_bounds` ->
+    `build_terrain_raster(ground_only=True)`, which is several layers inside the
+    image and cannot be handed a pre-built city. Container Core (5ca2ca4) has
+    the same guard as native Core (4c8d621), so stage 2 fails in exactly the
+    same place for exactly the same reason:
+
+        ValueError: ground_only=True requires one integer LAS classification per point
+
+    So we wrap `build_terrain_raster` where `_city_mesh_common` looks it up, and
+    repair the dtype on the way in. Same cast, same rule, same never-round
+    guarantee as stage 1 -- see `benchio.integer_classification` and the issue
+    draft at docs/upstream/dtcc-core-classification-dtype.md.
+
+    Delete this together with the native workaround once the upstream fix lands.
+    """
+    import dtcc_core
+
+    original = dtcc_core.builder.build_terrain_raster
+
+    def build_terrain_raster(pointcloud, *args, **kwargs):
+        return original(benchio.integer_classification(pointcloud), *args, **kwargs)
+
+    dtcc_core.builder.build_terrain_raster = build_terrain_raster
+    print("solve: patched build_terrain_raster for the classification dtype regression (R6)",
+          flush=True)
+
+
 def main():
     meta = json.loads((OUT / "dataset.json").read_text())
     bounds = [float(v) for v in meta["bounds"]]
     print(f"solve: {meta['name']} {bounds}", flush=True)
+
+    patch_terrain_raster_classification()
 
     from dtcc_sim.datasets import UrbanHeatSimulationDataset
     from dtcc_core.io import save_volume_mesh

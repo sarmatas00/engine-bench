@@ -5,13 +5,13 @@
     <!-- 1) Volume mesh -->
     <Grid Name="mesh" GridType="Uniform">
       <Topology TopologyType="Tetrahedron"
-                NumberOfElements="182331" NodesPerElement="4">
-        <DataItem Format="HDF" NumberType="Int" Precision="8" Dimensions="182331 4">
+                NumberOfElements="164154" NodesPerElement="4">
+        <DataItem Format="HDF" NumberType="Int" Precision="8" Dimensions="164154 4">
           heat.h5:/Mesh/mesh/topology
         </DataItem>
       </Topology>
       <Geometry GeometryType="XYZ">
-        <DataItem Format="HDF" NumberType="Float" Precision="8" Dimensions="50729 3">
+        <DataItem Format="HDF" NumberType="Float" Precision="8" Dimensions="45733 3">
           heat.h5:/Mesh/mesh/geometry
         </DataItem>
       </Geometry>
@@ -21,7 +21,7 @@
         <DataItem Format="HDF"
                   NumberType="Float"
                   Precision="8"
-                  Dimensions="50729">
+                  Dimensions="45733">
           heat.h5:/Mesh/mesh/fields/temperature
         </DataItem>
       </Attribute>
@@ -32,8 +32,8 @@
       <xi:include xpointer="xpointer(/Xdmf/Domain/Grid/Geometry)"/>
 
       <Topology TopologyType="Triangle"
-                NumberOfElements="86358" NodesPerElement="3">
-        <DataItem Format="HDF" NumberType="Int" Precision="8" Dimensions="86358 3">
+                NumberOfElements="77820" NodesPerElement="3">
+        <DataItem Format="HDF" NumberType="Int" Precision="8" Dimensions="77820 3">
           heat.h5:/MeshTags/boundary_markers/topology
         </DataItem>
       </Topology>
@@ -44,7 +44,7 @@
         <DataItem Format="HDF"
                   NumberType="Int"
                   Precision="4"
-                  Dimensions="86358">
+                  Dimensions="77820">
           heat.h5:/MeshTags/boundary_markers/values
         </DataItem>
       </Attribute>
