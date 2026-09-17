@@ -21,6 +21,7 @@ from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import benchio
+import core_compat
 
 REPO = Path(__file__).resolve().parents[2]
 OUT = REPO / "public" / "data" / "real"
@@ -241,171 +242,42 @@ def building_height(building):
     return None if height is None else float(height)
 
 
-# The classification repair lives in benchio because BOTH sides need it: stage 1
-# natively, and solve.py inside the dtcc-sim container, where the same upstream
-# regression hits dtcc_sim's own call to prepare_city_from_bounds (ledger R6).
-integer_classification = benchio.integer_classification
-
-
-def prepare_city(bounds):
-    """dtcc-core's `prepare_city_from_bounds`, with the classification cast in it.
-
-    This is a deliberate, temporary fork of
-    `dtcc_core.datasets._city_mesh_common.prepare_city_from_bounds`, kept step
-    for step in the same order with the same arguments, plus one call to
-    `integer_classification` before the terrain raster is built. See R6 and
-    `integer_classification` for why it exists and when it goes away.
-    """
-    import dtcc_core
-
-    pointcloud = dtcc_core.io.data.download_pointcloud(bounds=bounds)
-    buildings = dtcc_core.io.data.download_footprints(bounds=bounds)
-    pointcloud = pointcloud.remove_global_outliers(3.0)
-
-    # The one line that is not in Core's helper.
-    pointcloud = integer_classification(pointcloud)
-
-    raster = dtcc_core.builder.build_terrain_raster(
-        pointcloud, cell_size=RASTER_CELL_SIZE, radius=RASTER_RADIUS, ground_only=True)
-    buildings = dtcc_core.builder.extract_roof_points(buildings, pointcloud)
-    buildings = dtcc_core.builder.compute_building_heights(buildings, raster, overwrite=True)
-
-    from dtcc_core.model import City
-    city = City()
-    city.add_terrain(raster)
-    city.add_buildings(buildings, remove_outside_terrain=True)
-    return city
-
-
-def compose_marker_sources(marker_regions, source_map) -> list:
-    """Compose marker -> conditioned region -> city.buildings into one map.
-
-    Kept separate from the Core calls that produce `marker_regions` so the
-    composition itself is testable without building a city.
-    """
-    composed = []
-    for regions in marker_regions:
-        indexes = []
-        for region in regions:
-            if not 0 <= region < len(source_map):
-                raise ValueError(
-                    f"marker names conditioned region {region}, but only "
-                    f"{len(source_map)} regions were conditioned")
-            for index in source_map[region]:
-                if int(index) not in indexes:
-                    indexes.append(int(index))
-        composed.append(sorted(indexes))
-    return composed
-
-
-def marker_source_map(city) -> tuple:
-    """The real face-marker -> city.buildings map, and the conditioned count.
-
-    `build_city_surface_mesh` keeps this to itself, so we reproduce the three
-    stages it runs, in order and with its own argument values:
-
-      1. footprint conditioning -> `source_map` (conditioned region ->
-         city.buildings), which merging and `min_building_area` make non-trivial
-         (meshes.py:4918, defaults from :4601 and CitySurfaceMeshArgs);
-      2. clipping each conditioned region to the terrain raster bounds, where
-         one region can yield several components (meshes.py:2258-2270);
-      3. coverage renormalization, which can merge or drop components again and
-         reports what it did in `normalized_sources` (meshes.py:2271-2283).
-
-    Only after all three does `marker = len(active_surfaces)` get assigned. On
-    the Skansen Kronan tile stages 2 and 3 both turn out to be identity, but
-    composing them is the difference between a measured mapping and a lucky one.
-
-    Markers appended later by `_split_ground_mesh_building_components` are not
-    covered here -- they have no conditioned region behind them at all, which is
-    why `building_objects` gives them empty entries.
-    """
-    import dtcc_core
-    from shapely.geometry import box
-    from shapely.ops import orient
-
-    try:
-        from dtcc_core.builder.geometry_builders.meshes import (
-            _consume_conditioned_building_regions_with_sources,
-            _iter_polygon_components,
-            _normalize_max_mesh_size,
-            _raster_bounds_tuple,
-        )
-    except ImportError as exc:  # pragma: no cover - guards a Core upgrade
-        raise RuntimeError(
-            "dtcc-core's surface-region internals moved, so the face-marker to "
-            "building mapping can no longer be reproduced. Re-read "
-            "build_city_surface_mesh before trusting any identity in "
-            "buildings.mesh.json -- do not fall back to indexing city.buildings "
-            f"by marker, which is what ruling R5 exists to prevent. ({exc})"
-        ) from exc
-
-    conditioned = dtcc_core.builder.build_conditioned_footprints(
-        city.buildings,
-        lod=None,
-        min_building_detail=0.5,
-        min_building_area=15.0,
-        merge_tolerance=0.5,
-        merge_buildings=True,
-        max_mesh_size=_normalize_max_mesh_size(MAX_MESH_SIZE),
-        cleaning_diagnostics=True,
-        show_footprints=False,
-        footprint_cleaning_plot_block=True,
-        pipeline_mode="strict",
-        raise_on_contract_error=False,   # matches _condition_city_meshing_footprints
-    )
-
-    domain = box(*_raster_bounds_tuple(city.terrain.raster))
-    clipped_polygons, clipped_markers, clip_to_region = [], [], []
-    for region, surface in enumerate(conditioned.surfaces):
-        polygon = surface.to_polygon(simplify=0.0)
-        if polygon.is_empty:
-            continue
-        for component in _iter_polygon_components(polygon.intersection(domain)):
-            if component.area <= 0.0:
-                continue
-            clipped_markers.append(len(clip_to_region))
-            clipped_polygons.append(orient(component, sign=1.0))
-            clip_to_region.append(region)
-
-    _, _, normalized_sources = _consume_conditioned_building_regions_with_sources(
-        building_polygons=clipped_polygons,
-        building_markers=clipped_markers,
-        footprint_diagnostics=conditioned.diagnostics,
-        min_building_detail=0.5,
-        cleaning_diagnostics=True,
-        pipeline_mode="strict",
-        allow_boundary_short_edges=True,
-    )
-
-    marker_regions = [[clip_to_region[clip] for clip in sources]
-                      for sources in normalized_sources]
-    return compose_marker_sources(marker_regions, conditioned.source_map), len(conditioned.surfaces)
-
-
-def building_objects(source_map, buildings, marker_count) -> list:
+def building_objects(marker_sources, buildings, marker_count) -> list:
     """`objects[marker]` -> every source building that marker actually stands for.
 
-    A surface face marker does **not** index `city.buildings`. It indexes the
-    conditioned region handed to the mesher, which is reached through merging
-    (`merge_buildings=True`), `min_building_area=15.0` filtering, two
-    re-numberings, and a split pass that can append markers of its own. Ledger
-    ruling R5 (user decision, 2026-09-17) settles the contract: publish the
-    fan-out honestly.
+    `marker_sources` is the **marker** -> city.buildings map from
+    `core_compat.marker_source_map`, not Core's `source_map` (which is keyed by
+    conditioned region, one index space further up). Confusing the two is the
+    whole hazard this module exists to avoid.
+
+    A surface face marker does not index `city.buildings`. It indexes the
+    conditioned region handed to the mesher, reached through merging
+    (`merge_buildings=True`), `min_building_area` filtering, clipping,
+    renormalization, and a split pass that can append markers of its own.
+    Ledger ruling R5 (user decision, 2026-09-17) settles the contract: publish
+    the fan-out honestly.
 
     A merged region legitimately has several source buildings, so `sourceIndexes`
-    and `dtccIds` are lists. A marker past the end of `source_map` came from
+    and `dtccIds` are lists. A marker at or past `len(marker_sources)` came from
     `_split_ground_mesh_building_components` and has no conditioned region behind
     it, so it gets an empty entry -- which says "no source building", where
     inventing an ID would say something false.
     """
+    if len(marker_sources) > marker_count:
+        # Never truncate. If the reproduction yields more markers than the mesh
+        # carries, our marker space has drifted from Core's and every id below
+        # is suspect -- the silent mislabeling R5 exists to prevent.
+        raise RuntimeError(
+            f"reproduced {len(marker_sources)} region markers but the mesh carries "
+            f"only {marker_count}; the face-marker reproduction has drifted from "
+            f"dtcc-core and no building identity can be trusted until it is re-read")
     objects = []
     for marker in range(marker_count):
-        sources = list(source_map[marker]) if marker < len(source_map) else []
+        sources = list(marker_sources[marker]) if marker < len(marker_sources) else []
         for index in sources:
             if not 0 <= index < len(buildings):
                 raise ValueError(
-                    f"conditioned region {marker} names source building {index}, "
+                    f"marker {marker} names source building {index}, "
                     f"but the city has {len(buildings)} buildings")
         objects.append({
             "sourceIndexes": [int(index) for index in sources],
@@ -460,8 +332,9 @@ def build_stage1(out_dir=OUT, bounds_path=BOUNDS_PATH) -> dict:
     def load_city():
         # `prepare_city` is Core's prepare_city_from_bounds with the R6
         # classification cast folded in; see that function for why.
-        return prepare_city(Bounds(xmin=bounds[0], ymin=bounds[1],
-                                   xmax=bounds[2], ymax=bounds[3]))
+        return core_compat.prepare_city(
+            Bounds(xmin=bounds[0], ymin=bounds[1], xmax=bounds[2], ymax=bounds[3]),
+            raster_cell_size=RASTER_CELL_SIZE, raster_radius=RASTER_RADIUS)
 
     try:
         city = load_city()
@@ -510,10 +383,13 @@ def build_stage1(out_dir=OUT, bounds_path=BOUNDS_PATH) -> dict:
 
     # R5: the marker is a conditioned-region index, so the object table is
     # indexed by marker and fans out to the source buildings behind it.
-    marker_sources, conditioned_count = marker_source_map(city)
+    marker_sources, conditioned_count = core_compat.marker_source_map(city, MAX_MESH_SIZE)
     marker_count = int(markers.max()) + 1 if (markers >= 0).any() else 0
     objects = building_objects(marker_sources, city.buildings, marker_count)
-    split_added = max(marker_count - len(marker_sources), 0)
+    # len(marker_sources), not conditioned_count, is the boundary between real
+    # regions and split-added markers: the clip and renormalization stages sit
+    # between the two and are not guaranteed to be identity (review finding 3).
+    split_added = marker_count - len(marker_sources)
     print(f"stage1: {len(city.buildings)} buildings -> {conditioned_count} conditioned regions "
           f"-> {len(marker_sources)} region markers; {marker_count} markers in the mesh "
           f"({split_added} split-added, no conditioned region behind them)", flush=True)
@@ -530,6 +406,13 @@ def build_stage1(out_dir=OUT, bounds_path=BOUNDS_PATH) -> dict:
             metadata = {
                 "objects": objects,
                 "objectIndexSpace": "conditioned_building_region",
+                # regionMarkerCount is the contract boundary: markers below it
+                # have a conditioned region behind them, markers at or above it
+                # were appended by the mesher's split pass and carry no source
+                # building. conditionedRegionCount is the pre-clip count and is
+                # provenance only -- the two coincide only when the clip and
+                # renormalization stages are identity, which is not guaranteed.
+                "regionMarkerCount": int(len(marker_sources)),
                 "conditionedRegionCount": int(conditioned_count),
                 "splitAddedMarkers": int(split_added),
                 "sourceBuildingCount": len(city.buildings),

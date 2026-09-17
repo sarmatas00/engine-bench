@@ -139,13 +139,16 @@ def test_write_mesh_pair_validates_cell_extras_against_the_triangle_count(tmp_pa
         )
 
 
-def test_write_mesh_pair_rejects_metadata_that_would_overwrite_the_format(tmp_path):
-    with pytest.raises(ValueError, match="byteLength"):
+@pytest.mark.parametrize("key", ["bin", "vertexCount", "indexCount", "byteLength", "arrays"])
+def test_write_mesh_pair_rejects_metadata_that_would_overwrite_the_format(tmp_path, key):
+    """All five reserved keys, not just one: each would corrupt a reader
+    differently, and a caller only finds out at load time in the browser."""
+    with pytest.raises(ValueError, match=key):
         benchio.write_mesh_pair(
             tmp_path, "mesh",
             positions=np.zeros((3, 3)), normals=np.zeros((3, 3)),
             indices=np.array([[0, 1, 2]]),
-            metadata={"byteLength": 0},
+            metadata={key: 0},
         )
 
 

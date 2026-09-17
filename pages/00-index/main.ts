@@ -29,7 +29,7 @@ const sections: Record<string, string> = {
 // rather than reworded for both, because the difference is the finding: on the real tile z = 0 is
 // the tile floor (buried, never floating) and the solved field has no single hot spot to plume.
 const realExpect: Record<string, string> = {
-  '01-maplibre-baseline': '217 real footprints extruded onto the hillside with terrain on.',
+  '01-maplibre-baseline': '215 real footprints extruded onto the hillside with terrain on.',
   '02-deckgl-floats': 'Same buildings via deck.gl stay at the tile floor and are buried when terrain is on.',
   '10-cesium-voxels': 'The solved field as a VoxelPrimitive: a broad haze, not a sharp plume.'
 };

@@ -398,58 +398,124 @@ Regenerated on native Core `4c8d621` (was `5cf56fa`) and container Core `5ca2ca4
 dtcc-twin#1 and dtcc-core#85 comments quote the pre-upgrade numbers, so this is
 what changed and what did not.
 
-**No drift at all on the native side.** Bit-identical, to full precision:
-`bounds`, `origin`, `extent`, `anchor_lonlat`, `z0`, `relief.zmin/zmax/relief`,
-`cell_size`, and every surface mesh count — `ground` 6288 vertices / 8920
-triangles, `buildings` 20726 / 37672, `buildings-flat` 20726 / 37672. The
-`buildings.mesh.bin` grew from 949,488 to 1,100,176 bytes, which is exactly the
-new `cell_object_index` array (37,672 triangles x 4 bytes = 150,688) and nothing
-else.
+**Correction.** An earlier version of this section said "no drift at all on the
+native side". That was wrong: the footprint count moved. It is recorded below.
 
-**Drift is confined to the container-side volume mesh:**
+### Native geometry: unchanged
+
+Byte-identical after regeneration, not merely equal in count: `terrain.tif`,
+`basemap.png`, `terrain-rgb.png`, `ground.mesh.bin` and `buildings-flat.mesh.bin`.
+Unchanged to full precision: `bounds`, `origin`, `extent`, `anchor_lonlat`,
+`z0 = 1.1191982915663998`, `relief.zmin/zmax/relief`, `cell_size`. Mesh counts
+unchanged: `ground` 6288 vertices / 8920 triangles, `buildings` 20726 / 37672,
+`buildings-flat` 20726 / 37672.
+
+`buildings.mesh.bin` grew from 949,488 to 1,100,176 bytes, which is exactly the new
+`cell_object_index` array (37,672 triangles x 4 bytes = 150,688) and nothing else.
+
+### Native drift: two buildings disappear (217 -> 215)
+
+`footprints.geojson` went from **217 to 215 features**. The 215 survivors have
+byte-identical geometry and identical heights; no footprint was added or moved.
+
+Measured cause, not inferred. `download_footprints` still returns **217**, and all
+217 survive `extract_roof_points` and `compute_building_heights`. The two are
+dropped by `City.add_buildings(remove_outside_terrain=True)`:
+
+```
+download_footprints            : 217
+after extract_roof_points      : 217
+after compute_building_heights : 217
+add_buildings(remove=False)    : 217
+add_buildings(remove=True)     : 215
+```
+
+Both are the two buildings the builder logs `has no roof points. using min height`
+for (areas 11.57 m2 and 13.68 m2, `estimated_height` 2.5, `measured_height` None).
+With no lidar returns they carry an **empty** `POINT_CLOUD` geometry, whose bounds
+are zeros, and `Object.bounds` folds those zeros into the aggregate:
+
+```
+terrain bounds  : x[318369.0, 318869.0]  y[6398890.0, 6399390.0]
+building bounds : x[0.00, 318460.55]     y[0.00, 6399125.05]      <- dragged to the origin
+its LOD0 bounds : x[318456.42, 318460.55] y[6399120.86, 6399125.05]
+```
+
+`contains_bounds` then fails for a footprint sitting ~90 m inside the tile edge, and
+the building is removed as "outside the terrain". `contains_bounds` defaults to
+`ignore_z=True`, so this is not a z issue. `City.add_buildings` is unchanged between
+`5cf56fa` and `4c8d621`; `Object.calculate_bounds` was rewritten in that range. We
+did not pin the exact line, only that the behavior differs and that `add_buildings`
+is not what changed. Reported as a draft: `docs/upstream/dtcc-core-empty-pointcloud-bounds.md`.
+
+**It does not move any geometry.** Both buildings contribute no mesh faces either
+way, which is why every mesh count above is unchanged. Nothing was worked around:
+suppressing the symptom would hide a Core behavior change.
+
+### Container drift: the volume mesh and the field
 
 | metric | pre-upgrade (9774162) | post-upgrade (5ca2ca4) | change |
 | --- | --- | --- | --- |
 | volume vertices | 50729 | 45733 | -4996 (-9.85%) |
 | volume cells | 182331 | 164154 | -18177 (-9.97%) |
-| field tmin | 17.99999987228115 | 17.99999989500044 | +2.3e-08 |
-| field tmax | 18.746469572546268 | 18.7647502942796 | +0.0183 degC (+0.098%) |
+| solve field max | 32.95301610756346 | 33.40870697822927 | **+0.4557 degC** |
+| solve field mean | 26.11123898229059 | 25.928026176922955 | -0.1832 degC |
+| solve field min | 17.999999852416245 | 17.999999876920903 | +2.45e-08 |
+| sampled grid max | 32.49213547378579 | 32.264330029565414 | -0.2278 degC |
+| ground-sampled tmax | 18.746469572546268 | 18.7647502942796 | +0.0183 degC |
+| ground-sampled tmin | 17.99999987228115 | 17.99999989500044 | +2.27e-08 |
 
-The `tmax` move follows the mesh change; the discretization is coarser, so the
-sampled maximum lands differently. `tmin` is pinned by the Dirichlet ground and
-open boundaries at 18.0 and does not move.
+The solve maximum moving **+0.46 degC** is the largest scientific number in this
+change and the one to quote if anyone asks what the upgrade cost. The minima are
+pinned by the Dirichlet ground and open boundaries at 18.0 and do not move.
 
-**Why this is the container Core upgrade and not our workaround.** The R6
-classification cast (see below) is provably selection-neutral: on 200k synthetic
-points, `classification == 2` selects the same 66,870 points before and after the
-cast, and the values round-trip exactly. Independently, the native terrain raster
-— built from the same point cloud with that same cast applied — is bit-identical
-to pre-upgrade down to `z0 = 1.1191982915663998`. The only thing that changed on
-the volume side is container Core itself.
+**Why this is the container Core upgrade and not our R6 workaround.** The
+classification cast is provably selection-neutral: on 200k synthetic points,
+`classification == 2` selects the same 66,870 points before and after, and the values
+round-trip exactly. Independently, the native terrain raster, built from the same
+point cloud with that same cast applied, is byte-identical to pre-upgrade. The only
+thing that changed on the volume side is container Core itself.
 
-**The dtcc-core#85 round-trip claim still holds** on the upgraded stack:
-`vertices_before/after` and `cells_before/after` agree, `field_present` true,
-`dtype` float64 both ways, `max_abs_delta` 0.0, `lossless` true.
+**The dtcc-core#85 round-trip claim still holds** on the upgraded stack: vertices and
+cells agree before and after, `field_present` true, float64 both ways,
+`max_abs_delta` 0.0, `lossless` true.
 
-**Identity verdict: `unstable_observed`.** Loading the same bounds twice produces
-different DTCC building UUIDs, so the footprint tiles this tile is cut from do
-not carry an `id` property and `Object.id` falls back to a fresh `uuid4()` per
-load. Renderer picking must therefore continue on `sourceIndex`, and both pages
-must report canonical traceability as failed. This is measured, not assumed --
-both mapping hashes are recorded in `buildings.mesh.json`.
+### Regeneration is bit-deterministic
 
-**Identity coverage is partial, and visibly so.** 215 source buildings condition
-down to 103 regions; the mesh carries 206 markers, because
-`_split_ground_mesh_building_components` appends one marker per split component
-and never reports the parent it split from. So 103 markers carry DTCC ids
-(30,958 triangles) and 103 do not (6,714 triangles, 17.8% of the building
-geometry). Those 103 are recorded as empty `objects` entries, which says "no
-conditioned region behind this marker" rather than guessing one. Their parent
-region is recoverable only by geometry (the split children lie inside the parent
-footprint), which has not been done and is not implied anywhere in the artifact.
+Two independent end-to-end runs on the upgraded stack (stage 1, stage 2 in the
+container, sampling, `generate:real`) produced **byte-identical** `heat.h5`,
+`heat.pre.f64`, `field.grid.f32`, `field.mesh.bin`, `buildings.mesh.bin`,
+`ground.mesh.bin`, `terrain.tif` and `footprints.geojson`. The only differences were
+the `solved_at` and `stages.*` timestamps. The emulated FEM solve is reproducible run
+to run, so any future artifact difference is a real change, not solver noise.
 
-**R6 workaround, to be removed.** `benchio.integer_classification` plus
-`stage1_build.prepare_city` (native) and `solve.patch_terrain_raster_classification`
-(container) work around an upstream regression that stops both Core and dtcc-sim
-from building the tile at all. Draft report: `docs/upstream/dtcc-core-classification-dtype.md`.
-Nothing has been posted.
+### Identity
+
+**Verdict: `unstable_observed`.** Loading the same bounds twice produces different
+DTCC building UUIDs, so the footprint tiles carry no `id` property and `Object.id`
+falls back to a fresh `uuid4()` per load. Renderer picking must continue on
+`sourceIndex`, and both pages must report canonical traceability as failed. Measured,
+not assumed: both mapping hashes are in `buildings.mesh.json`.
+
+**Coverage is partial, and visibly so.** 215 source buildings condition to 103
+regions; the mesh carries 206 markers, because
+`_split_ground_mesh_building_components` appends one marker per split component and
+never reports the parent it split from. So 103 markers carry DTCC ids (30,958
+triangles) and 103 do not (6,714 triangles, 17.8% of the building geometry). Those
+103 are recorded as empty `objects` entries, which says "no conditioned region behind
+this marker" rather than guessing one. Their parent region is recoverable only by
+geometry, which has not been done and is not implied anywhere in the artifact.
+
+The contract boundary published in `buildings.mesh.json` is **`regionMarkerCount`**
+(103), not `conditionedRegionCount`. The two are equal on this tile but they are
+different quantities: `conditionedRegionCount` is the count before the raster clip and
+the coverage renormalization, and those stages are not guaranteed to be identity.
+Readers must use `regionMarkerCount`.
+
+### Workarounds to remove
+
+`core_compat.py` section 1 (`integer_classification`, `prepare_city`,
+`patch_terrain_raster_classification`) works around an upstream regression that stops
+both Core and dtcc-sim from building the tile at all. Delete the section as a unit
+when the upstream fix lands. Draft: `docs/upstream/dtcc-core-classification-dtype.md`.
+Section 2 is not a workaround and stays. Neither draft has been posted.
