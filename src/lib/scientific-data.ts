@@ -694,12 +694,28 @@ export async function loadMeshPair(
   return {mesh, json};
 }
 
-const DEPENDENCY_NAMES = [
-  'dataset.json',
-  'ground.mesh.json', 'ground.mesh.bin',
-  'buildings.mesh.json', 'buildings.mesh.bin',
-  'field.json', 'field.grid.json', 'field.grid.f32',
-] as const;
+/**
+ * The dependency basenames this loader consumes by name further down.
+ *
+ * One list, not two. The names are asserted present here and then read back
+ * through these same constants, so a rename cannot leave the presence check
+ * guarding a name nobody consumes while the consumer reaches for one nobody
+ * checked. `DEPENDENCY_NAMES` does not drive fetch or verification -- every
+ * dependency the manifest declares is fetched and hash-verified, whether or
+ * not it appears here.
+ */
+const DEP = {
+  dataset: 'dataset.json',
+  terrainJson: 'ground.mesh.json',
+  terrainBin: 'ground.mesh.bin',
+  buildingsJson: 'buildings.mesh.json',
+  buildingsBin: 'buildings.mesh.bin',
+  field: 'field.json',
+  heatGrid: 'field.grid.json',
+  heatGridData: 'field.grid.f32',
+} as const;
+
+const DEPENDENCY_NAMES = Object.values(DEP);
 
 /**
  * Resolve a manifest-relative dependency path (e.g. "../real/dataset.json")
@@ -765,14 +781,14 @@ export async function loadScientificBundle(): Promise<ScientificBundle> {
 
   const rawManifest: ScientificRawManifest = {
     scientific: sci,
-    terrainMesh: parseJson('ground.mesh.json') as MeshPairJson,
-    buildingsMesh: parseJson('buildings.mesh.json') as BuildingsMeshJson,
-    heatGrid: parseJson('field.grid.json') as FieldGridJson,
+    terrainMesh: parseJson(DEP.terrainJson) as MeshPairJson,
+    buildingsMesh: parseJson(DEP.buildingsJson) as BuildingsMeshJson,
+    heatGrid: parseJson(DEP.heatGrid) as FieldGridJson,
   };
   const rawBlobs: ScientificRawBlobs = {
     scientific: scientificBytes,
-    terrain: fetchedDependencies.get('ground.mesh.bin')!,
-    buildings: fetchedDependencies.get('buildings.mesh.bin')!,
+    terrain: fetchedDependencies.get(DEP.terrainBin)!,
+    buildings: fetchedDependencies.get(DEP.buildingsBin)!,
   };
 
   return decodeScientificBundle(rawManifest, rawBlobs);
