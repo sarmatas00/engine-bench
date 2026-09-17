@@ -256,6 +256,25 @@ def test_heat_case_has_an_explicit_null_association(generated):
     assert manifest["cases"]["heat"]["association"] is None
 
 
+def test_heat_case_names_which_sampling_each_range_describes(generated):
+    # Task 3 review round 1, finding #8: cases.heat used to carry the ground-mesh
+    # surface field's tmin/tmax under bare, unlabelled names in a block that
+    # otherwise describes the grid. The volume grid and the surface field are two
+    # different samplings of the same solve with two different ranges (grid maxes
+    # at 32.26 degC, surface at 18.76) -- an unlabelled tmax here is exactly the
+    # kind of ambiguous-provenance contract this spike exists to catch, so pin
+    # the renamed keys rather than letting a future edit reintroduce them quietly.
+    manifest, blob = generated
+    heat = manifest["cases"]["heat"]
+    assert {"surfaceTmin", "surfaceTmax", "surfaceSampling", "gridRangeSource"} <= heat.keys()
+    assert "tmin" not in heat and "tmax" not in heat
+    heat_meta = json.loads((REAL_DIR / "field.json").read_text())
+    assert heat["surfaceTmin"] == heat_meta["tmin"]
+    assert heat["surfaceTmax"] == heat_meta["tmax"]
+    assert heat["surfaceSampling"] == "ground mesh (public/data/real/field.json)"
+    assert heat["gridRangeSource"] == "public/data/real/field.grid.json"
+
+
 def test_temperature_dim_is_derived_not_hardcoded(generated):
     # Review finding #2: derive from field.grid.f32 / field.grid.json rather
     # than assuming scalar.

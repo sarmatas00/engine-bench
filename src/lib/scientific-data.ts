@@ -296,7 +296,7 @@ function validateArraySpecs(specs: ArraySpec[], totalByteLength: number, context
  * always returns a fresh, tightly-sized buffer a Float32Array/Uint32Array can
  * safely wrap at offset 0.
  */
-function readArraySpec(bytes: Uint8Array, spec: ArraySpec, context: string): Float32Array | Uint32Array | Uint8Array {
+function readArraySpec(bytes: Uint8Array, spec: ArraySpec): Float32Array | Uint32Array | Uint8Array {
   const itemSize = ITEM_SIZE[spec.type];
   const end = spec.offset + spec.length * itemSize;
   const sliced = bytes.slice(spec.offset, end);
@@ -314,6 +314,19 @@ function specByName(specs: ArraySpec[], name: string, context: string): ArraySpe
 function assertFinite(arr: Float32Array, label: string): void {
   for (let i = 0; i < arr.length; i++) {
     if (!Number.isFinite(arr[i])) throw new Error(`${label}: contains a non-finite value at index ${i}`);
+  }
+}
+
+/**
+ * `readArraySpec`'s return type is a union keyed off `spec.type`; every call
+ * site immediately casts it (`as Float32Array`, `as Uint32Array`) to the type
+ * it expects. Without this check a manifest that mislabels, say, `positions`
+ * as `u8` would hand back a Uint8Array wearing a Float32Array's type -- still
+ * finite-looking to `assertFinite`, still wrong to a renderer.
+ */
+function assertType(spec: ArraySpec, expected: ArraySpec['type'], context: string): void {
+  if (spec.type !== expected) {
+    throw new Error(`${context}: array ${spec.name} has type ${spec.type}, expected ${expected}`);
   }
 }
 
@@ -338,17 +351,19 @@ function decodeMeshPairBytes(json: MeshPairJson, bytes: Uint8Array, context: str
   }
   validateArraySpecs(json.arrays, bytes.byteLength, context);
   const byName = new Map(json.arrays.map(a => [a.name, a]));
-  const need = (name: string) => {
+  const need = (name: string, type: ArraySpec['type']) => {
     const spec = byName.get(name);
     if (!spec) throw new Error(`${context}: no ${name} array`);
-    return readArraySpec(bytes, spec, context);
+    assertType(spec, type, context);
+    return readArraySpec(bytes, spec);
   };
 
-  const positions = need('positions') as Float32Array;
-  const normals = need('normals') as Float32Array;
-  const indices = need('indices') as Uint32Array;
+  const positions = need('positions', 'f32') as Float32Array;
+  const normals = need('normals', 'f32') as Float32Array;
+  const indices = need('indices', 'u32') as Uint32Array;
   assertFinite(positions, `${context}.positions`);
   assertFinite(normals, `${context}.normals`);
+  const triangleCount = indices.length / 3;
   if (indices.length) {
     let maxIndex = 0;
     for (let i = 0; i < indices.length; i++) if (indices[i] > maxIndex) maxIndex = indices[i];
@@ -360,12 +375,23 @@ function decodeMeshPairBytes(json: MeshPairJson, bytes: Uint8Array, context: str
 
   const mesh: MeshPair = {positions, normals, indices};
   if (byName.has('temperature')) {
-    const temperature = readArraySpec(bytes, byName.get('temperature')!, context) as Float32Array;
+    const spec = byName.get('temperature')!;
+    assertType(spec, 'f32', context);
+    const temperature = readArraySpec(bytes, spec) as Float32Array;
     assertFinite(temperature, `${context}.temperature`);
     mesh.temperature = temperature;
   }
   if (byName.has('cell_object_index')) {
-    mesh.cellObjectIndex = readArraySpec(bytes, byName.get('cell_object_index')!, context) as Uint32Array;
+    const spec = byName.get('cell_object_index')!;
+    assertType(spec, 'u32', context);
+    const cellObjectIndex = readArraySpec(bytes, spec) as Uint32Array;
+    // One marker per triangle -- a short array would leave the mesh's tail with
+    // no identity at all and no error, silently (task-3-brief.md fact 3's "no
+    // entry at all" corruption case, but for the index array itself).
+    if (cellObjectIndex.length !== triangleCount) {
+      throw new Error(`${context}: cell_object_index has ${cellObjectIndex.length} entries, expected one per triangle (${triangleCount})`);
+    }
+    mesh.cellObjectIndex = cellObjectIndex;
   }
   return mesh;
 }
@@ -417,11 +443,22 @@ function validateCellObjectIndex(cellObjectIndex: Uint32Array, objects: Map<numb
 // ---------------------------------------------------------------------------
 // Smoke cases (grid, slice, streamlines) over the shared scientific.bin.
 
-function decodeGridCase(grid: SmokeGridCase, bytes: Uint8Array, context: string): ScientificGrid {
-  const nodeCount = grid.dims[0] * grid.dims[1] * grid.dims[2];
-  const velocitySpec = specByName(grid.arrays, 'grid_velocity', context);
-  const speedSpec = specByName(grid.arrays, 'grid_speed', context);
-  const pressureSpec = specByName(grid.arrays, 'grid_pressure', context);
+type FieldTriple = {velocity: Float32Array; speed: Float32Array; pressure: Float32Array};
+
+/**
+ * velocity/speed/pressure have the exact same shape (f32, 3/1/1 components,
+ * one sample per node) on every smoke product -- grid, slice, and
+ * streamlines all carry the same triple under a `<prefix>_` name. Factored
+ * once so the four checks (type, components, length, finiteness) can't drift
+ * between products the way three separate copies eventually would.
+ */
+function decodeFieldTriple(arrays: ArraySpec[], prefix: string, nodeCount: number, bytes: Uint8Array, context: string): FieldTriple {
+  const velocitySpec = specByName(arrays, `${prefix}_velocity`, context);
+  const speedSpec = specByName(arrays, `${prefix}_speed`, context);
+  const pressureSpec = specByName(arrays, `${prefix}_pressure`, context);
+  assertType(velocitySpec, 'f32', context);
+  assertType(speedSpec, 'f32', context);
+  assertType(pressureSpec, 'f32', context);
   assertComponents(velocitySpec, 3, context);
   assertComponents(speedSpec, 1, context);
   assertComponents(pressureSpec, 1, context);
@@ -429,35 +466,24 @@ function decodeGridCase(grid: SmokeGridCase, bytes: Uint8Array, context: string)
   assertLength(speedSpec, nodeCount, context);
   assertLength(pressureSpec, nodeCount, context);
 
-  const velocity = readArraySpec(bytes, velocitySpec, context) as Float32Array;
-  const speed = readArraySpec(bytes, speedSpec, context) as Float32Array;
-  const pressure = readArraySpec(bytes, pressureSpec, context) as Float32Array;
+  const velocity = readArraySpec(bytes, velocitySpec) as Float32Array;
+  const speed = readArraySpec(bytes, speedSpec) as Float32Array;
+  const pressure = readArraySpec(bytes, pressureSpec) as Float32Array;
   assertFinite(velocity, `${context}.velocity`);
   assertFinite(speed, `${context}.speed`);
   assertFinite(pressure, `${context}.pressure`);
+  return {velocity, speed, pressure};
+}
 
+function decodeGridCase(grid: SmokeGridCase, bytes: Uint8Array, context: string): ScientificGrid {
+  const nodeCount = grid.dims[0] * grid.dims[1] * grid.dims[2];
+  const {velocity, speed, pressure} = decodeFieldTriple(grid.arrays, 'grid', nodeCount, bytes, context);
   return {dims: grid.dims, origin: grid.origin, spacing: grid.spacing, association: grid.association, speed, velocity, pressure};
 }
 
 function decodeSliceCase(slice: SmokeSliceCase, bytes: Uint8Array, context: string): SliceData {
   const nodeCount = slice.resolution * slice.resolution;
-  const velocitySpec = specByName(slice.arrays, 'slice_velocity', context);
-  const speedSpec = specByName(slice.arrays, 'slice_speed', context);
-  const pressureSpec = specByName(slice.arrays, 'slice_pressure', context);
-  assertComponents(velocitySpec, 3, context);
-  assertComponents(speedSpec, 1, context);
-  assertComponents(pressureSpec, 1, context);
-  assertLength(velocitySpec, nodeCount * 3, context);
-  assertLength(speedSpec, nodeCount, context);
-  assertLength(pressureSpec, nodeCount, context);
-
-  const velocity = readArraySpec(bytes, velocitySpec, context) as Float32Array;
-  const speed = readArraySpec(bytes, speedSpec, context) as Float32Array;
-  const pressure = readArraySpec(bytes, pressureSpec, context) as Float32Array;
-  assertFinite(velocity, `${context}.velocity`);
-  assertFinite(speed, `${context}.speed`);
-  assertFinite(pressure, `${context}.pressure`);
-
+  const {velocity, speed, pressure} = decodeFieldTriple(slice.arrays, 'slice', nodeCount, bytes, context);
   return {
     axis: slice.axis, position: slice.position, resolution: slice.resolution,
     localAxes: slice.localAxes, fixedLocalAxis: slice.fixedLocalAxis,
@@ -489,26 +515,13 @@ function decodeStreamlineCase(sl: SmokeStreamlineCase, bytes: Uint8Array, contex
 
   const totalPoints = sl.vertexOffsets[sl.vertexOffsets.length - 1];
   const positionsSpec = specByName(sl.arrays, 'streamline_positions', context);
-  const velocitySpec = specByName(sl.arrays, 'streamline_velocity', context);
-  const speedSpec = specByName(sl.arrays, 'streamline_speed', context);
-  const pressureSpec = specByName(sl.arrays, 'streamline_pressure', context);
+  assertType(positionsSpec, 'f32', context);
   assertComponents(positionsSpec, 3, context);
-  assertComponents(velocitySpec, 3, context);
-  assertComponents(speedSpec, 1, context);
-  assertComponents(pressureSpec, 1, context);
   assertLength(positionsSpec, totalPoints * 3, context);
-  assertLength(velocitySpec, totalPoints * 3, context);
-  assertLength(speedSpec, totalPoints, context);
-  assertLength(pressureSpec, totalPoints, context);
-
-  const positions = readArraySpec(bytes, positionsSpec, context) as Float32Array;
-  const velocity = readArraySpec(bytes, velocitySpec, context) as Float32Array;
-  const speed = readArraySpec(bytes, speedSpec, context) as Float32Array;
-  const pressure = readArraySpec(bytes, pressureSpec, context) as Float32Array;
+  const positions = readArraySpec(bytes, positionsSpec) as Float32Array;
   assertFinite(positions, `${context}.positions`);
-  assertFinite(velocity, `${context}.velocity`);
-  assertFinite(speed, `${context}.speed`);
-  assertFinite(pressure, `${context}.pressure`);
+
+  const {velocity, speed, pressure} = decodeFieldTriple(sl.arrays, 'streamline', totalPoints, bytes, context);
 
   return {
     seedAxis: sl.seedAxis, seedPosition: sl.seedPosition, steps: sl.steps, stepSize: sl.stepSize,
@@ -563,6 +576,9 @@ export function decodeScientificBundle(manifest: ScientificRawManifest, blob: Sc
   const sci = manifest.scientific;
   if (sci.schemaVersion !== 1) {
     throw new Error(`scientific manifest: expected schemaVersion 1, got ${JSON.stringify(sci.schemaVersion)}`);
+  }
+  if (blob.scientific.byteLength !== sci.binary.byteLength) {
+    throw new Error(`scientific.bin: byteLength ${sci.binary.byteLength} but ${blob.scientific.byteLength} bytes on disk`);
   }
   const bmeta = manifest.buildingsMesh;
   if (bmeta.identityStability !== 'stable_observed_two_loads' && bmeta.identityStability !== 'unstable_observed') {
@@ -640,6 +656,22 @@ async function verifyBytes(bytes: Uint8Array, expected: VerifiedFile, label: str
 }
 
 /**
+ * `JSON.parse` on its own throws a bare `SyntaxError` with no file context --
+ * unhelpful when the failing bytes hashed correctly (so the file fetched is
+ * genuinely the one the manifest named) but are not valid JSON. Every parse
+ * of fetched bytes in this module goes through here so the error always
+ * names what failed to parse.
+ */
+function parseJsonBytes(bytes: Uint8Array, context: string): unknown {
+  const text = new TextDecoder().decode(bytes);
+  try {
+    return JSON.parse(text);
+  } catch (e) {
+    throw new Error(`${context}: invalid JSON (${(e as Error).message})`);
+  }
+}
+
+/**
  * Fetch one <name>.mesh.json + its .bin, verify both against the caller's
  * expected byteLength/sha256 (from a manifest's dependency records) via
  * crypto.subtle.digest, and only then decode typed-array views. General
@@ -655,7 +687,7 @@ export async function loadMeshPair(
 ): Promise<{mesh: MeshPair; json: MeshPairJson}> {
   const jsonBytes = await fetchBytes(jsonUrl);
   await verifyBytes(jsonBytes, expectedJson, `mesh ${jsonUrl}`);
-  const json = JSON.parse(new TextDecoder().decode(jsonBytes)) as MeshPairJson;
+  const json = parseJsonBytes(jsonBytes, jsonUrl) as MeshPairJson;
   const binBytes = await fetchBytes(binUrl);
   await verifyBytes(binBytes, expectedBin, `mesh ${binUrl}`);
   const mesh = decodeMeshPairBytes(json, binBytes, jsonUrl);
@@ -692,7 +724,7 @@ function resolveDependencyUrl(manifestUrl: string, relativePath: string): string
 export async function loadScientificBundle(): Promise<ScientificBundle> {
   const manifestUrl = assetUrl('data/scientific/scientific-manifest.json');
   const manifestBytes = await fetchBytes(manifestUrl);
-  const sci = JSON.parse(new TextDecoder().decode(manifestBytes)) as ScientificManifest;
+  const sci = parseJsonBytes(manifestBytes, manifestUrl) as ScientificManifest;
   if (sci.schemaVersion !== 1) {
     throw new Error(`scientific manifest: expected schemaVersion 1, got ${JSON.stringify(sci.schemaVersion)}`);
   }
@@ -701,27 +733,41 @@ export async function loadScientificBundle(): Promise<ScientificBundle> {
   const scientificBytes = await fetchBytes(binUrl);
   await verifyBytes(scientificBytes, sci.binary, `scientific binary ${sci.binary.path}`);
 
-  const byBaseName = new Map(sci.dependencies.map(d => [d.path.split('/').pop()!, d]));
+  // Key by basename only after checking for a collision: two distinct dependency
+  // paths sharing a basename (e.g. two directories each with their own field.json)
+  // must fail loudly, never silently collapse to whichever one is fetched last.
+  const byBaseName = new Map<string, ScientificManifest['dependencies'][number]>();
+  for (const record of sci.dependencies) {
+    const base = record.path.split('/').pop()!;
+    const existing = byBaseName.get(base);
+    if (existing) {
+      throw new Error(`scientific manifest: dependencies ${existing.path} and ${record.path} share the basename ${base}`);
+    }
+    byBaseName.set(base, record);
+  }
   for (const name of DEPENDENCY_NAMES) {
     if (!byBaseName.has(name)) throw new Error(`scientific manifest: missing dependency record for ${name}`);
   }
 
+  // Fetch and verify *every* declared dependency, not just the ones this loader
+  // currently knows what to do with -- a manifest that adds a ninth dependency
+  // tomorrow must not ship unverified just because DEPENDENCY_NAMES (used above
+  // only to assert the ones this loader needs are present) does not list it yet.
   const fetchedDependencies = new Map<string, Uint8Array>();
-  for (const name of DEPENDENCY_NAMES) {
-    const record = byBaseName.get(name)!;
+  for (const record of sci.dependencies) {
     const url = resolveDependencyUrl(manifestUrl, record.path);
     const bytes = await fetchBytes(url);
     await verifyBytes(bytes, record, `dependency ${record.path}`);
-    fetchedDependencies.set(name, bytes);
+    fetchedDependencies.set(record.path.split('/').pop()!, bytes);
   }
 
-  const parseJson = (name: string) => JSON.parse(new TextDecoder().decode(fetchedDependencies.get(name)!));
+  const parseJson = (name: string) => parseJsonBytes(fetchedDependencies.get(name)!, byBaseName.get(name)!.path);
 
   const rawManifest: ScientificRawManifest = {
     scientific: sci,
-    terrainMesh: parseJson('ground.mesh.json'),
-    buildingsMesh: parseJson('buildings.mesh.json'),
-    heatGrid: parseJson('field.grid.json'),
+    terrainMesh: parseJson('ground.mesh.json') as MeshPairJson,
+    buildingsMesh: parseJson('buildings.mesh.json') as BuildingsMeshJson,
+    heatGrid: parseJson('field.grid.json') as FieldGridJson,
   };
   const rawBlobs: ScientificRawBlobs = {
     scientific: scientificBytes,

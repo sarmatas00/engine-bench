@@ -163,8 +163,7 @@ function smokeFixture() {
   };
 }
 
-function scientificManifest(overrides?: Partial<ScientificManifest>): ScientificManifest {
-  const smoke = smokeFixture();
+function scientificManifest(smoke: ReturnType<typeof smokeFixture>, overrides?: Partial<ScientificManifest>): ScientificManifest {
   return {
     schemaVersion: 1,
     coordinateFrame: {crs: 'EPSG:3006', origin: [100, 200], z0: 1, bounds: [90, 190, 110, 210], localBounds: LOCAL_BOUNDS},
@@ -190,7 +189,7 @@ function fixture(opts?: {identityStability?: BuildingsMeshJson['identityStabilit
   const buildings = buildingsFixture(opts);
   const smoke = smokeFixture();
   const manifest: ScientificRawManifest = {
-    scientific: scientificManifest(),
+    scientific: scientificManifest(smoke),
     terrainMesh: terrain.json,
     buildingsMesh: buildings.json,
     heatGrid: heatGridFixture(),
@@ -300,6 +299,19 @@ describe('decodeScientificBundle: metadata validated before typed-array views', 
     manifest.terrainMesh = {...manifest.terrainMesh, byteLength: manifest.terrainMesh.byteLength + 4};
     expect(() => decodeScientificBundle(manifest, blob)).toThrow(/byteLength/);
   });
+
+  test('rejects a scientific.bin whose declared byteLength disagrees with the bytes handed in', () => {
+    // decodeScientificBundle's own defence: loadScientificBundle already verifies
+    // this via crypto.subtle.digest before calling in, but the pure decoder must
+    // not silently accept a truncated/oversized blob just because every array
+    // spec inside it still happens to fit.
+    const {manifest, blob} = fixture();
+    manifest.scientific = {
+      ...manifest.scientific,
+      binary: {...manifest.scientific.binary, byteLength: manifest.scientific.binary.byteLength + 4},
+    };
+    expect(() => decodeScientificBundle(manifest, blob)).toThrow(/scientific\.bin.*byteLength/);
+  });
 });
 
 describe('decodeScientificBundle: array range, overlap, and alignment', () => {
@@ -333,6 +345,27 @@ describe('decodeScientificBundle: array range, overlap, and alignment', () => {
     manifest.terrainMesh = clone(manifest.terrainMesh);
     manifest.terrainMesh.arrays.push({...manifest.terrainMesh.arrays[0]});
     expect(() => decodeScientificBundle(manifest, blob)).toThrow(/duplicate/);
+  });
+});
+
+describe('decodeScientificBundle: array typing and per-triangle identity', () => {
+  test('rejects an array spec whose declared type disagrees with what the array must be', () => {
+    // A manifest that mislabels `positions` as u8 would otherwise hand back a
+    // Uint8Array wearing a Float32Array's type -- assertFinite would still pass
+    // and a renderer would get garbage with no error anywhere in between.
+    const {manifest, blob} = fixture();
+    manifest.terrainMesh = clone(manifest.terrainMesh);
+    manifest.terrainMesh.arrays.find(a => a.name === 'positions')!.type = 'u8';
+    expect(() => decodeScientificBundle(manifest, blob)).toThrow(/positions.*type u8, expected f32/);
+  });
+
+  test('rejects a cell_object_index shorter than the triangle count', () => {
+    // Nothing else guarantees one marker per triangle; a short array would
+    // leave the mesh's tail with no identity and no error.
+    const {manifest, blob} = fixture();
+    manifest.buildingsMesh = clone(manifest.buildingsMesh);
+    manifest.buildingsMesh.arrays.find(a => a.name === 'cell_object_index')!.length -= 1;
+    expect(() => decodeScientificBundle(manifest, blob)).toThrow(/cell_object_index has 3 entries, expected one per triangle \(4\)/);
   });
 });
 
@@ -408,9 +441,8 @@ describe('decodeScientificBundle: 5 cm coordinate-frame alignment', () => {
   test('rejects city geometry that falls outside coordinateFrame.localBounds by more than 5 cm', () => {
     const {manifest, blob} = fixture();
     const farTerrain = terrainFixture();
-    farTerrain.json = clone(farTerrain.json);
-    farTerrain.json.arrays.find(a => a.name === 'positions'); // no-op, keep bytes authoritative
-    // Push one vertex well outside LOCAL_BOUNDS directly in the binary.
+    // Push one vertex well outside LOCAL_BOUNDS directly in the binary; the
+    // .json's array specs stay untouched, bytes alone carry the corruption.
     const view = new Float32Array(farTerrain.bytes.buffer, 0, 3);
     view[0] = 500;
     manifest.terrainMesh = farTerrain.json;
@@ -491,7 +523,17 @@ describe('loadScientificBundle', () => {
     return Buffer.from(digest).toString('hex');
   }
 
-  async function serveFullBundle(): Promise<void> {
+  // Mirrors resolveDependencyUrl's resolution for a manifest at
+  // /data/scientific/scientific-manifest.json, for one-level-up "../real/..."
+  // style paths -- good enough for a test double, not a re-implementation.
+  function dependencyUrl(relativePath: string): string {
+    return `/data/${relativePath.replace(/^\.\.\//, '')}`;
+  }
+
+  async function serveFullBundle(mutate?: (ctx: {
+    dependencies: Array<{path: string; bytes: Uint8Array}>;
+    files: Map<string, Uint8Array>;
+  }) => void): Promise<void> {
     const terrain = terrainFixture();
     const buildings = buildingsFixture();
     const smoke = smokeFixture();
@@ -525,11 +567,14 @@ describe('loadScientificBundle', () => {
       {path: '../real/field.grid.json', bytes: heatGridJsonBytes},
       {path: '../real/field.grid.f32', bytes: fieldGridF32Bytes},
     ];
+
+    mutate?.({dependencies, files});
+
     const dependencyRecords = await Promise.all(dependencies.map(async d => ({
       path: d.path, byteLength: d.bytes.byteLength, sha256: await sha256HexOf(d.bytes),
     })));
 
-    const manifest = scientificManifest({
+    const manifest = scientificManifest(smoke, {
       dependencies: dependencyRecords,
       binary: {path: 'scientific.bin', byteLength: smoke.bytes.byteLength, sha256: await sha256HexOf(smoke.bytes)},
     });
@@ -574,6 +619,40 @@ describe('loadScientificBundle', () => {
       return served(url);
     }) as unknown as typeof fetch;
     await expect(loadScientificBundle()).rejects.toThrow(/byteLength mismatch|sha256 mismatch/);
+  });
+
+  test('a corrupted main binary (sha256 mismatch) is rejected before decoding', async () => {
+    // The "main" half of "main and dependency hash/length mismatch" (brief Step 1) --
+    // the dependency half was already covered above.
+    await serveFullBundle();
+    const served = globalThis.fetch;
+    globalThis.fetch = (async (url: string) => {
+      if (url === '/data/scientific/scientific.bin') return new Response(new Uint8Array([1, 2, 3, 4]) as unknown as BodyInit, {status: 200});
+      return served(url);
+    }) as unknown as typeof fetch;
+    await expect(loadScientificBundle()).rejects.toThrow(/scientific binary.*(byteLength mismatch|sha256 mismatch)/);
+  });
+
+  test('fetches and verifies every declared dependency, not just the ones it already recognizes', async () => {
+    // If the loader only iterated the hard-coded list of names it knows what to
+    // do with, this extra dependency -- declared with a hash that does not match
+    // what is actually served -- would ship unverified and this would not throw.
+    await serveFullBundle(({dependencies, files}) => {
+      const path = '../real/extra.json';
+      files.set(dependencyUrl(path), new TextEncoder().encode('{"served":true}'));
+      dependencies.push({path, bytes: new TextEncoder().encode('{"declared-but-different":true}')});
+    });
+    await expect(loadScientificBundle()).rejects.toThrow(/extra\.json.*(byteLength|sha256) mismatch/);
+  });
+
+  test('rejects two declared dependencies that share a basename', async () => {
+    await serveFullBundle(({dependencies, files}) => {
+      const path = '../real/other/field.json';
+      const bytes = new TextEncoder().encode('{"unit":"degC"}');
+      files.set(dependencyUrl(path), bytes);
+      dependencies.push({path, bytes});
+    });
+    await expect(loadScientificBundle()).rejects.toThrow(/share the basename field\.json/);
   });
 });
 
