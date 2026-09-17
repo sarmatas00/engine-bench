@@ -331,19 +331,37 @@ def _resolve_streamline_seeds(datasets, lines, position_parts, origin, z0) -> li
     vertex on that specific line, and each candidate may be claimed by at most
     one line; generation fails rather than guess if either check does not hold.
     """
-    from dtcc_core.datasets.smoke import _streamline_seeds
+    # Same guard pattern as scripts/real/core_compat.py: this reaches into a
+    # private Core function and a documented-but-nested describe() key, and a
+    # bare ImportError deep inside dtcc_core.datasets.smoke would not tell the
+    # next reader what stopped being trustworthy or what not to substitute.
+    try:
+        from dtcc_core.datasets.smoke import _streamline_seeds
 
-    normalized_bounds = datasets.smoke.describe()["normalized_domain"]["bounds"]
+        normalized_bounds = datasets.smoke.describe()["normalized_domain"]["bounds"]
+        bounds = lines.domain_bounds
+        candidate_count = lines.requested_line_count
+        seed_axis, seed_position = lines.seed_axis, lines.seed_position
+    except (ImportError, AttributeError, KeyError, TypeError) as exc:
+        raise RuntimeError(
+            "dtcc-core's smoke seed placement moved, so a streamline's seed "
+            "vertex can no longer be recovered and verified. The manifest must "
+            "carry seeds because Core native exchange cannot (Global "
+            "Constraint), so do NOT fall back to the first or middle vertex of "
+            "a polyline: integration runs backward and forward from the seed "
+            "and terminates early at the domain boundary, so neither is right. "
+            f"Re-read _trace_streamline before emitting seeds again. ({exc})"
+        ) from exc
+
     n_min, n_max = float(normalized_bounds[0]), float(normalized_bounds[3])
     n_span = n_max - n_min
 
-    bounds = lines.domain_bounds
     scale = np.array([bounds.xmax - bounds.xmin, bounds.ymax - bounds.ymin, bounds.zmax - bounds.zmin])
     abs_origin = np.array([bounds.xmin, bounds.ymin, bounds.zmin])
     local_origin = np.array([origin[0], origin[1], z0])
 
     candidates_normalized = np.asarray(
-        _streamline_seeds(lines.requested_line_count, lines.seed_axis, lines.seed_position),
+        _streamline_seeds(candidate_count, seed_axis, seed_position),
         dtype=np.float64,
     )
     candidates_local = abs_origin + (candidates_normalized - n_min) / n_span * scale - local_origin

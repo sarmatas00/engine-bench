@@ -308,3 +308,26 @@ def test_committed_bundle_matches_the_generator(generated):
         "public/data/scientific/scientific.bin is stale -- "
         "re-run: .venv/bin/python scripts/scientific/generate.py"
     )
+
+
+def test_seed_recovery_fails_loudly_when_cores_seed_placement_moves(monkeypatch):
+    """A renamed Core private must not degrade into a plausible wrong seed.
+
+    `_resolve_streamline_seeds` reaches into dtcc-core's private
+    `_streamline_seeds`. If that moves, the failure has to name what stopped
+    being trustworthy -- the same contract scripts/real/core_compat.py holds for
+    the face-marker reproduction. A bare ImportError from inside
+    dtcc_core.datasets.smoke would not tell the next reader that falling back to
+    a polyline's first or middle vertex is wrong, which it is: integration runs
+    backward and forward from the seed and stops early at the domain boundary.
+    """
+    # `import dtcc_core.datasets.smoke as m` does NOT give the module: Core
+    # shadows the module name with a SmokeDataset instance so `datasets.smoke(...)`
+    # is callable. `from ... import name` still resolves through sys.modules, so
+    # that is what has to be patched here.
+    import sys
+
+    monkeypatch.delattr(sys.modules["dtcc_core.datasets.smoke"], "_streamline_seeds")
+    with pytest.raises(RuntimeError, match=r"seed placement moved"):
+        generate._resolve_streamline_seeds(
+            datasets=None, lines=None, position_parts=[], origin=[0.0, 0.0], z0=0.0)
