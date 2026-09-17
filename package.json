@@ -5,11 +5,14 @@
   "scripts": {
     "postinstall": "bun scripts/copy-cesium.ts",
     "dev": "vite",
-    "build": "bun run generate && bun run generate:real && vite build",
+    "build": "bun run generate && bun run generate:real && bun run validate:scientific && vite build",
     "generate": "bun scripts/generate.ts",
     "generate:real": "bun scripts/generate-real.ts",
+    "generate:scientific": ".venv/bin/python scripts/scientific/generate.py",
+    "validate:scientific": "bun scripts/scientific/validate.ts",
     "preview": "vite preview --port 4173 --strictPort",
     "test:unit": "bun test tests/unit",
+    "test:scientific:python": ".venv/bin/python -m pytest scripts/scientific/tests -q",
     "test": "bun run test:unit && bun run build && playwright test",
     "build:pages": "PAGES_BASE=/engine-bench/ bun run build"
   },

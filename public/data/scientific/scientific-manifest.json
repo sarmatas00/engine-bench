@@ -1,0 +1,266 @@
+{
+  "schemaVersion": 1,
+  "coordinateFrame": {
+    "crs": "EPSG:3006",
+    "origin": [
+      318619.0,
+      6399140.0
+    ],
+    "z0": 1.1191982915663998,
+    "bounds": [
+      318369.0,
+      6398890.0,
+      318869.0,
+      6399390.0
+    ],
+    "localBounds": [
+      -250.0,
+      -250.0,
+      0.0,
+      250.0,
+      250.0,
+      80.0
+    ]
+  },
+  "fields": {
+    "velocity": {
+      "unit": "m/s",
+      "dim": 3
+    },
+    "speed": {
+      "unit": "m/s",
+      "dim": 1
+    },
+    "pressure": {
+      "unit": "Pa",
+      "dim": 1
+    },
+    "temperature": {
+      "unit": "degC",
+      "dim": 1
+    }
+  },
+  "cases": {
+    "smoke": {
+      "dataCategory": "synthetic",
+      "dtccCoreRevision": "4c8d6217964a27e9ab363aa41e86001dd87f8f2c",
+      "params": {
+        "resolution": 32,
+        "time": 0.0,
+        "period": 8.0,
+        "zRange": [
+          1.1191982915663998,
+          81.1191982915664
+        ],
+        "sliceAxis": "z",
+        "slicePosition": 0.5,
+        "streamlineCount": 24,
+        "streamlineSteps": 160,
+        "streamlineStepSize": 0.05
+      },
+      "grid": {
+        "resolution": 32,
+        "dims": [
+          32,
+          32,
+          32
+        ],
+        "order": "x-fastest,y,z-slowest",
+        "origin": [
+          -250.0,
+          -250.0,
+          0.0
+        ],
+        "spacing": [
+          16.129032258064516,
+          16.129032258064516,
+          2.5806451612903225
+        ],
+        "association": "vertex",
+        "arrays": [
+          {
+            "name": "grid_velocity",
+            "type": "f32",
+            "components": 3,
+            "offset": 0,
+            "length": 98304
+          },
+          {
+            "name": "grid_speed",
+            "type": "f32",
+            "components": 1,
+            "offset": 393216,
+            "length": 32768
+          },
+          {
+            "name": "grid_pressure",
+            "type": "f32",
+            "components": 1,
+            "offset": 524288,
+            "length": 32768
+          }
+        ]
+      },
+      "slice": {
+        "axis": "z",
+        "position": 0.5,
+        "resolution": 32,
+        "order": "a-fastest,b-slower (a,b = the two non-fixed local axes)",
+        "localAxes": [
+          0,
+          1
+        ],
+        "fixedLocalAxis": 2,
+        "fixedLocalCoordinate": 40.0,
+        "time": 0.0,
+        "period": 8.0,
+        "association": null,
+        "arrays": [
+          {
+            "name": "slice_velocity",
+            "type": "f32",
+            "components": 3,
+            "offset": 655360,
+            "length": 3072
+          },
+          {
+            "name": "slice_speed",
+            "type": "f32",
+            "components": 1,
+            "offset": 667648,
+            "length": 1024
+          },
+          {
+            "name": "slice_pressure",
+            "type": "f32",
+            "components": 1,
+            "offset": 671744,
+            "length": 1024
+          }
+        ]
+      },
+      "streamlines": {
+        "seedAxis": "z",
+        "seedPosition": 0.5,
+        "requestedCount": 24,
+        "actualCount": 24,
+        "steps": 160,
+        "stepSize": 0.05,
+        "time": 0.0,
+        "period": 8.0,
+        "vertexOffsets": [
+          0,
+          90,
+          184,
+          387,
+          534,
+          611,
+          807,
+          997,
+          1240,
+          1401,
+          1548,
+          1678,
+          1935,
+          2256,
+          2499,
+          2702,
+          2827,
+          3016,
+          3273,
+          3463,
+          3557,
+          3622,
+          3747,
+          3877,
+          4073
+        ],
+        "association": null,
+        "arrays": [
+          {
+            "name": "streamline_positions",
+            "type": "f32",
+            "components": 3,
+            "offset": 675840,
+            "length": 12219
+          },
+          {
+            "name": "streamline_velocity",
+            "type": "f32",
+            "components": 3,
+            "offset": 724716,
+            "length": 12219
+          },
+          {
+            "name": "streamline_speed",
+            "type": "f32",
+            "components": 1,
+            "offset": 773592,
+            "length": 4073
+          },
+          {
+            "name": "streamline_pressure",
+            "type": "f32",
+            "components": 1,
+            "offset": 789884,
+            "length": 4073
+          }
+        ]
+      }
+    },
+    "heat": {
+      "dataCategory": "simulation",
+      "source": "dtcc-sim urban_heat",
+      "unit": "degC",
+      "tmin": 17.99999989500044,
+      "tmax": 18.7647502942796
+    }
+  },
+  "dependencies": [
+    {
+      "path": "../real/dataset.json",
+      "byteLength": 1711,
+      "sha256": "7623644c47229e3b784a9f862a414a609e27dd9501c0ff31473279499b1fcf4c"
+    },
+    {
+      "path": "../real/ground.mesh.json",
+      "byteLength": 499,
+      "sha256": "a034919dbd18b91270b2211a997b4385b5395bdb39a62cc2a8459f55bf884482"
+    },
+    {
+      "path": "../real/ground.mesh.bin",
+      "byteLength": 257952,
+      "sha256": "31f8ec25536f62bc779054e32fd6992a45c4ae4f5033bc4896dc0486593c1d7d"
+    },
+    {
+      "path": "../real/buildings.mesh.json",
+      "byteLength": 28254,
+      "sha256": "2c3bc27e7ee6739edbb038dc3aae806ff8facd5a239b8654d51d93ef491b31c8"
+    },
+    {
+      "path": "../real/buildings.mesh.bin",
+      "byteLength": 1100176,
+      "sha256": "4c34f478497f9b5f396e4087dd7ed3fe33630bc2f0f3bc2fe1fbb6fabebcb631"
+    },
+    {
+      "path": "../real/field.json",
+      "byteLength": 934,
+      "sha256": "055e67348b44412c6ad47b429f0209d922a70a8b8941542b196cea0a39b98493"
+    },
+    {
+      "path": "../real/field.grid.json",
+      "byteLength": 282,
+      "sha256": "7ce6fe5df0f5bca93bd386e5adff2eb4ab90b20bf99f8c889e28974c56ab1217"
+    },
+    {
+      "path": "../real/field.grid.f32",
+      "byteLength": 524288,
+      "sha256": "012f781c352c53d35e36b18302a793e0e473caa0c482ab68c565125ec42f7ed8"
+    }
+  ],
+  "binary": {
+    "path": "scientific.bin",
+    "byteLength": 806176,
+    "sha256": "f4ab6c115f00ccf4501c463c7ee7ae81684bb3aba679ff9ce8f41e0429843b44"
+  }
+}

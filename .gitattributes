@@ -20,3 +20,8 @@ public/data/real/*.png      -diff binary
 # dataset.json, field.json, field.grid.json, heat.meta.json and heat.xdmf stay
 # diffable on purpose: they carry the bounds, revisions, field ranges and
 # round-trip record that a drift review has to read.
+
+# Task 2's scientific bundle: same rule. scientific.bin is machine output with
+# no line structure; scientific-manifest.json stays diffable like field.json
+# above -- it is where the domain meaning (units, association, params) lives.
+public/data/scientific/*.bin   -diff binary
