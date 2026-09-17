@@ -1,0 +1,22 @@
+# Generated bench artifacts. These are committed on purpose (the pages load them
+# and the drift check compares them), but they are machine output: a reviewer
+# needs the generator diff, not 1,500 lines of regenerated object table or a
+# single-line GeoJSON. `-diff` keeps them in `git diff --stat` and out of the
+# diff body, which is what `review-package` hands a task reviewer.
+#
+# Their real review is the drift comparison in NOTES.md, not a line diff.
+public/data/real/*.mesh.json    -diff
+public/data/real/footprints.geojson -diff
+
+# Already binary to git; listed so the intent is explicit rather than inferred.
+public/data/real/*.bin      -diff binary
+public/data/real/*.glb      -diff binary
+public/data/real/*.h5       -diff binary
+public/data/real/*.f64      -diff binary
+public/data/real/*.f32      -diff binary
+public/data/real/*.tif      -diff binary
+public/data/real/*.png      -diff binary
+
+# dataset.json, field.json, field.grid.json, heat.meta.json and heat.xdmf stay
+# diffable on purpose: they carry the bounds, revisions, field ranges and
+# round-trip record that a drift review has to read.

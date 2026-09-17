@@ -12,6 +12,56 @@
 
 **Companion plans:** docs/superpowers/plans/2026-09-11-vtk-wasm-feasibility-probe.md and docs/superpowers/plans/2026-09-11-dtcc-3d-assignment-teaching.md
 
+## Contract Amendments (binding, supersede anything below)
+
+Task 1 measured the real artifact and two of this plan's stated contracts turned
+out to be false. These amendments win wherever they conflict with a task section.
+Ledger: `.superpowers/sdd/2026-09-11-scientific-visualization-decision-spike/progress.md`,
+rulings R5 and R6. Drift and evidence: `NOTES.md`.
+
+**A1: a face marker is a conditioned mesher region, not a building.** The plan
+said "marker >= 0 means `city.buildings[marker]`". It does not. Between the two
+sit footprint merging (`merge_buildings=True`), `min_building_area=15.0`
+filtering, clipping to the raster bounds, coverage renormalization, and a split
+pass that appends markers of its own. **Measured on the shipped tile: 215 source
+buildings condition to 103 regions, the mesh carries 206 markers, and marker 0 is
+building 59.** 34 regions stand for more than one building.
+
+The shipped `objects` table is therefore **indexed by marker and fans out**:
+
+~~~json
+{"objects": [{"sourceIndexes": [129, 131, 132],
+              "dtccIds": ["ac5f2bb5-...", "cd16f85d-...", "5a747a87-..."]}],
+ "objectIndexSpace": "conditioned_building_region",
+ "conditionedRegionCount": 103, "splitAddedMarkers": 103, "sourceBuildingCount": 215,
+ "identityStability": "unstable_observed",
+ "firstLoadHash": "...", "secondLoadHash": "...", "auditedAt": "..."}
+~~~
+
+Read `sourceIndexes[0]` / `dtccIds[0]` when the fan-out is one. Never flatten a
+multi-source entry to a single id, and never rename `sourceIndex` to an id.
+
+**An empty entry is valid data, not an error.** 103 of the 206 markers (6,714
+triangles, 17.8% of the building mesh) were appended by
+`_split_ground_mesh_building_components` and have no conditioned region behind
+them, so they carry `{"sourceIndexes": [], "dtccIds": []}`. A loader that throws
+on them rejects the real artifact and fails the page load. Throw only on a marker
+with **no entry at all** (index >= `objects.length`), which is genuine corruption.
+
+**Identity stability is settled: `unstable_observed`.** Measured by loading the
+tile twice. The DTCC footprint tiles carry no `id` property, so `Object.id` falls
+back to a fresh `uuid4()` per load. The conditional branches below are no longer
+conditional: picking runs on `sourceIndex`, traceability renders as run-local,
+and both pages must report canonical traceability as **failed**.
+
+**R6: an upstream Core regression is worked around locally.** Post-#85 Core
+cannot build the tile at all (`build_terrain_raster` rejects the float64
+classification that Core's own loader produces). It breaks `dtcc-sim` too. The
+workaround is `benchio.integer_classification`, applied in
+`stage1_build.prepare_city` natively and in `solve.patch_terrain_raster_classification`
+inside the container. Both are temporary; remove them when the upstream fix lands.
+Draft report: `docs/upstream/dtcc-core-classification-dtype.md` (**not posted**).
+
 ## Global Constraints
 
 - Use real Gothenburg terrain and buildings plus clearly labelled synthetic DTCC smoke data.
@@ -78,14 +128,18 @@
 - Regenerate: public/data/real/buildings.mesh.json and buildings.mesh.bin
 
 **Interfaces:**
-- Consumes: surface face markers where marker >= 0 means city.buildings[marker].
-- Produces: cell_object_index: Uint32Array and objects: Array<{sourceIndex:number,dtccId:string}>, plus an observed two-load stability verdict.
+- Consumes: surface face markers, where marker >= 0 is a **conditioned mesher region**, not a `city.buildings` index. (The original line here said `city.buildings[marker]`; that was measured false -- see Contract Amendments.)
+- Produces: cell_object_index: Uint32Array and objects: Array<{sourceIndexes:number[],dtccIds:string[]}> indexed by marker, plus an observed two-load stability verdict.
 
-- [ ] **Step 0: Upgrade to post-#85 Core and Sim**
+> **Task 1 is COMPLETE** (commit `f74590e`). The Step 4 snippet below is kept as the
+> historical brief and is **superseded** by the amendment: it would have written one
+> wrong DTCC UUID per merged or split region. What actually shipped is in the ledger.
+
+- [x] **Step 0: Upgrade to post-#85 Core and Sim**
 
 Before any code change, snapshot the committed pre-upgrade metrics (bounds, mesh counts, relief, field ranges, stage2.roundtrip) from public/data/real/dataset.json. In ../dtcc-core, confirm only untracked files are present, then `git checkout 4c8d621` and reinstall the editable package into engine-bench/.venv (scikit-build-core rebuilds the C++ extension). In ../dtcc-sim, check out e24a1f2 and rebuild with `DOCKER_PLATFORM=linux/amd64 docker compose build dtcc-sim`. Verify benchio.distribution_revision reports 4c8d621 natively and 5ca2ca4 in the container. Stage 2 still round-trips through heat.xdmf, which Core retains; legacy .pb is gone and must not be reintroduced.
 
-- [ ] **Step 1: Write the failing per-cell round-trip test**
+- [x] **Step 1: Write the failing per-cell round-trip test**
 
 ~~~python
 def test_mesh_pair_round_trips_cell_arrays(tmp_path):
@@ -104,13 +158,13 @@ def test_mesh_pair_round_trips_cell_arrays(tmp_path):
 
 Add a mesh-split test with two markers and assert the selected values retain triangle order. Add stable and unstable two-load identity fixtures: stable IDs produce stable_observed_two_loads; changed UUIDs produce unstable_observed and retain both mapping hashes.
 
-- [ ] **Step 2: Run the focused tests**
+- [x] **Step 2: Run the focused tests**
 
 Run: .venv/bin/python -m pytest scripts/real/tests/test_benchio.py scripts/real/tests/test_mesh_split.py -q
 
 Expected: FAIL because cell_extra, metadata, and preserved face values do not exist.
 
-- [ ] **Step 3: Extract one generic packer, then extend the artifact writer**
+- [x] **Step 3: Extract one generic packer, then extend the artifact writer**
 
 Extract this low-level interface from the existing mesh writer:
 
@@ -130,11 +184,15 @@ def write_mesh_pair(
 
 Validate vertex extras against len(positions) and cell extras against the triangle count. Delegate every byte-layout decision to pack_array_bundle. Reject metadata keys bin, vertexCount, indexCount, byteLength, and arrays.
 
-- [ ] **Step 4: Preserve canonical source identity**
+- [x] **Step 4: Preserve canonical source identity**
 
 Have submesh optionally accept face values and return selected values without reordering. Write buildings with:
 
 ~~~python
+# SUPERSEDED -- do not copy. `enumerate(city.buildings)` is the wrong index space:
+# a marker is a conditioned region, so this writes a wrong UUID for every merged or
+# split region (34 + 103 of 206 on the shipped tile). See Contract Amendments, and
+# `stage1_build.marker_source_map` / `building_objects` for what shipped.
 objects = [{"sourceIndex": i, "dtccId": str(b.id)} for i, b in enumerate(city.buildings)]
 benchio.write_mesh_pair(
     out_dir, "buildings",
@@ -147,7 +205,7 @@ benchio.write_mesh_pair(
 
 Do not add IDs to terrain or the flattened limitation-demo mesh. Load the source city twice with the same bounds before regeneration and compare sourceIndex-to-dtccId mappings. Write identityStability, both observed mapping hashes, and the audit timestamp into buildings.mesh.json. Never rename sourceIndex to an ID.
 
-- [ ] **Step 5: Test and regenerate**
+- [x] **Step 5: Test and regenerate**
 
 ~~~bash
 .venv/bin/python -m pytest scripts/real/tests -q
@@ -159,11 +217,11 @@ bun run generate:real
 
 Expected: one source index per building triangle, one non-empty unique DTCC ID per referenced index within each load, and an explicit stable_observed_two_loads or unstable_observed verdict. When unstable, renderer picking continues with sourceIndex for parity while both pages report canonical traceability as failed. Stage 2 and sampling are required because stage1_build.py resets the stage-2 marker; do not leave committed heat artifacts paired with a manifest that says no heat field exists.
 
-- [ ] **Step 6: Check drift**
+- [x] **Step 6: Check drift**
 
 Compare bounds, mesh counts, relief, field ranges, and the stage-2 round-trip record with the Step 0 snapshot. Generation timestamps and Core/Sim revisions change by design. Record any Core-upgrade drift in NOTES.md with both revisions, because the posted dtcc-twin#1 and dtcc-core#85 comments quote pre-upgrade numbers. ID drift must match unstable_observed and remain visible; unexplained scientific or geometry changes stop the task.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ~~~bash
 git add scripts/real/benchio.py scripts/real/stage1_build.py scripts/real/tests/test_benchio.py scripts/real/tests/test_mesh_split.py public/data/real/buildings.mesh.json public/data/real/buildings.mesh.bin
@@ -272,13 +330,19 @@ git commit -m "feat: generate shared DTCC scientific artifacts"
 
 - [ ] **Step 1: Write failing loader tests**
 
-Cover schema version, main and dependency hash/length mismatch, array overlap/range/alignment, non-finite values, components, streamline offsets, missing sourceIndex/dtccId values, both identity-stability verdicts, 5 cm coordinate-frame alignment, and fetch errors.
+Cover schema version, main and dependency hash/length mismatch, array overlap/range/alignment, non-finite values, components, streamline offsets, a marker with no entry at all (corruption -> throw), a marker with an empty entry (a split-added region -> valid, no id), a multi-source fan-out entry, both identity-stability verdicts, 5 cm coordinate-frame alignment, and fetch errors.
 
 ~~~typescript
 test('decodes building identity without collapsing its two meanings', () => {
   const fixture = scientificFixture();
   const bundle = decodeScientificBundle(fixture.manifest, fixture.blob);
-  expect(bundle.city.objects.get(7)).toEqual({sourceIndex: 7, dtccId: 'building-7'});
+  // A marker is a conditioned region: it can stand for several buildings...
+  expect(bundle.city.objects.get(7)).toEqual({
+    sourceIndexes: [129, 131, 132],
+    dtccIds: ['ac5f2bb5-...', 'cd16f85d-...', '5a747a87-...'],
+  });
+  // ...or for none at all, when the mesher split it off. Valid, not an error.
+  expect(bundle.city.objects.get(150)).toEqual({sourceIndexes: [], dtccIds: []});
 });
 ~~~
 
@@ -305,7 +369,9 @@ export type ScientificBundle = {
   city: {
     terrain: MeshPair;
     buildings: MeshPair;
-    objects: Map<number, {sourceIndex: number; dtccId: string}>;
+    // Keyed by face marker (a conditioned region). Empty arrays mean a
+    // split-added marker with no source building -- valid, never fabricated.
+    objects: Map<number, {sourceIndexes: number[]; dtccIds: string[]}>;
     identityStability: 'stable_observed_two_loads' | 'unstable_observed';
   };
   smoke: {grid: ScientificGrid; slice: SliceData; streamlines: StreamlineData};
@@ -321,7 +387,7 @@ Validate metadata before typed-array views. Fetch every declared dependency via 
 
 - [ ] **Step 5: Complete identity and coordinate decoding**
 
-Build the sourceIndex-to-object map and validate every cell_object_index against it. Missing entries throw and never fabricate IDs. Validate the shared origin and artifact bounds against the 5 cm contract before returning ScientificBundle.
+Build the marker-to-object map and validate every cell_object_index against it. A marker with **no entry at all** (index >= objects.length) throws as corruption; a marker with an **empty entry** is valid and decodes to empty arrays, because 103 of the 206 markers legitimately have no source building. Never fabricate IDs and never substitute a neighbouring region's. Validate the shared origin and artifact bounds against the 5 cm contract before returning ScientificBundle.
 
 - [ ] **Step 6: Verify and commit**
 
@@ -354,7 +420,8 @@ export type ScientificProbe = {
   canvasCount: number;
   field: true;
   provenance: {smoke: 'synthetic'; heat: 'simulation'};
-  selectedObject?: {sourceIndex: number; dtccId: string; traceability: 'stable' | 'run-local'};
+  selectedObject?: {marker: number; sourceIndexes: number[]; dtccIds: string[];
+                    traceability: 'stable' | 'run-local' | 'none'};
   selectedValue?: {field: string; value: number; unit: string; world: [number, number, number]};
   benchmark?: {
     cpuFrameTimesMs: number[];
@@ -381,7 +448,7 @@ Run: bun test tests/unit/chrome.test.ts tests/unit/scientific-probes.test.ts
 
 Add a button Control variant and return setReadout(label, value) from mountChrome. Keep camera, picking, transfer functions, and GPU code in page modules.
 
-Implement probeGridNode, sampleGridTrilinear, objectRefForCell, and alignmentDistance in scientific-probes.ts. Index x-fastest grids as x + nx * (y + ny * z). Always return sourceIndex and dtccId separately; map unstable_observed to run-local traceability and a visible warning.
+Implement probeGridNode, sampleGridTrilinear, objectRefForCell, and alignmentDistance in scientific-probes.ts. Index x-fastest grids as x + nx * (y + ny * z). Always return sourceIndexes and dtccIds separately and as arrays, and carry the marker itself. The tile measures unstable_observed, so traceability is 'run-local' with a visible warning for any attributed marker, and 'none' for a split-added marker with no source building -- which the readout must state plainly rather than leaving blank.
 
 Add attachContextLoss(canvas, handlers). It prevents the default event, stops BenchmarkDriver, sets status to context-lost and measurementValid to false, invokes renderer-specific disposal, shows a visible failure, and exposes a reload button. It does not reconstruct GPU state.
 
@@ -411,7 +478,7 @@ git commit -m "feat: add shared scientific controls and probes"
 
 - [ ] **Step 1: Add a combined-page mode and register a failing smoke test**
 
-Extend PageSpec with mode?: 'matrix' | 'combined', defaulting to matrix. Keep the current synthetic/real loop for matrix entries and run combined entries once without a dataset query. Add this page with mode combined; do not add it to FIELD_PAGES. Assert renderer vtkjs, one canvas, both provenance categories, non-empty selectedObject.sourceIndex/dtccId values with the expected traceability label, and an m/s selected value.
+Extend PageSpec with mode?: 'matrix' | 'combined', defaulting to matrix. Keep the current synthetic/real loop for matrix entries and run combined entries once without a dataset query. Add this page with mode combined; do not add it to FIELD_PAGES. Assert renderer vtkjs, one canvas, both provenance categories, a selectedObject carrying its marker plus sourceIndexes/dtccIds arrays with the expected traceability label ('run-local' on this tile), and an m/s selected value. Pick a marker known to be attributed; cover the unattributed case separately and assert the readout says so rather than showing an empty id.
 
 - [ ] **Step 2: Confirm missing-page failure**
 
@@ -467,7 +534,7 @@ git commit -m "feat: add vtk.js scientific reference scene"
 
 - [ ] **Step 1: Register failing parity checks**
 
-Add 14-threejs-scientific to PAGES with mode combined and no FIELD_PAGES membership. Assert renderer threejs, canvasCount 1, provenance {smoke: synthetic, heat: simulation}, a selected object containing separate sourceIndex and dtccId fields with the expected traceability label, and a selected speed value whose unit is m/s.
+Add 14-threejs-scientific to PAGES with mode combined and no FIELD_PAGES membership. Assert renderer threejs, canvasCount 1, provenance {smoke: synthetic, heat: simulation}, a selected object containing separate sourceIndexes and dtccIds arrays plus its marker, with the expected traceability label ('run-local' on this tile), and a selected speed value whose unit is m/s. Mirror page 13's unattributed-marker assertion exactly, so the parity suite compares like with like.
 
 - [ ] **Step 2: Confirm missing-page failure**
 
@@ -688,7 +755,7 @@ portless engine-bench-scientific bun run dev --host 0.0.0.0
 ## What Already Exists
 
 - scripts/real/benchio.py already implements aligned typed-array packing; Task 1 deepens and reuses it instead of creating a second packer.
-- stage1_build.py already retains surface-mesh markers long enough to map faces back to city.buildings.
+- stage1_build.py retains surface-mesh markers, but they map to **conditioned mesher regions**, not to city.buildings. `stage1_build.marker_source_map` composes the real chain (conditioning -> raster clip -> coverage renormalization -> Core's `source_map`) and raises if Core's internals move rather than degrading to the wrong mapping. Treat every other "What Already Exists" line here as unverified on post-#85 Core: this one and the identity contract were both wrong.
 - DTCC Core already provides VolumeMesh, FieldSlice, StreamlineCollection, units, explicit field association, CRS metadata, and deterministic smoke generation. After #85, VolumeMesh round-trips natively as `.dtcc` (float64 typed arrays); FieldSlice and StreamlineCollection are Python objects only and fail native serialization by design.
 - page 11 already proves vtk.js regular-grid volume and isosurface rendering.
 - Three.js already provides Data3DTexture and a public volume-shader addon, while the review confirmed transparent depth-aware compositing still requires custom work.
@@ -707,9 +774,9 @@ ARTIFACT GENERATION                                  BROWSER / USER FLOW
   '-- per-cell count mismatch
                                                    [PLAN] trusted load boundary
 [PLAN] building identity                              |-- all dependency hashes
-  |-- stable across two loads                         |-- corrupt/missing data -> visible error
-  |-- unstable -> run-local warning                   |-- 5 cm coordinate gate
-  '-- marker -> sourceIndex -> dtccId                  '-- no fabricated identity
+  |-- MEASURED unstable -> run-local                  |-- corrupt/missing data -> visible error
+  |-- 103/206 markers have no building               |-- 5 cm coordinate gate
+  '-- marker -> region -> sourceIndexes/dtccIds       '-- no fabricated identity
 
 [PLAN] smoke / heat artifacts                       [PLAN] renderer parity [E2E]
   |-- deterministic complete lattice                  |-- one canvas each
@@ -735,6 +802,8 @@ Coverage before implementation: 0 planned paths implemented. Plan coverage: ever
 | Failure | Test | Handling | User-visible result |
 |---|---|---|---|
 | DTCC IDs change between loads | Two-load Python audit | Retain sourceIndex and mark traceability failed | Run-local warning |
+| ~~IDs change~~ **CONFIRMED: they do** | Shipped audit, `unstable_observed` | Picking on sourceIndex; traceability reported failed on both pages | Run-local warning, always on |
+| A marker has no source building | 103/206 on the shipped tile | Empty `sourceIndexes`/`dtccIds`; loader accepts, readout states it | "No DTCC id for this surface" |
 | Mixed regenerated artifacts | Hash/length fixtures and build validator | Abort before Vite build or renderer construction | Exact dependency error |
 | Incomplete smoke lattice | Python generator invariant | Abort generation | Exact missing/duplicate coordinate |
 | Renderer loses field meaning | Cross-renderer value/unit assertions | Fail correctness gate | Failed-path report |
@@ -786,7 +855,7 @@ Conflict flag: Lanes B and C both edit tests/smoke.spec.ts. Add both combined pa
 
 - [ ] T1 (P1, human: ~2h / Codex: ~20m) - Plans - Keep core, VTK.wasm, and teaching completion states separate.
 - [ ] T2 (P1, human: ~1h / Codex: ~15m) - Build - Make scientific regeneration explicit and validate committed artifacts during normal builds.
-- [ ] T3 (P1, human: ~2h / Codex: ~20m) - Identity - Audit DTCC IDs across two loads and preserve sourceIndex separately.
+- [ ] T3 (P1, human: ~2h / Codex: ~20m) - Identity - Audit DTCC IDs across two loads and preserve sourceIndex separately. **Delivered by Task 1 (f74590e), with two corrections: the audit returned `unstable_observed` (not a hypothetical), and identity is per conditioned region with fan-out, not per building. Remaining for T3 is the browser-side half.**
 - [ ] T4 (P1, human: ~2h / Codex: ~20m) - Provenance - Hash every referenced city and heat dependency.
 - [ ] T5 (P1, human: ~2-4d / Codex: ~2-4h) - Three.js - Terminate volume rays at opaque city depth.
 - [ ] T6 (P2, human: ~1h / Codex: ~15m) - Shared code - Split artifact loading from probes and measurement.

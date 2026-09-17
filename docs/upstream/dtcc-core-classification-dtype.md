@@ -1,4 +1,4 @@
-# DRAFT — not posted
+# DRAFT: not posted
 
 Intended target: `dtcc-core` issues. **Nothing here has been posted.** Posting needs
 explicit approval plus an immediate `sarmatas00` identity check (`gh auth status`).
@@ -13,7 +13,7 @@ Recorded as ledger ruling R6 / decision `548c3d0a`.
 
 On `4c8d621`, any pipeline that goes `download_pointcloud` → `build_terrain_raster(ground_only=True)`
 fails. That includes `datasets._city_mesh_common.prepare_city_from_bounds`, and so every dataset
-built on it — `city_surface_mesh` and `city_volume_mesh` among them.
+built on it, `city_surface_mesh` and `city_volume_mesh` among them.
 
 It reaches downstream repos. `dtcc-sim`'s urban-heat simulation fails the same way on container
 Core `5ca2ca4`, because `dtcc_sim.urban_heat._build_mesh_from_bounds` calls
@@ -44,7 +44,7 @@ loader is what makes it wrong, so no re-download or cache clear helps.
 
 ## Cause
 
-1. `PointCloud.classification` defaults to `np.empty(0)` — **float64**.
+1. `PointCloud.classification` defaults to `np.empty(0)`, which is **float64**.
    `model/geometry/pointcloud.py:35`
 2. `io.load_pointcloud` on a *list* of tiles seeds a fresh `PointCloud()` and merges into it.
    `merge` does `np.concatenate((self.classification, other.classification))`, so the float64
