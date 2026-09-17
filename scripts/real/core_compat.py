@@ -252,6 +252,10 @@ def marker_source_map(city, max_mesh_size) -> tuple[list[list[int]], int]:
             _raster_bounds_tuple,
         )
         conditioner = dtcc_core.builder.build_conditioned_footprints
+        # Inside the guard: conditioning_defaults does its own Core imports
+        # (build_city_surface_mesh, _normalize_max_mesh_size,
+        # CitySurfaceMeshArgs), and those deserve the same named failure.
+        defaults = conditioning_defaults(max_mesh_size)
     except (ImportError, AttributeError) as exc:
         raise RuntimeError(
             "dtcc-core's surface-region internals moved, so the face-marker to "
@@ -261,7 +265,6 @@ def marker_source_map(city, max_mesh_size) -> tuple[list[list[int]], int]:
             f"by marker, which is what ruling R5 exists to prevent. ({exc})"
         ) from exc
 
-    defaults = conditioning_defaults(max_mesh_size)
     conditioned = conditioner(
         city.buildings,
         lod=None,

@@ -443,10 +443,14 @@ its LOD0 bounds : x[318456.42, 318460.55] y[6399120.86, 6399125.05]
 
 `contains_bounds` then fails for a footprint sitting ~90 m inside the tile edge, and
 the building is removed as "outside the terrain". `contains_bounds` defaults to
-`ignore_z=True`, so this is not a z issue. `City.add_buildings` is unchanged between
-`5cf56fa` and `4c8d621`; `Object.calculate_bounds` was rewritten in that range. We
-did not pin the exact line, only that the behavior differs and that `add_buildings`
-is not what changed. Reported as a draft: `docs/upstream/dtcc-core-empty-pointcloud-bounds.md`.
+`ignore_z=True`, so this is not a z issue.
+
+The exact line is now pinned. `City.add_buildings` is unchanged between `5cf56fa` and
+`4c8d621`; `Object.calculate_bounds` was rewritten, and the new version skips empty
+geometries for `Surface`, `MultiSurface` and `Solid` but **not** for `PointCloud`. An
+empty point cloud therefore falls through to a forced `calculate_bounds()` and is
+unioned in as a zero box. The intent is already in the code; `PointCloud` is missing
+from the list. Reported as a draft: `docs/upstream/dtcc-core-empty-pointcloud-bounds.md`.
 
 **It does not move any geometry.** Both buildings contribute no mesh faces either
 way, which is why every mesh count above is unchanged. Nothing was worked around:

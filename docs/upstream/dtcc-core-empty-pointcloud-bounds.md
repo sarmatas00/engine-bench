@@ -51,11 +51,32 @@ at the origin. The second case is the same shape (area 13.68 m2).
 ## Why it is post-#85 behavior
 
 `City.add_buildings` is unchanged between `5cf56fa` and `4c8d621`. `Object.calculate_bounds`
-was rewritten in that range (`dtcc_core/model/object/object.py`, ~212 insertions /
-167 deletions), and at `5cf56fa` the same tile keeps all 217 buildings. We have not
-pinned the exact line that changed the empty-geometry handling, only that the
-behavior differs across the two revisions and that `add_buildings` is not the thing
-that changed.
+was rewritten in that range (`dtcc_core/model/object/object.py`), and the rewrite is
+where the behavior changed.
+
+The new implementation skips empty geometries, but only for three of the four kinds:
+
+```python
+for geometry in geometries:
+    if geometry is None:
+        continue
+    if isinstance(geometry, Surface) and not geometry.vertices.size:
+        continue
+    if isinstance(geometry, (MultiSurface, Solid)) and not any(s.vertices.size for s in geometry.surfaces):
+        continue
+    recalculate = getattr(geometry, "calculate_bounds", None)
+    if callable(recalculate):
+        recalculate()          # <- an empty PointCloud lands here
+    geometry_bounds = geometry.bounds
+    ...union...
+```
+
+An empty `PointCloud` matches none of the guards, so it is recomputed and unioned in
+as a zero box. The old implementation read `geom.bounds` lazily and did not force that
+recompute, so the same tile keeps all 217 buildings at `5cf56fa`.
+
+The intent is already in the code: empty geometry should not contribute. `PointCloud`
+is simply missing from the list.
 
 ## Why it matters
 
@@ -67,9 +88,17 @@ rather than on geometry.
 
 ## Suggested fix
 
-Skip empty geometries when aggregating object bounds, so an empty `POINT_CLOUD`
-contributes nothing rather than a zero box. Alternatively have `extract_roof_points`
-attach no geometry at all when there are no points, rather than an empty one.
+Add the missing case to the skip list in `Object.calculate_bounds`, so an empty
+`PointCloud` contributes nothing rather than a zero box:
+
+```python
+if isinstance(geometry, PointCloud) and not geometry.points.size:
+    continue
+```
+
+A general emptiness check would cover every geometry type at once and avoid the next
+omission of this shape. Alternatively, have `extract_roof_points` attach no geometry
+at all when there are no points, rather than an empty one.
 
 A regression test would be: a building inside the terrain whose point-cloud geometry
 is empty survives `add_buildings(remove_outside_terrain=True)`.
