@@ -1,5 +1,6 @@
 import './chrome.css';
 import {assetUrl} from './dataset';
+import type {ScientificProbe} from './scientific-probes';
 
 export type Control =
   | {kind: 'toggle'; id: string; label: string; value: boolean; onChange: (v: boolean) => void}
@@ -63,6 +64,7 @@ export function mountChrome(opts: ChromeOptions) {
     canvasHost: host,
     probe: (text: string) => { probeEl.textContent += text + '\n'; },
     setProbe: (key: string, value: unknown) => { window.__bench.probe[key] = value; },
+    setScientificProbe,
     /**
      * A named, updatable readout row (identity, sampled value, ...) that
      * later calls overwrite in place rather than appending -- unlike
@@ -81,8 +83,46 @@ export function mountChrome(opts: ChromeOptions) {
       }
       row.textContent = formatReadout(label, value);
     },
+    /**
+     * Renders a visible failure panel over the canvas host, with a working
+     * reload control, and marks the page ready (so a smoke test polling
+     * `window.__bench.ready` is never left hanging on a page that has
+     * already failed). This is what a page's `attachContextLoss` `onLost`
+     * handler (src/lib/scientific-probes.ts) should call -- one shared
+     * implementation instead of vtk.js's and Three.js's pages each building
+     * their own. `message` is assigned through `textContent`, same
+     * textContent-only rule as `setReadout`.
+     */
+    fail: (message: string) => {
+      const el = document.createElement('div');
+      el.className = 'failure';
+      const p = document.createElement('p');
+      p.textContent = message;
+      const reload = document.createElement('button');
+      reload.type = 'button';
+      reload.textContent = 'Reload';
+      reload.onclick = () => location.reload();
+      el.append(p, reload);
+      host.appendChild(el);
+      window.__bench.ready = true;
+    },
     ready: () => { window.__bench.ready = true; }
   };
+}
+
+/**
+ * The one typed publish seam for the scientific probe both pages assemble
+ * (src/lib/scientific-probes.ts's ScientificProbe): writes it to
+ * `window.__bench.probe.scientific`. A page that instead called the generic
+ * `setProbe('scientific', myProbe)` would get no type checking at all on
+ * `myProbe`'s shape, and Task 7's parity suite would then compare two
+ * independently, un-checked-shaped objects. Exported as a standalone
+ * function (not only reachable through `mountChrome`'s returned `ui`, which
+ * needs a DOM to construct) so tests/unit/chrome.test.ts can verify it
+ * without one.
+ */
+export function setScientificProbe(p: ScientificProbe): void {
+  window.__bench.probe.scientific = p;
 }
 
 /**

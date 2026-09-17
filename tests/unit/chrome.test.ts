@@ -1,11 +1,12 @@
 import {describe, expect, test, mock} from 'bun:test';
 import type {Control} from '../../src/lib/chrome';
+import type {ScientificProbe} from '../../src/lib/scientific-probes';
 
 // chrome.ts installs `window.__bench` at module scope, so it needs a `window` to exist before it
 // is imported at all. Shim it and import dynamically: a static import would be hoisted above the
 // assignment. Nothing here touches the DOM beyond that.
 (globalThis as any).window ??= globalThis;
-const {readout, formatReadout, controlHandler} = await import('../../src/lib/chrome');
+const {readout, formatReadout, controlHandler, setScientificProbe} = await import('../../src/lib/chrome');
 
 describe('readout (slider value printing)', () => {
   test('is an exact no-op on the synthetic scene\'s whole numbers', () => {
@@ -126,5 +127,29 @@ describe('controlHandler (one callback per control, DOM-free)', () => {
     controlHandler(toggle)(true);
     expect(onChange).toHaveBeenCalledTimes(1);
     expect(onClick).toHaveBeenCalledTimes(1); // unchanged
+  });
+});
+
+describe('setScientificProbe (the typed publish seam)', () => {
+  function fixtureProbe(): ScientificProbe {
+    return {
+      renderer: 'threejs', status: 'ready', canvasCount: 1, field: true,
+      provenance: {smoke: 'synthetic', heat: 'simulation'},
+      resources: {buffers: 0, textures: 0, renderTargets: 0, listeners: 0, observers: 0},
+      measurementValid: true,
+    };
+  }
+
+  test('writes the probe onto window.__bench.probe.scientific verbatim', () => {
+    const probe = fixtureProbe();
+    setScientificProbe(probe);
+    expect((window as any).__bench.probe.scientific).toBe(probe);
+  });
+
+  test('a later call replaces the previous probe rather than merging into it', () => {
+    setScientificProbe(fixtureProbe());
+    const second: ScientificProbe = {...fixtureProbe(), renderer: 'vtkjs', canvasCount: 2};
+    setScientificProbe(second);
+    expect((window as any).__bench.probe.scientific).toEqual(second);
   });
 });

@@ -13,7 +13,7 @@
  * into a renderer's own objects.
  */
 
-import type {BuildingObjectEntry, ScientificGrid} from './scientific-data';
+import type {BuildingObjectEntry, ScientificGrid, ScientificGridRef} from './scientific-data';
 
 // ---------------------------------------------------------------------------
 // The probe contract. Both pages assert against this shape -- getting it
@@ -84,6 +84,37 @@ export function gridField(grid: ScientificGrid, field: 'speed' | 'pressure' | 'v
 }
 
 /**
+ * Adapts the real heat grid into the same shape, given the caller's already-
+ * fetched `field.grid.f32` bytes as a Float32Array (scientific-data.ts's
+ * ScientificGridRef is a *reference* -- dims/origin/spacing/dataUrl -- not
+ * the loaded array; loading the bytes from `ref.dataUrl` is page-level I/O,
+ * not this module's job). scripts/real/sample_field.py's grid writer
+ * documents its own array as "x fastest, then y, then z" -- the same order
+ * gridNodeIndex assumes -- so no further reordering happens here.
+ */
+export function heatGridField(ref: ScientificGridRef, data: Float32Array): GridField {
+  return {dims: ref.dims, origin: ref.origin, spacing: ref.spacing, data, components: 1};
+}
+
+/**
+ * SliceData (scientific-data.ts) is deliberately NOT adapted here. Its
+ * on-disk order is "a-fastest,b-slower" where a/b are `localAxes` -- the two
+ * *non-fixed* world axes in whatever order Core/generate.py assigned them --
+ * not necessarily ascending world-axis order. Building a GridField for it
+ * would need `dims[0]`/`origin[0]`/`spacing[0]` to mean "whichever axis is
+ * fastest on disk" for gridNodeIndex to read the right bytes, while
+ * `sampleGridTrilinear`'s `world` argument needs index 0 to mean world x --
+ * those two requirements only coincide if `localAxes` happens to already be
+ * ascending. That has held on every case measured so far (axis='z' ->
+ * localAxes=[0,1]), but it has not been measured as a Core-enforced
+ * invariant the way the volume grid's "x-fastest,y,z-slowest" order now is
+ * (scientific-data.ts's GRID_ORDER check). Adapting it on an unverified
+ * assumption would repeat exactly the class of bug this module exists to
+ * catch. Leave it to whichever page needs slice sampling to build (and
+ * test, against the real manifest's `localAxes`) its own adapter.
+ */
+
+/**
  * Flat node index for an x-fastest grid: x + nx * (y + ny * z).
  *
  * Contract (task-4-brief.md): the shipped scientific.bin arrays are already
@@ -124,6 +155,14 @@ export function sampleGridTrilinear(field: GridField, world: readonly [number, n
   for (let axis = 0; axis < 3; axis++) {
     const nMinus1 = field.dims[axis] - 1;
     if (nMinus1 <= 0) { frac[axis] = 0; continue; }
+    if (field.spacing[axis] === 0) {
+      // Only a degenerate axis (dims === 1, handled above) may legitimately
+      // have no spacing. A zero spacing on a real axis would otherwise
+      // divide silently into NaN, which then fails deep inside
+      // gridNodeIndex with a confusing "indices must be integers, got NaN"
+      // that never names the real cause.
+      throw new Error(`sampleGridTrilinear: spacing[${axis}] is 0 for a non-degenerate axis (dims[${axis}]=${field.dims[axis]})`);
+    }
     const raw = (world[axis] - field.origin[axis]) / field.spacing[axis];
     frac[axis] = Math.min(Math.max(raw, 0), nMinus1);
   }
@@ -221,9 +260,42 @@ export function alignmentDistance(a: readonly [number, number, number], b: reado
   return Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
 }
 
+/**
+ * Global Constraint: "Grid-node probes are bit-identical; interpolated
+ * tolerance is 1e-5 * max(field_span, 1)". `fieldSpan` is the field's own
+ * max-min range (e.g. a grid's measured value range); the `max(..., 1)`
+ * floor keeps the tolerance from collapsing to (near) zero for a field
+ * whose span happens to be tiny.
+ */
+export function interpolatedTolerance(fieldSpan: number): number {
+  return 1e-5 * Math.max(fieldSpan, 1);
+}
+
 // ---------------------------------------------------------------------------
 // Deterministic forced-frame benchmark: camera path orbit-v1.
 
+/**
+ * A spherical camera description in the SAME local, z-up world frame as
+ * `coordinateFrame.localBounds` (scientific-data.ts) -- not a renderer's own
+ * scene-graph convention. Explicit reference frame, since "both paths use
+ * identical cameras" (Global Constraint) is unenforceable otherwise: a page
+ * could implement this shape faithfully and still orbit a different axis
+ * from a different start heading, and Task 7's parity suite would blame the
+ * renderer instead of the camera.
+ *
+ *  - `target`: local-frame world point the camera looks at, metres.
+ *  - `radius`: distance from `target` to the camera eye, metres.
+ *  - `elevationDeg`: angle above `target`'s horizontal (x/y) plane. 0 is
+ *    level with `target`; 90 is directly overhead along +z.
+ *  - `azimuthDeg`: measured from +x toward +y (standard math convention,
+ *    counter-clockwise viewed from +z looking down the z-axis toward the
+ *    origin). 0 points along +x.
+ *
+ * Both pages must derive the actual eye position via `poseToEye` below, not
+ * re-implement the trig -- a scene's own "up" convention (e.g. Three.js
+ * defaults to y-up) is the page's problem to reconcile when it consumes
+ * this pose and `poseToEye`'s result, not this module's.
+ */
 export type CameraPose = {
   target: readonly [number, number, number];
   radius: number;
@@ -232,11 +304,30 @@ export type CameraPose = {
 };
 
 /**
+ * The eye position a CameraPose describes, in the same local z-up world
+ * frame as `pose.target` -- spherical-to-Cartesian per CameraPose's
+ * documented convention. The one shared derivation both pages must use
+ * (rather than each writing their own trig and risking rounding or
+ * axis-convention drift between them).
+ */
+export function poseToEye(pose: CameraPose): [number, number, number] {
+  const azimuthRad = (pose.azimuthDeg * Math.PI) / 180;
+  const elevationRad = (pose.elevationDeg * Math.PI) / 180;
+  const horizontal = pose.radius * Math.cos(elevationRad);
+  return [
+    pose.target[0] + horizontal * Math.cos(azimuthRad),
+    pose.target[1] + horizontal * Math.sin(azimuthRad),
+    pose.target[2] + pose.radius * Math.sin(elevationRad),
+  ];
+}
+
+/**
  * orbit-v1: the one camera path both pages must use for benchmark
  * measurement (Global Constraint: identical cameras). 30 warmup frames
  * (unrecorded) followed by 180 measured frames, tracing one orbit in azimuth
  * around a fixed target/radius/elevation -- spec.md: "a fixed 30-frame
- * warmup plus 180 forced-render orbit".
+ * warmup plus 180 forced-render orbit". `target` sits at the shipped tile's
+ * local mid-height (coordinateFrame.localBounds z spans 0..80).
  */
 export const ORBIT_V1 = {
   cameraPath: 'orbit-v1' as const,
@@ -290,59 +381,88 @@ export type BenchmarkDriverOptions = {
 };
 
 export type BenchmarkDriver = {
-  /** Runs orbit-v1 start to finish: 30 unrecorded warmup frames, then 180
-   * measured frames, each timed on the CPU wall clock via `now`. Rejects if
-   * `stop()` is called while a run is in progress. */
+  /**
+   * Runs orbit-v1 start to finish: 30 unrecorded warmup frames, then 180
+   * measured frames, each timed on the CPU wall clock via `now`. Always
+   * RESOLVES, even when `stop()` cuts it short -- a driver stopped mid-run
+   * (e.g. by attachContextLoss on context loss) returns whatever partial
+   * `cpuFrameTimesMs`/`gpuFrameTimesMs` it collected rather than rejecting,
+   * so a caller that does not explicitly handle an abort is never left with
+   * an unhandled rejection. A short result is the signal that the run did
+   * not complete -- pair it with the probe's own `measurementValid` (which
+   * attachContextLoss sets false) to know it is not a full 180-frame
+   * measurement. Throws only for a genuine re-entrancy error (see below) or
+   * if `renderFrame`/`gpuTimer` itself throws.
+   */
   runBenchmark(): Promise<BenchmarkResult>;
   /** Aborts a run in progress. Safe to call at any time, including when
    * nothing is running -- this is what attachContextLoss calls on context
    * loss. */
   stop(): void;
+  /**
+   * Diagnostic for the most recently completed (or aborted) run's GPU
+   * samples: how many were kept vs rejected (disjoint or not-yet-available).
+   * Null before any run, or when no `gpuTimer` was supplied at all.
+   * `ScientificProbe.benchmark.gpuFrameTimesMs: []` alone cannot distinguish
+   * "the timer worked but every sample was disjoint" from "no measured
+   * frame ever got this far" -- this can, without adding a field to the
+   * fixed probe contract.
+   */
+  lastGpuSampleStats(): {kept: number; rejected: number} | null;
 };
 
 export function createBenchmarkDriver(opts: BenchmarkDriverOptions): BenchmarkDriver {
   const now = opts.now ?? (() => performance.now());
   let stopped = false;
+  let running = false;
+  let gpuStats: {kept: number; rejected: number} | null = null;
 
   async function runBenchmark(): Promise<BenchmarkResult> {
+    if (running) throw new Error('BenchmarkDriver.runBenchmark: a run is already in progress');
+    running = true;
     stopped = false;
-    const total = ORBIT_V1.warmupFrames + ORBIT_V1.forcedFrames;
-
-    for (let f = 0; f < ORBIT_V1.warmupFrames; f++) {
-      if (stopped) throw new Error('benchmark stopped during warmup');
-      await opts.renderFrame(orbitV1Pose(f));
-    }
-
-    const cpuFrameTimesMs: number[] = [];
-    const gpuFrameTimesMs: number[] = [];
     const gpuAvailable = !!opts.gpuTimer;
+    gpuStats = gpuAvailable ? {kept: 0, rejected: 0} : null;
 
-    for (let f = ORBIT_V1.warmupFrames; f < total; f++) {
-      if (stopped) throw new Error('benchmark stopped during measurement');
-      const pose = orbitV1Pose(f);
-      opts.gpuTimer?.beginFrame();
-      const t0 = now();
-      await opts.renderFrame(pose);
-      const t1 = now();
-      opts.gpuTimer?.endFrame();
-      cpuFrameTimesMs.push(t1 - t0);
-      if (opts.gpuTimer) {
-        const sample = await opts.gpuTimer.readResult();
-        // A disjoint or not-yet-available sample is dropped, never
-        // estimated or zero-filled -- spec.md: "reject disjoint samples".
-        if (sample && !sample.disjoint) gpuFrameTimesMs.push(sample.ms);
+    try {
+      const total = ORBIT_V1.warmupFrames + ORBIT_V1.forcedFrames;
+
+      for (let f = 0; f < ORBIT_V1.warmupFrames && !stopped; f++) {
+        await opts.renderFrame(orbitV1Pose(f));
       }
-    }
 
-    return {
-      cpuFrameTimesMs,
-      gpuFrameTimesMs: gpuAvailable ? gpuFrameTimesMs : null,
-      cameraPath: ORBIT_V1.cameraPath,
-      forcedFrames: ORBIT_V1.forcedFrames,
-    };
+      const cpuFrameTimesMs: number[] = [];
+      const gpuFrameTimesMs: number[] = [];
+
+      for (let f = ORBIT_V1.warmupFrames; f < total && !stopped; f++) {
+        const pose = orbitV1Pose(f);
+        opts.gpuTimer?.beginFrame();
+        const t0 = now();
+        await opts.renderFrame(pose);
+        const t1 = now();
+        opts.gpuTimer?.endFrame();
+        cpuFrameTimesMs.push(t1 - t0);
+        if (opts.gpuTimer) {
+          const sample = await opts.gpuTimer.readResult();
+          // A disjoint or not-yet-available sample is dropped, never
+          // estimated or zero-filled -- spec.md: "reject disjoint samples".
+          if (sample && !sample.disjoint) { gpuFrameTimesMs.push(sample.ms); gpuStats!.kept++; }
+          else gpuStats!.rejected++;
+        }
+      }
+
+      return {
+        cpuFrameTimesMs,
+        gpuFrameTimesMs: gpuAvailable ? gpuFrameTimesMs : null,
+        cameraPath: ORBIT_V1.cameraPath,
+        forcedFrames: ORBIT_V1.forcedFrames,
+      };
+    } finally {
+      running = false;
+    }
   }
 
-  return {runBenchmark, stop: () => { stopped = true; }};
+  return {runBenchmark, stop: () => { stopped = true; }, lastGpuSampleStats: () => gpuStats};
 }
 
 // ---------------------------------------------------------------------------
@@ -368,9 +488,22 @@ export function diffResources(before: ResourceSnapshot, after: ResourceSnapshot)
 // ---------------------------------------------------------------------------
 // WebGL context loss.
 
-/** Just enough of a canvas for attachContextLoss -- any real
- * HTMLCanvasElement satisfies this structurally, with no cast needed. */
-type EventListenerHost = Pick<EventTarget, 'addEventListener' | 'removeEventListener'>;
+/**
+ * Just enough of a canvas for attachContextLoss -- any real
+ * HTMLCanvasElement satisfies this structurally, with no cast needed, and so
+ * does a bare `EventTarget` (tests/unit/scientific-probes.test.ts uses one in
+ * place of a canvas, with no DOM at all).
+ *
+ * Requiring all three EventTarget methods (not just the two this module
+ * calls) is a small, free tightening: a caller must pass something
+ * genuinely EventTarget-shaped, not an ad hoc two-method duck type. It does
+ * NOT exclude `Window`/`Document` -- both structurally satisfy this too,
+ * since TypeScript has no nominal way to say "an EventTarget that is
+ * specifically a canvas" without branding, which would also break passing a
+ * bare `EventTarget` in tests. Real call sites (Tasks 5/6) only ever pass
+ * their own canvas, so this is a theoretical gap, not a practical one.
+ */
+type EventListenerHost = Pick<EventTarget, 'addEventListener' | 'removeEventListener' | 'dispatchEvent'>;
 
 export type ContextLossHandlers = {
   /** Mutated in place: status -> 'context-lost', measurementValid -> false.
@@ -384,10 +517,15 @@ export type ContextLossHandlers = {
   /** Renderer-specific: dispose buffers/textures/programs. Page-owned; this
    * module never touches a GPU object directly. */
   disposeGpuResources: () => void;
-  /** Called last, once state has settled: show the visible failure and its
-   * reload control. DOM/presentation stays with the page (so both renderers
-   * can match chrome.ts's existing look) rather than this module inventing
-   * a second one. */
+  /**
+   * Called last, once state has settled. The page's obligation here is to
+   * show the visible failure and its reload control -- normally by calling
+   * `ui.fail(message)` from `mountChrome`'s return (src/lib/chrome.ts),
+   * which renders both. Kept as a callback (not built into this module)
+   * because `chrome.ts` is where this repo's shared DOM chrome lives, and
+   * it already renders everything else on the page (`fail` should join
+   * `setReadout`/`probe`, not be duplicated per renderer).
+   */
   onLost: () => void;
 };
 

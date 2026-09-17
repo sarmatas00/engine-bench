@@ -1,5 +1,5 @@
 import {describe, expect, test, mock} from 'bun:test';
-import type {BuildingObjectEntry, ScientificGrid} from '../../src/lib/scientific-data';
+import type {BuildingObjectEntry, ScientificGrid, ScientificGridRef} from '../../src/lib/scientific-data';
 import {
   ALIGNMENT_TOLERANCE_M,
   alignmentDistance,
@@ -9,9 +9,12 @@ import {
   diffResources,
   gridField,
   gridNodeIndex,
+  heatGridField,
+  interpolatedTolerance,
   objectRefForCell,
   orbitV1Pose,
   ORBIT_V1,
+  poseToEye,
   probeGridNode,
   resourcesEqual,
   sampleGridTrilinear,
@@ -143,6 +146,21 @@ describe('sampleGridTrilinear', () => {
     expect(sample[1]).toBeCloseTo(105, 6);
     expect(sample[2]).toBeCloseTo(205, 6);
   });
+
+  test('a zero spacing on a non-degenerate axis throws naming the axis, instead of silently producing NaN', () => {
+    const dims: [number, number, number] = [1, 3, 1]; // y is the only non-degenerate axis
+    const data = new Float32Array([0, 1, 2]);
+    const field: GridField = {dims, origin: [0, 0, 0], spacing: [1, 0, 1], data, components: 1};
+    expect(() => sampleGridTrilinear(field, [0, 1, 0])).toThrow(/spacing\[1\] is 0/);
+  });
+
+  test('a zero spacing on a genuinely degenerate axis (dims === 1) is fine -- no divide happens there', () => {
+    const dims: [number, number, number] = [1, 2, 1];
+    const data = new Float32Array([0, 5]);
+    const field: GridField = {dims, origin: [0, 0, 0], spacing: [0, 1, 0], data, components: 1};
+    expect(() => sampleGridTrilinear(field, [999, 0.5, 999])).not.toThrow();
+    expect(sampleGridTrilinear(field, [999, 0.5, 999])[0]).toBeCloseTo(2.5, 6);
+  });
 });
 
 describe('gridField (ScientificGrid adapter)', () => {
@@ -157,6 +175,24 @@ describe('gridField (ScientificGrid adapter)', () => {
     expect(gridField(grid, 'speed').data).toBe(grid.speed);
     expect(gridField(grid, 'velocity').components).toBe(3);
     expect(gridField(grid, 'velocity').data).toBe(grid.velocity);
+  });
+});
+
+describe('heatGridField (ScientificGridRef adapter)', () => {
+  test('adapts a heat grid reference plus caller-fetched bytes into a scalar GridField', () => {
+    const ref: ScientificGridRef = {
+      dims: [2, 2, 2], origin: [-10, -10, 0], spacing: [10, 10, 5], min: 18, max: 32,
+      dataUrl: '/data/real/field.grid.f32', unit: 'degC', source: 'test-sim', association: null,
+    };
+    const data = new Float32Array([18, 20, 22, 24, 26, 28, 30, 32]);
+    const field = heatGridField(ref, data);
+    expect(field.components).toBe(1);
+    expect(field.data).toBe(data);
+    expect(field.dims).toEqual(ref.dims);
+    expect(field.origin).toEqual(ref.origin);
+    expect(field.spacing).toEqual(ref.spacing);
+    // Usable with the same probing functions as any other GridField.
+    expect(probeGridNode(field, 1, 0, 0)).toEqual([20]);
   });
 });
 
@@ -247,6 +283,15 @@ describe('alignmentDistance', () => {
   });
 });
 
+describe('interpolatedTolerance', () => {
+  test('matches the Global Constraint formula: 1e-5 * max(fieldSpan, 1)', () => {
+    expect(interpolatedTolerance(100)).toBeCloseTo(1e-3, 12);
+    expect(interpolatedTolerance(0)).toBeCloseTo(1e-5, 12); // floored to max(0, 1) = 1
+    expect(interpolatedTolerance(0.001)).toBeCloseTo(1e-5, 12); // floored, not 1e-5 * 0.001
+    expect(interpolatedTolerance(2)).toBeCloseTo(2e-5, 12);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Deterministic camera interpolation (orbit-v1).
 
@@ -273,6 +318,40 @@ describe('orbitV1Pose', () => {
     expect(b.target).toEqual(a.target);
     expect(b.radius).toBe(a.radius);
     expect(b.elevationDeg).toBe(a.elevationDeg);
+  });
+});
+
+describe('poseToEye (z-up, azimuth from +x toward +y)', () => {
+  test('azimuth 0, elevation 0 puts the eye at target + [radius, 0, 0]', () => {
+    const pose: CameraPose = {target: [10, 20, 30], radius: 100, elevationDeg: 0, azimuthDeg: 0};
+    const eye = poseToEye(pose);
+    expect(eye[0]).toBeCloseTo(110, 9);
+    expect(eye[1]).toBeCloseTo(20, 9);
+    expect(eye[2]).toBeCloseTo(30, 9);
+  });
+
+  test('azimuth 90, elevation 0 puts the eye at target + [0, radius, 0] -- +x toward +y, not +x toward +z', () => {
+    const pose: CameraPose = {target: [0, 0, 0], radius: 10, elevationDeg: 0, azimuthDeg: 90};
+    const eye = poseToEye(pose);
+    expect(eye[0]).toBeCloseTo(0, 9);
+    expect(eye[1]).toBeCloseTo(10, 9);
+    expect(eye[2]).toBeCloseTo(0, 9);
+  });
+
+  test('elevation 90 puts the eye directly above the target along +z, regardless of azimuth', () => {
+    const straightUp = poseToEye({target: [0, 0, 0], radius: 10, elevationDeg: 90, azimuthDeg: 0});
+    const straightUpOtherAzimuth = poseToEye({target: [0, 0, 0], radius: 10, elevationDeg: 90, azimuthDeg: 200});
+    expect(straightUp[0]).toBeCloseTo(0, 9);
+    expect(straightUp[1]).toBeCloseTo(0, 9);
+    expect(straightUp[2]).toBeCloseTo(10, 9);
+    for (let c = 0; c < 3; c++) expect(straightUpOtherAzimuth[c]).toBeCloseTo(straightUp[c], 9);
+  });
+
+  test('the eye is always exactly `radius` metres from `target`, at any pose', () => {
+    for (const pose of [orbitV1Pose(0), orbitV1Pose(45), orbitV1Pose(120), orbitV1Pose(200)]) {
+      const eye = poseToEye(pose);
+      expect(alignmentDistance(eye, pose.target)).toBeCloseTo(pose.radius, 6);
+    }
   });
 });
 
@@ -316,7 +395,7 @@ describe('createBenchmarkDriver: forced-frame sampling', () => {
     expect(measured[measured.length - 1]).toEqual(orbitV1Pose(ORBIT_V1.warmupFrames + ORBIT_V1.forcedFrames - 1));
   });
 
-  test('stop() aborts a run in progress rather than letting it complete', async () => {
+  test('stop() ends a run early and RESOLVES cleanly, with a short partial result -- never an unhandled rejection', async () => {
     let calls = 0;
     const driver = createBenchmarkDriver({
       renderFrame: () => {
@@ -325,8 +404,46 @@ describe('createBenchmarkDriver: forced-frame sampling', () => {
       },
       now: () => 0,
     });
-    await expect(driver.runBenchmark()).rejects.toThrow();
+    const result = await driver.runBenchmark(); // must not throw/reject
     expect(calls).toBeLessThan(ORBIT_V1.warmupFrames + ORBIT_V1.forcedFrames);
+    // stop() lands during warmup (call 5 of 30 warmup frames), so no
+    // measured frame ever ran -- the partial result is empty, not thrown.
+    expect(result.cpuFrameTimesMs).toEqual([]);
+    expect(result.forcedFrames).toBe(180); // contract literal, independent of how many frames actually ran
+    expect(result.cameraPath).toBe('orbit-v1');
+  });
+
+  test('stop() during the measured phase keeps everything collected before it', async () => {
+    let calls = 0;
+    const driver = createBenchmarkDriver({
+      renderFrame: () => {
+        calls++;
+        if (calls === ORBIT_V1.warmupFrames + 10) driver.stop(); // 10 measured frames in
+      },
+      now: (() => { let t = 0; return () => (t += 1); })(),
+    });
+    const result = await driver.runBenchmark();
+    expect(result.cpuFrameTimesMs.length).toBe(10);
+    expect(result.cpuFrameTimesMs.length).toBeLessThan(180);
+  });
+
+  test('rejects a concurrent call while a run is already in progress, without disturbing the first run', async () => {
+    let resolveFrame: () => void = () => {};
+    const driver = createBenchmarkDriver({
+      renderFrame: () => new Promise<void>((resolve) => { resolveFrame = resolve; }),
+      now: () => 0,
+    });
+    const first = driver.runBenchmark(); // suspends inside its first renderFrame call
+    await expect(driver.runBenchmark()).rejects.toThrow(/already in progress/);
+    driver.stop();
+    resolveFrame();
+    await expect(first).resolves.toBeDefined();
+  });
+
+  test('a fresh runBenchmark() after a prior run finished is allowed (the guard is not permanent)', async () => {
+    const driver = createBenchmarkDriver({renderFrame: () => {}, now: () => 0});
+    await driver.runBenchmark();
+    await expect(driver.runBenchmark()).resolves.toBeDefined();
   });
 });
 
@@ -367,6 +484,34 @@ describe('createBenchmarkDriver: disjoint GPU sample rejection', () => {
     const driver = createBenchmarkDriver({renderFrame: () => {}, gpuTimer: scriptedGpuTimer(results), now: () => 0});
     const result = await driver.runBenchmark();
     expect(result.gpuFrameTimesMs).toEqual([]);
+  });
+});
+
+describe('createBenchmarkDriver: lastGpuSampleStats (kept vs rejected, distinct from an empty array)', () => {
+  function scriptedGpuTimer(results: Array<{ms: number; disjoint: boolean} | null>): GpuTimer {
+    let i = 0;
+    return {beginFrame: () => {}, endFrame: () => {}, readResult: async () => results[i++] ?? null};
+  }
+
+  test('is null before any run, and null when no gpuTimer was supplied', async () => {
+    const driver = createBenchmarkDriver({renderFrame: () => {}, now: () => 0});
+    expect(driver.lastGpuSampleStats()).toBeNull();
+    await driver.runBenchmark();
+    expect(driver.lastGpuSampleStats()).toBeNull();
+  });
+
+  test('counts kept and rejected separately -- an all-disjoint run is distinguishable from "never ran"', async () => {
+    const results = Array.from({length: 180}, () => ({ms: 1, disjoint: true}));
+    const driver = createBenchmarkDriver({renderFrame: () => {}, gpuTimer: scriptedGpuTimer(results), now: () => 0});
+    await driver.runBenchmark();
+    expect(driver.lastGpuSampleStats()).toEqual({kept: 0, rejected: 180});
+  });
+
+  test('a mix of kept and rejected samples is tallied correctly', async () => {
+    const results = Array.from({length: 180}, (_, i) => (i % 3 === 0 ? {ms: 1, disjoint: true} : {ms: 2, disjoint: false}));
+    const driver = createBenchmarkDriver({renderFrame: () => {}, gpuTimer: scriptedGpuTimer(results), now: () => 0});
+    await driver.runBenchmark();
+    expect(driver.lastGpuSampleStats()).toEqual({kept: 120, rejected: 60});
   });
 });
 

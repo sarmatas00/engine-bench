@@ -3,6 +3,7 @@ import {readFileSync} from 'node:fs';
 import {resolve} from 'node:path';
 import {
   decodeScientificBundle,
+  GRID_ORDER,
   loadMeshPair,
   loadScientificBundle,
   type ArraySpec,
@@ -146,7 +147,8 @@ function smokeFixture() {
   return {
     bytes,
     grid: {
-      resolution: 2, dims: [2, 2, 2] as [number, number, number], origin: [-10, -10, 0] as [number, number, number],
+      resolution: 2, dims: [2, 2, 2] as [number, number, number], order: GRID_ORDER,
+      origin: [-10, -10, 0] as [number, number, number],
       spacing: [20, 20, 10] as [number, number, number], association: 'vertex',
       arrays: only('grid_velocity', 'grid_speed', 'grid_pressure'),
     },
@@ -382,6 +384,19 @@ describe('decodeScientificBundle: numeric contracts', () => {
     manifest.scientific = clone(manifest.scientific);
     manifest.scientific.cases.smoke.grid.arrays.find(a => a.name === 'grid_speed')!.length -= 1;
     expect(() => decodeScientificBundle(manifest, blob)).toThrow(/grid_speed/);
+  });
+
+  test('rejects a grid whose declared order is not x-fastest,y,z-slowest -- the transposition that would put a wrong value at every node with every count still green', () => {
+    const {manifest, blob} = fixture();
+    manifest.scientific = clone(manifest.scientific);
+    manifest.scientific.cases.smoke.grid.order = 'z-fastest,y,x-slowest';
+    expect(() => decodeScientificBundle(manifest, blob)).toThrow(/order/);
+  });
+
+  test('accepts the declared order when it matches GRID_ORDER exactly', () => {
+    const {manifest, blob} = fixture();
+    expect(manifest.scientific.cases.smoke.grid.order).toBe(GRID_ORDER);
+    expect(() => decodeScientificBundle(manifest, blob)).not.toThrow();
   });
 
   test('rejects a slice array whose length is not resolution-squared', () => {
@@ -682,6 +697,13 @@ describe('decodeScientificBundle against the real committed public/data bundle',
       terrain: readBytes(resolve(REAL_DIR, 'ground.mesh.bin')),
       buildings: readBytes(resolve(REAL_DIR, 'buildings.mesh.bin')),
     };
+
+    // A change here means the shipped tile's node order no longer matches
+    // what gridNodeIndex (scientific-probes.ts) hard-codes -- decoding
+    // below would already throw on this, but check it explicitly so a
+    // failure here reads as "the shipped order changed", not just
+    // "decoding failed".
+    expect(manifest.scientific.cases.smoke.grid.order).toBe(GRID_ORDER);
 
     const bundle = decodeScientificBundle(manifest, blob);
 

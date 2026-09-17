@@ -78,6 +78,9 @@ export type FieldGridJson = {
 type SmokeGridCase = {
   resolution: number;
   dims: [number, number, number];
+  /** Written by scripts/scientific/generate.py, checked against GRID_ORDER
+   *  below before this case is decoded -- see decodeGridCase. */
+  order: string;
   origin: [number, number, number];
   spacing: [number, number, number];
   association: string | null;
@@ -475,7 +478,25 @@ function decodeFieldTriple(arrays: ArraySpec[], prefix: string, nodeCount: numbe
   return {velocity, speed, pressure};
 }
 
+/**
+ * The volume grid's declared node order, written by
+ * scripts/scientific/generate.py (`"order": "x-fastest,y,z-slowest"`) after
+ * `_lattice_order` reorders Core's raw z-fastest/x-slowest sample order (Task
+ * 2, review-verified). src/lib/scientific-probes.ts's gridNodeIndex hard-codes
+ * this exact formula (x + nx * (y + ny * z)) and consumes the shipped bytes
+ * on the strength of it. Exported so that assumption has one written-down
+ * source of truth instead of only a comment in each of the two files.
+ */
+export const GRID_ORDER = 'x-fastest,y,z-slowest' as const;
+
 function decodeGridCase(grid: SmokeGridCase, bytes: Uint8Array, context: string): ScientificGrid {
+  // The single cheapest guard against the worst silent failure in this
+  // pipeline: a regeneration that changed the grid's node order would put a
+  // wrong value at every node while every array length/range check above
+  // still passes clean. Nothing else reads `grid.order` today.
+  if (grid.order !== GRID_ORDER) {
+    throw new Error(`${context}: order is ${JSON.stringify(grid.order)}, expected ${JSON.stringify(GRID_ORDER)} -- gridNodeIndex's x-fastest formula assumes exactly this order`);
+  }
   const nodeCount = grid.dims[0] * grid.dims[1] * grid.dims[2];
   const {velocity, speed, pressure} = decodeFieldTriple(grid.arrays, 'grid', nodeCount, bytes, context);
   return {dims: grid.dims, origin: grid.origin, spacing: grid.spacing, association: grid.association, speed, velocity, pressure};
