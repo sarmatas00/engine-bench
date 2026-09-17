@@ -24,6 +24,12 @@ function sha256(bytes: Uint8Array): string {
   return createHash('sha256').update(bytes).digest('hex');
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
 function checkFile(
   errors: string[],
   label: string,
@@ -57,11 +63,15 @@ export function validateScientificBundle(manifestPath: string): ValidationResult
     return {errors: [`manifest not found: ${manifestPath}`], schemaVersion: undefined, dependencyCount: 0};
   }
 
-  let manifest: any;
+  let parsed: unknown;
   try {
-    manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    parsed = JSON.parse(readFileSync(manifestPath, 'utf8'));
   } catch (e) {
     return {errors: [`manifest is not valid JSON: ${(e as Error).message}`], schemaVersion: undefined, dependencyCount: 0};
+  }
+  const manifest = asRecord(parsed);
+  if (!manifest) {
+    return {errors: ['manifest: top-level JSON value is not an object'], schemaVersion: undefined, dependencyCount: 0};
   }
 
   const dir = dirname(manifestPath);
@@ -70,7 +80,7 @@ export function validateScientificBundle(manifestPath: string): ValidationResult
     errors.push(`schemaVersion: expected 1, got ${JSON.stringify(manifest.schemaVersion)}`);
   }
 
-  const binary = manifest.binary;
+  const binary = asRecord(manifest.binary);
   if (!binary || typeof binary.path !== 'string') {
     errors.push('binary: manifest is missing a well-formed "binary" section');
   } else {
@@ -81,9 +91,10 @@ export function validateScientificBundle(manifestPath: string): ValidationResult
   if (!Array.isArray(dependencies)) {
     errors.push('dependencies: manifest is missing a "dependencies" array');
   } else {
-    for (const dep of dependencies) {
+    for (const raw of dependencies) {
+      const dep = asRecord(raw);
       if (!dep || typeof dep.path !== 'string') {
-        errors.push(`dependencies: malformed entry ${JSON.stringify(dep)}`);
+        errors.push(`dependencies: malformed entry ${JSON.stringify(raw)}`);
         continue;
       }
       checkFile(errors, `dependency ${dep.path}`, resolve(dir, dep.path), dep.byteLength, dep.sha256);

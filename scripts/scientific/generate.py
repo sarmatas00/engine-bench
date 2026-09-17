@@ -15,7 +15,8 @@ association, over which local frame.
 
 See docs/superpowers/plans/2026-09-11-scientific-visualization-decision-spike.md
 (Task 2) and .superpowers/sdd/2026-09-11-scientific-visualization-decision-spike/
-task-2-report.md for the association-handling finding this module encodes.
+task-2-report.md for the findings (association handling, streamline seed
+recovery) this module encodes.
 """
 
 from __future__ import annotations
@@ -62,7 +63,7 @@ def load_real_frame(real_dir: Path) -> dict:
     re-derived or hardcoded here."""
     dataset = benchio.load_dataset_json(real_dir)
     return {
-        "crs": dataset["crs"],
+        "crs": _reject_markup(dataset["crs"], context="dataset.json.crs"),
         "bounds": [float(v) for v in dataset["bounds"]],
         "origin": [float(v) for v in dataset["origin"]],
         "z0": float(dataset["z0"]),
@@ -79,6 +80,47 @@ def dependency_records(real_dir: Path) -> list[dict]:
             "sha256": hashlib.sha256(data).hexdigest(),
         })
     return records
+
+
+def _reject_markup(value, *, context: str):
+    """Refuse a value that looks like markup rather than plain data (Step 4:
+    "Do not accept UI HTML from data"). Applied to strings copied verbatim from
+    real/*.json into a manifest a browser will parse and display."""
+    if isinstance(value, str) and ("<" in value or ">" in value):
+        raise ValueError(f"{context}: value looks like markup, not plain data: {value!r}")
+    return value
+
+
+def _resolve_temperature_dim(real_dir: Path, heat_meta: dict) -> int:
+    """Derive the heat field's component count from the committed grid file
+    itself rather than assuming scalar. field.grid.f32's byte length must
+    divide evenly into (component count) x (grid node count) x 4 bytes, and
+    that must agree with field.json's own round-trip vertex/count record."""
+    grid_meta = json.loads((real_dir / "field.grid.json").read_text())
+    dims = grid_meta["dims"]
+    node_count = 1
+    for d in dims:
+        node_count *= int(d)
+    grid_bytes = (real_dir / "field.grid.f32").stat().st_size
+    if grid_bytes % 4 != 0:
+        raise ValueError(f"heat.field.grid.f32: {grid_bytes} bytes is not a whole number of f32s")
+    total_components = grid_bytes // 4
+    if node_count == 0 or total_components % node_count != 0:
+        raise ValueError(
+            f"heat.field.grid.f32: {grid_bytes} bytes over dims {dims} ({node_count} nodes) "
+            "does not divide into a whole component count"
+        )
+    dim = total_components // node_count
+
+    roundtrip = heat_meta.get("roundtrip", {})
+    count_after = roundtrip.get("count_after")
+    vertices_after = roundtrip.get("vertices_after")
+    if count_after is not None and vertices_after is not None and count_after != vertices_after:
+        raise ValueError(
+            f"heat.field: roundtrip.count_after ({count_after}) != roundtrip.vertices_after "
+            f"({vertices_after}); temperature is not confirmed one value per vertex"
+        )
+    return dim
 
 
 def _field_map(fields) -> dict:
@@ -157,6 +199,252 @@ def _lattice_order(columns: list, axis_bounds: list, resolution: int) -> np.ndar
     return np.argsort(lin)
 
 
+def _rebase(points: np.ndarray, origin, z0) -> np.ndarray:
+    local = np.asarray(points, dtype=np.float64).copy()
+    local[:, 0] -= origin[0]
+    local[:, 1] -= origin[1]
+    local[:, 2] -= z0
+    return local
+
+
+def _build_grid_case(field, origin, z0, local_bounds) -> tuple:
+    """product="field" -> a VolumeMesh. Returns (case dict without "arrays",
+    array defs for pack_array_bundle, the field map for the top-level units
+    registry)."""
+    grid_local = _rebase(field.vertices, origin, z0)
+    order = _lattice_order(
+        [grid_local[:, 0], grid_local[:, 1], grid_local[:, 2]],
+        [(local_bounds[0], local_bounds[3]), (local_bounds[1], local_bounds[4]),
+         (local_bounds[2], local_bounds[5])],
+        RESOLUTION,
+    )
+    fmap = _field_map(field.fields)
+    for name in FIELD_NAMES:
+        if name not in fmap:
+            raise ValueError(f"smoke.grid: product='field' is missing Field {name!r}")
+    association = _resolve_association(fmap, FIELD_NAMES, case="smoke.grid", require_present=True)
+
+    velocity = np.asarray(fmap["velocity"].values, dtype=np.float64)[order]
+    speed = np.asarray(fmap["speed"].values, dtype=np.float64).reshape(-1)[order]
+    pressure = np.asarray(fmap["pressure"].values, dtype=np.float64).reshape(-1)[order]
+    _assert_finite("smoke.grid", velocity=velocity, speed=speed, pressure=pressure)
+
+    # Unlike FieldSlice/StreamlineCollection, VolumeMesh exposes no "resolution"
+    # (or any other) echo of the request -- only vertices/cells. RESOLUTION is
+    # the only source of truth available here, but it is not taken on faith:
+    # _lattice_order above already raised if the vertices did not form a
+    # complete RESOLUTION**3 lattice, so by this point it is verified, not assumed.
+    case = {
+        "resolution": RESOLUTION,
+        "dims": [RESOLUTION, RESOLUTION, RESOLUTION],
+        "order": "x-fastest,y,z-slowest",
+        "origin": [local_bounds[0], local_bounds[1], local_bounds[2]],
+        "spacing": [
+            (local_bounds[3] - local_bounds[0]) / (RESOLUTION - 1),
+            (local_bounds[4] - local_bounds[1]) / (RESOLUTION - 1),
+            (local_bounds[5] - local_bounds[2]) / (RESOLUTION - 1),
+        ],
+        "association": association,
+    }
+    arrays = [
+        ("grid_velocity", velocity, "f32", 3),
+        ("grid_speed", speed, "f32", 1),
+        ("grid_pressure", pressure, "f32", 1),
+    ]
+    return case, arrays, fmap
+
+
+def _build_slice_case(slice_, origin, z0, local_bounds) -> tuple:
+    """product="slice" -> a FieldSlice. FieldSlice is explicitly unsupported by
+    Core native exchange, so its full context (axis/position/resolution/time/
+    period/domain/metadata/crs/name), not just arrays, belongs in the manifest."""
+    slice_local = _rebase(slice_.points, origin, z0)
+    a_axis, b_axis = slice_.axes
+    fixed_axis = 3 - a_axis - b_axis
+    fixed_values = slice_local[:, fixed_axis]
+    fixed_span = max(local_bounds[fixed_axis + 3] - local_bounds[fixed_axis], 1.0)
+    if fixed_values.max() - fixed_values.min() > 1e-6 * fixed_span:
+        raise ValueError("smoke.slice: sample points are not coplanar on the fixed axis")
+    fixed_local_coordinate = float(fixed_values.mean())
+
+    resolution = int(slice_.resolution)
+    order = _lattice_order(
+        [slice_local[:, a_axis], slice_local[:, b_axis]],
+        [(local_bounds[a_axis], local_bounds[a_axis + 3]),
+         (local_bounds[b_axis], local_bounds[b_axis + 3])],
+        resolution,
+    )
+    smap = _field_map(slice_.fields)
+    for name in FIELD_NAMES:
+        if name not in smap:
+            raise ValueError(f"smoke.slice: product='slice' is missing Field {name!r}")
+    association = _resolve_association(smap, FIELD_NAMES, case="smoke.slice", require_present=False)
+
+    velocity = np.asarray(smap["velocity"].values, dtype=np.float64)[order]
+    speed = np.asarray(smap["speed"].values, dtype=np.float64).reshape(-1)[order]
+    pressure = np.asarray(smap["pressure"].values, dtype=np.float64).reshape(-1)[order]
+    _assert_finite("smoke.slice", velocity=velocity, speed=speed, pressure=pressure)
+
+    domain_bounds = slice_.domain_bounds
+    domain_local_bounds = [
+        domain_bounds.xmin - origin[0], domain_bounds.ymin - origin[1], domain_bounds.zmin - z0,
+        domain_bounds.xmax - origin[0], domain_bounds.ymax - origin[1], domain_bounds.zmax - z0,
+    ]
+
+    case = {
+        "name": slice_.name,
+        "crs": _reject_markup(slice_.crs, context="smoke.slice.crs"),
+        "axis": slice_.slice_axis,
+        "position": float(slice_.slice_position),
+        "resolution": resolution,
+        "order": "a-fastest,b-slower (a,b = the two non-fixed local axes)",
+        "localAxes": [a_axis, b_axis],
+        "fixedLocalAxis": fixed_axis,
+        "fixedLocalCoordinate": fixed_local_coordinate,
+        "time": float(slice_.time),
+        "period": float(slice_.period),
+        "domainLocalBounds": domain_local_bounds,
+        "metadata": slice_.metadata_payload,
+        "association": association,
+    }
+    arrays = [
+        ("slice_velocity", velocity, "f32", 3),
+        ("slice_speed", speed, "f32", 1),
+        ("slice_pressure", pressure, "f32", 1),
+    ]
+    return case, arrays
+
+
+def _resolve_streamline_seeds(datasets, lines, position_parts, origin, z0) -> list:
+    """Recover each surviving line's seed vertex index, verified against the
+    actual traced polyline rather than assumed from position or Core-internal
+    splitting.
+
+    StreamlineCollection exposes no public seed accessor (Global Constraint:
+    the manifest must carry its full context precisely because native exchange
+    cannot). `_streamline_seeds` is dtcc-core's own private, deterministic
+    seed-placement function, pinned to this Core revision; candidates from it
+    are affinely mapped into this tile's local frame using the *publicly*
+    documented normalized domain (`datasets.smoke.describe()["normalized_domain"]`),
+    then matched to each surviving line's actual vertices by nearest distance.
+    A candidate is accepted only if it lands within tolerance of an actual
+    vertex on that specific line, and each candidate may be claimed by at most
+    one line; generation fails rather than guess if either check does not hold.
+    """
+    from dtcc_core.datasets.smoke import _streamline_seeds
+
+    normalized_bounds = datasets.smoke.describe()["normalized_domain"]["bounds"]
+    n_min, n_max = float(normalized_bounds[0]), float(normalized_bounds[3])
+    n_span = n_max - n_min
+
+    bounds = lines.domain_bounds
+    scale = np.array([bounds.xmax - bounds.xmin, bounds.ymax - bounds.ymin, bounds.zmax - bounds.zmin])
+    abs_origin = np.array([bounds.xmin, bounds.ymin, bounds.zmin])
+    local_origin = np.array([origin[0], origin[1], z0])
+
+    candidates_normalized = np.asarray(
+        _streamline_seeds(lines.requested_line_count, lines.seed_axis, lines.seed_position),
+        dtype=np.float64,
+    )
+    candidates_local = abs_origin + (candidates_normalized - n_min) / n_span * scale - local_origin
+
+    tol = 1e-6 * max(float(scale.max()), 1.0)
+    used_candidates = set()
+    seed_indices = []
+    for line_points in position_parts:
+        distances = np.linalg.norm(
+            candidates_local[:, None, :] - line_points[None, :, :], axis=2
+        )
+        best_candidate, best_vertex = np.unravel_index(np.argmin(distances), distances.shape)
+        best_distance = distances[best_candidate, best_vertex]
+        if best_distance > tol:
+            raise ValueError(
+                "smoke.streamlines: could not verify a seed for one line within tolerance "
+                f"(closest reconstructed candidate is {best_distance:.6g} m away); "
+                "refusing to guess a seed index"
+            )
+        if best_candidate in used_candidates:
+            raise ValueError(
+                f"smoke.streamlines: reconstructed seed candidate {best_candidate} "
+                "matched more than one line"
+            )
+        used_candidates.add(int(best_candidate))
+        seed_indices.append(int(best_vertex))
+    return seed_indices
+
+
+def _build_streamline_case(datasets, lines, origin, z0) -> tuple:
+    """product="streamlines" -> a StreamlineCollection. Unsupported by Core
+    native exchange like FieldSlice, so seeds/steps/time/period/domain/metadata
+    all belong in the manifest, not only the arrays."""
+    position_parts, velocity_parts, speed_parts, pressure_parts = [], [], [], []
+    offsets = [0]
+    line_associations = set()
+    for line in lines.lines:
+        lmap = _field_map(line.fields)
+        for name in FIELD_NAMES:
+            if name not in lmap:
+                raise ValueError(f"smoke.streamlines: a line is missing Field {name!r}")
+        line_associations.add(
+            _resolve_association(lmap, FIELD_NAMES, case="smoke.streamlines", require_present=False)
+        )
+        pts = _rebase(line.vertices, origin, z0)
+        position_parts.append(pts)
+        velocity_parts.append(np.asarray(lmap["velocity"].values, dtype=np.float64))
+        speed_parts.append(np.asarray(lmap["speed"].values, dtype=np.float64).reshape(-1))
+        pressure_parts.append(np.asarray(lmap["pressure"].values, dtype=np.float64).reshape(-1))
+        offsets.append(offsets[-1] + len(pts))
+    if len(line_associations) > 1:
+        raise ValueError(f"smoke.streamlines: association differs across lines: {line_associations}")
+    association = next(iter(line_associations)) if line_associations else None
+
+    seed_indices = _resolve_streamline_seeds(datasets, lines, position_parts, origin, z0)
+
+    positions = np.concatenate(position_parts) if position_parts else np.empty((0, 3))
+    velocity = np.concatenate(velocity_parts) if velocity_parts else np.empty((0, 3))
+    speed = np.concatenate(speed_parts) if speed_parts else np.empty((0,))
+    pressure = np.concatenate(pressure_parts) if pressure_parts else np.empty((0,))
+    _assert_finite("smoke.streamlines", positions=positions, velocity=velocity,
+                  speed=speed, pressure=pressure)
+
+    bounds = lines.domain_bounds
+    domain_local_bounds = [
+        bounds.xmin - origin[0], bounds.ymin - origin[1], bounds.zmin - z0,
+        bounds.xmax - origin[0], bounds.ymax - origin[1], bounds.zmax - z0,
+    ]
+
+    case = {
+        "name": lines.name,
+        "crs": _reject_markup(lines.crs, context="smoke.streamlines.crs"),
+        "seedAxis": lines.seed_axis,
+        "seedPosition": float(lines.seed_position),
+        "requestedCount": int(lines.requested_line_count),
+        "actualCount": len(lines.lines),
+        "steps": int(lines.streamline_steps),
+        "stepSize": float(lines.streamline_step_size),
+        "time": float(lines.time),
+        "period": float(lines.period),
+        "domainLocalBounds": domain_local_bounds,
+        "metadata": lines.metadata_payload,
+        "vertexOffsets": offsets,
+        "seedIndices": seed_indices,
+        "association": association,
+    }
+    arrays = [
+        ("streamline_positions", positions, "f32", 3),
+        ("streamline_velocity", velocity, "f32", 3),
+        ("streamline_speed", speed, "f32", 1),
+        ("streamline_pressure", pressure, "f32", 1),
+    ]
+    return case, arrays
+
+
+def manifest_bytes(manifest: dict) -> bytes:
+    """The one place that decides how the manifest is serialized to disk, so
+    generation and the staleness check in test_generate.py can never drift."""
+    return (json.dumps(manifest, indent=2) + "\n").encode("utf-8")
+
+
 def generate(real_dir: Path = REAL_DIR) -> tuple:
     """Build the manifest and binary blob. Pure w.r.t. the filesystem: reads
     real_dir's dependency files and calls dtcc-core, writes nothing."""
@@ -184,108 +472,20 @@ def generate(real_dir: Path = REAL_DIR) -> tuple:
         core_bounds.xmax - origin[0], core_bounds.ymax - origin[1], core_bounds.zmax - z0,
     ]
 
-    # ---- grid (product="field", a VolumeMesh) ----
-    grid_local = np.asarray(field.vertices, dtype=np.float64).copy()
-    grid_local[:, 0] -= origin[0]
-    grid_local[:, 1] -= origin[1]
-    grid_local[:, 2] -= z0
-    grid_order = _lattice_order(
-        [grid_local[:, 0], grid_local[:, 1], grid_local[:, 2]],
-        [(local_bounds[0], local_bounds[3]), (local_bounds[1], local_bounds[4]),
-         (local_bounds[2], local_bounds[5])],
-        RESOLUTION,
-    )
-    fmap = _field_map(field.fields)
-    for name in FIELD_NAMES:
-        if name not in fmap:
-            raise ValueError(f"smoke.grid: product='field' is missing Field {name!r}")
-    grid_association = _resolve_association(fmap, FIELD_NAMES, case="smoke.grid",
-                                            require_present=True)
-    grid_velocity = np.asarray(fmap["velocity"].values, dtype=np.float64)[grid_order]
-    grid_speed = np.asarray(fmap["speed"].values, dtype=np.float64).reshape(-1)[grid_order]
-    grid_pressure = np.asarray(fmap["pressure"].values, dtype=np.float64).reshape(-1)[grid_order]
-    _assert_finite("smoke.grid", velocity=grid_velocity, speed=grid_speed, pressure=grid_pressure)
+    grid_case, grid_arrays, fmap = _build_grid_case(field, origin, z0, local_bounds)
+    slice_case, slice_arrays = _build_slice_case(slice_, origin, z0, local_bounds)
+    streamline_case, streamline_arrays = _build_streamline_case(datasets, lines, origin, z0)
 
-    # ---- slice (product="slice", a FieldSlice) ----
-    slice_local = np.asarray(slice_.points, dtype=np.float64).copy()
-    slice_local[:, 0] -= origin[0]
-    slice_local[:, 1] -= origin[1]
-    slice_local[:, 2] -= z0
-    a_axis, b_axis = slice_.axes
-    fixed_axis = 3 - a_axis - b_axis
-    fixed_values = slice_local[:, fixed_axis]
-    fixed_span = max(local_bounds[fixed_axis + 3] - local_bounds[fixed_axis], 1.0)
-    if fixed_values.max() - fixed_values.min() > 1e-6 * fixed_span:
-        raise ValueError("smoke.slice: sample points are not coplanar on the fixed axis")
-    fixed_local_coordinate = float(fixed_values.mean())
-
-    slice_order = _lattice_order(
-        [slice_local[:, a_axis], slice_local[:, b_axis]],
-        [(local_bounds[a_axis], local_bounds[a_axis + 3]),
-         (local_bounds[b_axis], local_bounds[b_axis + 3])],
-        RESOLUTION,
-    )
-    smap = _field_map(slice_.fields)
-    for name in FIELD_NAMES:
-        if name not in smap:
-            raise ValueError(f"smoke.slice: product='slice' is missing Field {name!r}")
-    slice_association = _resolve_association(smap, FIELD_NAMES, case="smoke.slice",
-                                             require_present=False)
-    slice_velocity = np.asarray(smap["velocity"].values, dtype=np.float64)[slice_order]
-    slice_speed = np.asarray(smap["speed"].values, dtype=np.float64).reshape(-1)[slice_order]
-    slice_pressure = np.asarray(smap["pressure"].values, dtype=np.float64).reshape(-1)[slice_order]
-    _assert_finite("smoke.slice", velocity=slice_velocity, speed=slice_speed, pressure=slice_pressure)
-
-    # ---- streamlines (product="streamlines", a StreamlineCollection) ----
-    position_parts, velocity_parts, speed_parts, pressure_parts = [], [], [], []
-    offsets = [0]
-    line_associations = set()
-    for line in lines.lines:
-        lmap = _field_map(line.fields)
-        for name in FIELD_NAMES:
-            if name not in lmap:
-                raise ValueError(f"smoke.streamlines: a line is missing Field {name!r}")
-        line_associations.add(_resolve_association(lmap, FIELD_NAMES, case="smoke.streamlines",
-                                                    require_present=False))
-        pts = np.asarray(line.vertices, dtype=np.float64).copy()
-        pts[:, 0] -= origin[0]
-        pts[:, 1] -= origin[1]
-        pts[:, 2] -= z0
-        position_parts.append(pts)
-        velocity_parts.append(np.asarray(lmap["velocity"].values, dtype=np.float64))
-        speed_parts.append(np.asarray(lmap["speed"].values, dtype=np.float64).reshape(-1))
-        pressure_parts.append(np.asarray(lmap["pressure"].values, dtype=np.float64).reshape(-1))
-        offsets.append(offsets[-1] + len(pts))
-    if len(line_associations) > 1:
-        raise ValueError(f"smoke.streamlines: association differs across lines: {line_associations}")
-    streamline_association = next(iter(line_associations)) if line_associations else None
-
-    streamline_positions = (np.concatenate(position_parts) if position_parts
-                            else np.empty((0, 3)))
-    streamline_velocity = (np.concatenate(velocity_parts) if velocity_parts
-                           else np.empty((0, 3)))
-    streamline_speed = np.concatenate(speed_parts) if speed_parts else np.empty((0,))
-    streamline_pressure = np.concatenate(pressure_parts) if pressure_parts else np.empty((0,))
-    _assert_finite("smoke.streamlines", positions=streamline_positions,
-                  velocity=streamline_velocity, speed=streamline_speed, pressure=streamline_pressure)
-
-    # ---- pack the binary (benchio owns byte layout) ----
-    arrays_spec = [
-        ("grid_velocity", grid_velocity, "f32", 3),
-        ("grid_speed", grid_speed, "f32", 1),
-        ("grid_pressure", grid_pressure, "f32", 1),
-        ("slice_velocity", slice_velocity, "f32", 3),
-        ("slice_speed", slice_speed, "f32", 1),
-        ("slice_pressure", slice_pressure, "f32", 1),
-        ("streamline_positions", streamline_positions, "f32", 3),
-        ("streamline_velocity", streamline_velocity, "f32", 3),
-        ("streamline_speed", streamline_speed, "f32", 1),
-        ("streamline_pressure", streamline_pressure, "f32", 1),
-    ]
-    blob, specs = benchio.pack_array_bundle(arrays_spec)
+    blob, specs = benchio.pack_array_bundle(grid_arrays + slice_arrays + streamline_arrays)
     spec_map = {s["name"]: s for s in specs}
+    grid_case["arrays"] = [spec_map[n] for n, *_ in grid_arrays]
+    slice_case["arrays"] = [spec_map[n] for n, *_ in slice_arrays]
+    streamline_case["arrays"] = [spec_map[n] for n, *_ in streamline_arrays]
 
     heat_meta = json.loads((real_dir / "field.json").read_text())
+    heat_dim = _resolve_temperature_dim(real_dir, heat_meta)
+    heat_unit = _reject_markup(heat_meta["unit"], context="field.json.unit")
+    heat_source = _reject_markup(heat_meta.get("source"), context="field.json.source")
 
     manifest = {
         "schemaVersion": 1,
@@ -300,7 +500,7 @@ def generate(real_dir: Path = REAL_DIR) -> tuple:
             "velocity": {"unit": fmap["velocity"].unit, "dim": int(fmap["velocity"].dim)},
             "speed": {"unit": fmap["speed"].unit, "dim": int(fmap["speed"].dim)},
             "pressure": {"unit": fmap["pressure"].unit, "dim": int(fmap["pressure"].dim)},
-            "temperature": {"unit": heat_meta["unit"], "dim": 1},
+            "temperature": {"unit": heat_unit, "dim": heat_dim},
         },
         "cases": {
             "smoke": {
@@ -313,56 +513,17 @@ def generate(real_dir: Path = REAL_DIR) -> tuple:
                     "streamlineCount": STREAMLINE_COUNT, "streamlineSteps": STREAMLINE_STEPS,
                     "streamlineStepSize": STREAMLINE_STEP_SIZE,
                 },
-                "grid": {
-                    "resolution": RESOLUTION,
-                    "dims": [RESOLUTION, RESOLUTION, RESOLUTION],
-                    "order": "x-fastest,y,z-slowest",
-                    "origin": [local_bounds[0], local_bounds[1], local_bounds[2]],
-                    "spacing": [
-                        (local_bounds[3] - local_bounds[0]) / (RESOLUTION - 1),
-                        (local_bounds[4] - local_bounds[1]) / (RESOLUTION - 1),
-                        (local_bounds[5] - local_bounds[2]) / (RESOLUTION - 1),
-                    ],
-                    "association": grid_association,
-                    "arrays": [spec_map[n] for n in
-                              ("grid_velocity", "grid_speed", "grid_pressure")],
-                },
-                "slice": {
-                    "axis": slice_.slice_axis,
-                    "position": float(slice_.slice_position),
-                    "resolution": RESOLUTION,
-                    "order": "a-fastest,b-slower (a,b = the two non-fixed local axes)",
-                    "localAxes": [a_axis, b_axis],
-                    "fixedLocalAxis": fixed_axis,
-                    "fixedLocalCoordinate": fixed_local_coordinate,
-                    "time": float(slice_.time),
-                    "period": float(slice_.period),
-                    "association": slice_association,
-                    "arrays": [spec_map[n] for n in
-                              ("slice_velocity", "slice_speed", "slice_pressure")],
-                },
-                "streamlines": {
-                    "seedAxis": lines.seed_axis,
-                    "seedPosition": float(lines.seed_position),
-                    "requestedCount": STREAMLINE_COUNT,
-                    "actualCount": len(lines.lines),
-                    "steps": int(lines.streamline_steps),
-                    "stepSize": float(lines.streamline_step_size),
-                    "time": float(lines.time),
-                    "period": float(lines.period),
-                    "vertexOffsets": offsets,
-                    "association": streamline_association,
-                    "arrays": [spec_map[n] for n in
-                              ("streamline_positions", "streamline_velocity",
-                               "streamline_speed", "streamline_pressure")],
-                },
+                "grid": grid_case,
+                "slice": slice_case,
+                "streamlines": streamline_case,
             },
             "heat": {
                 "dataCategory": "simulation",
-                "source": heat_meta.get("source"),
-                "unit": heat_meta.get("unit"),
+                "source": heat_source,
+                "unit": heat_unit,
                 "tmin": heat_meta.get("tmin"),
                 "tmax": heat_meta.get("tmax"),
+                "association": None,
             },
         },
         "dependencies": dependency_records(real_dir),
@@ -379,7 +540,7 @@ def main() -> None:
     manifest, blob = generate(REAL_DIR)
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     (OUT_DIR / "scientific.bin").write_bytes(blob)
-    (OUT_DIR / "scientific-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+    (OUT_DIR / "scientific-manifest.json").write_bytes(manifest_bytes(manifest))
     print(f"generate: wrote scientific-manifest.json + scientific.bin ({len(blob)} bytes)",
           flush=True)
 

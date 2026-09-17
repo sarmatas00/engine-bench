@@ -102,6 +102,8 @@
         ]
       },
       "slice": {
+        "name": "smoke_slice",
+        "crs": "EPSG:3006",
         "axis": "z",
         "position": 0.5,
         "resolution": 32,
@@ -114,6 +116,15 @@
         "fixedLocalCoordinate": 40.0,
         "time": 0.0,
         "period": 8.0,
+        "domainLocalBounds": [
+          -250.0,
+          -250.0,
+          0.0,
+          250.0,
+          250.0,
+          80.0
+        ],
+        "metadata": {},
         "association": null,
         "arrays": [
           {
@@ -140,6 +151,8 @@
         ]
       },
       "streamlines": {
+        "name": "smoke_streamlines",
+        "crs": "EPSG:3006",
         "seedAxis": "z",
         "seedPosition": 0.5,
         "requestedCount": 24,
@@ -148,6 +161,15 @@
         "stepSize": 0.05,
         "time": 0.0,
         "period": 8.0,
+        "domainLocalBounds": [
+          -250.0,
+          -250.0,
+          0.0,
+          250.0,
+          250.0,
+          80.0
+        ],
+        "metadata": {},
         "vertexOffsets": [
           0,
           90,
@@ -174,6 +196,32 @@
           3747,
           3877,
           4073
+        ],
+        "seedIndices": [
+          72,
+          30,
+          42,
+          61,
+          38,
+          160,
+          100,
+          84,
+          80,
+          85,
+          41,
+          157,
+          0,
+          158,
+          160,
+          27,
+          94,
+          99,
+          89,
+          63,
+          32,
+          97,
+          88,
+          35
         ],
         "association": null,
         "arrays": [
@@ -213,7 +261,8 @@
       "source": "dtcc-sim urban_heat",
       "unit": "degC",
       "tmin": 17.99999989500044,
-      "tmax": 18.7647502942796
+      "tmax": 18.7647502942796,
+      "association": null
     }
   },
   "dependencies": [

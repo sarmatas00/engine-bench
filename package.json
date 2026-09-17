@@ -13,7 +13,7 @@
     "preview": "vite preview --port 4173 --strictPort",
     "test:unit": "bun test tests/unit",
     "test:scientific:python": ".venv/bin/python -m pytest scripts/scientific/tests -q",
-    "test": "bun run test:unit && bun run build && playwright test",
+    "test": "bun run test:unit && bun test scripts/scientific/validate.test.ts && bun run test:scientific:python && bun run build && playwright test",
     "build:pages": "PAGES_BASE=/engine-bench/ bun run build"
   },
   "dependencies": {
