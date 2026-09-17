@@ -586,3 +586,36 @@ describe('attachContextLoss', () => {
     expect(stopBenchmark).not.toHaveBeenCalled();
   });
 });
+
+describe('orbitV1Pose ships the eye position with the pose', () => {
+  // The review found that exporting poseToEye alone left "both paths use
+  // identical cameras" enforceable only by convention. A page that takes `eye`
+  // cannot pick the wrong up axis; a page that recomputes it is visibly
+  // discarding a value it was handed.
+  test('every frame carries an eye that matches poseToEye exactly', () => {
+    for (const frame of [0, 1, 29, 30, 104, 209]) {
+      const pose = orbitV1Pose(frame);
+      expect(pose.eye).toEqual(poseToEye(pose));
+    }
+  });
+
+  test('the eye orbits the z axis, not the y axis', () => {
+    // z-up: elevation fixes the height, so z is constant across the orbit while
+    // x and y sweep. Under a y-up reading these roles swap, which is exactly
+    // the divergence Task 7 would otherwise blame on the renderers.
+    const quarter = [0, 52, 104, 157].map((f) => orbitV1Pose(f).eye);
+    const zs = quarter.map((e) => e[2]);
+    for (const z of zs) expect(Math.abs(z - zs[0])).toBeLessThan(1e-9);
+    const xs = quarter.map((e) => e[0]);
+    const ys = quarter.map((e) => e[1]);
+    expect(Math.max(...xs) - Math.min(...xs)).toBeGreaterThan(1);
+    expect(Math.max(...ys) - Math.min(...ys)).toBeGreaterThan(1);
+  });
+
+  test('azimuth 0 points along +x from the target', () => {
+    const pose = orbitV1Pose(0);
+    expect(pose.azimuthDeg).toBe(0);
+    expect(pose.eye[0]).toBeGreaterThan(pose.target[0]);
+    expect(Math.abs(pose.eye[1] - pose.target[1])).toBeLessThan(1e-9);
+  });
+});

@@ -310,6 +310,14 @@ export type CameraPose = {
  * (rather than each writing their own trig and risking rounding or
  * axis-convention drift between them).
  */
+/**
+ * A `CameraPose` with its eye position already derived, in the same z-up local
+ * frame. Use `eye` directly; `poseToEye` is exported for poses you build
+ * yourself, not for re-deriving one that already carries it.
+ */
+export type PlacedCameraPose = CameraPose & {eye: [number, number, number]};
+
+
 export function poseToEye(pose: CameraPose): [number, number, number] {
   const azimuthRad = (pose.azimuthDeg * Math.PI) / 180;
   const elevationRad = (pose.elevationDeg * Math.PI) / 180;
@@ -345,10 +353,20 @@ export const ORBIT_V1 = {
  * into place at frame 30). Pure: the same index always yields the same
  * pose, with no dependency on wall-clock time.
  */
-export function orbitV1Pose(frameIndex: number): CameraPose {
+export function orbitV1Pose(frameIndex: number): PlacedCameraPose {
   const total = ORBIT_V1.warmupFrames + ORBIT_V1.forcedFrames;
   const azimuthDeg = (360 * frameIndex) / total;
-  return {target: ORBIT_V1.target, radius: ORBIT_V1.radius, elevationDeg: ORBIT_V1.elevationDeg, azimuthDeg};
+  const pose: CameraPose = {
+    target: ORBIT_V1.target, radius: ORBIT_V1.radius,
+    elevationDeg: ORBIT_V1.elevationDeg, azimuthDeg,
+  };
+  // `eye` ships with the pose on purpose. The review found that exporting
+  // `poseToEye` alone left "both paths use identical cameras" enforceable only
+  // by convention: a page could redo the trig itself, in y-up, and Task 7's
+  // parity suite would blame the renderers for the divergence. Handing back the
+  // derived position means a page that just uses it cannot get the frame wrong,
+  // and a page that recomputes it is visibly ignoring a value it was given.
+  return {...pose, eye: poseToEye(pose)};
 }
 
 export type GpuSample = {ms: number; disjoint: boolean};

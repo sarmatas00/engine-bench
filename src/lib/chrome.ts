@@ -94,6 +94,9 @@ export function mountChrome(opts: ChromeOptions) {
      * textContent-only rule as `setReadout`.
      */
     fail: (message: string) => {
+      // Idempotent: context loss can fire more than once, and stacking
+      // overlays would bury the reload button under its own duplicates.
+      host.querySelector(':scope > .failure')?.remove();
       const el = document.createElement('div');
       el.className = 'failure';
       const p = document.createElement('p');
