@@ -522,4 +522,86 @@ Readers must use `regionMarkerCount`.
 `patch_terrain_raster_classification`) works around an upstream regression that stops
 both Core and dtcc-sim from building the tile at all. Delete the section as a unit
 when the upstream fix lands. Draft: `docs/upstream/dtcc-core-classification-dtype.md`.
-Section 2 is not a workaround and stays. Neither draft has been posted.
+Section 2 is not a workaround and stays.
+
+**Both drafts were posted on 2026-09-18** as `sarmatas00`, after a duplicate search
+turned up nothing upstream: `dtcc-core#110` (the classification dtype regression) and
+`dtcc-core#111` (`add_buildings(remove_outside_terrain=True)` deleting buildings with no
+roof points). The headers in `docs/upstream/` carry the issue links.
+
+## vtk.js 36.12.1: three measured findings (2026-09-18, spike Task 5)
+
+### `gl.finish()` does not force a completed frame under ANGLE/SwiftShader
+
+The first working benchmark on page 13 reported a CPU mean of **0.45 ms** while
+`EXT_disjoint_timer_query_webgl2` reported **95 ms** over the same 180 frames. A 200x
+overstatement of frame rate, on the page whose entire job is measuring frame rate, and
+it passed every check the task brief specified.
+
+`gl.finish()` returns without waiting under Chrome's ANGLE/SwiftShader command buffer.
+The fix is a 1x1 `gl.readPixels` at the end of each frame, which is a real pipeline
+sync: `FRAMEBUFFER_BINDING` and `READ_FRAMEBUFFER_BINDING` are both null after
+`render()`, so it blocks on the default framebuffer. CPU and GPU then agree, with CPU
+sitting marginally above GPU (44.71 vs 44.47 ms) -- the signature of a completed frame
+plus submission.
+
+Deleting that one line leaves every gate green, so the smoke suite now asserts
+`cpuMean > 0.5 * gpuMean`. Verified to catch the regression: with `readPixels` stripped
+from the built chunk the ratio falls to 0.003 and the assertion fails.
+
+**Task 6 must do the same or the two pages are not comparable.**
+
+### `vtkOpenGLRenderWindow` leaks one texture and one framebuffer per resize
+
+Measured with GL-object counters installed before the first render. The leak tracks
+drawing-buffer **resizes**, never frames, and never recovers:
+
+~~~
+startup               8 textures /  1 framebuffer
++6 viewport resizes  14          /  7
++3 benchmark runs    20          / 13     (two setSize calls each)
++8 slice rebuilds    no change
++3 case switches     no change
+~~~
+
+Confirmed independently at prototype level: exactly +1 texture and +1 framebuffer per
+resize. Page-owned allocations (buffers, listeners, observers) stay flat throughout, so
+this is vtk.js's, not ours. Task 6 needs the same instrumentation to know whether
+Three.js does it too; it is a maintenance-burden input for Task 8.
+
+### A node-vs-trilinear probe cannot check axis order, at any node
+
+Worth recording because the first fix for it was the same mistake one level down.
+`sampleGridTrilinear` calls `probeGridNode` internally with the same `dims`, so both
+sides of such a comparison route through one `gridNodeIndex`. A transposition moves
+both identically. At an exact node the trilinear path collapses to a single
+`probeGridNode` call, and on the heat grid's irrational spacing the residual 1e-15 of
+float noise is present on the **correct** payload -- so an exact-equality assert fails
+on correct data and passes on reversed garbage.
+
+Checking axis order needs a genuinely independent second implementation. Page 13 uses
+`vtkImageData.getOffsetIndexFromWorld`, whose matrix-inverse path catches four classes
+a componentwise dims/origin/spacing comparison cannot see at all: a permuted or flipped
+`direction` matrix, a wrong `numberOfComponents`, a wrongly bound scalar array, and a
+shifted extent.
+
+Known structural limit, stated rather than papered over: swapping x and y via
+dims/spacing is a genuine no-op on both shipped grids (32x32 and 64x64 in x/y), so it is
+undetectable by construction. Swapping x and y via `direction` is caught.
+
+### The shipped tile cannot discriminate several things it appears to
+
+Recorded together because each one has already produced a check that passed for the
+wrong reason:
+
+- `regionMarkerCount` and `conditionedRegionCount` are **both 103**, so a test comparing
+  the wrong one still passes.
+- The smoke grid is **32x32x32**, a cube, so a transposed index is invisible on it. The
+  heat grid (64x64x32) discriminates z but not x/y.
+- `nz` is **32 on both grids**, so a K-index slider works on both by coincidence. Page 13
+  drives the slice by world height in metres instead.
+- `smoke.speed` and `smoke.velocity` are **bit-identically z-invariant** (max deviation
+  0.0; pressure 12.02, heat 14.26), so any z-axis cross-check run on speed has zero power
+  over z. Cross-check on pressure.
+
+When shipped data cannot distinguish two fields, build a fixture that can.

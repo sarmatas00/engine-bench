@@ -256,9 +256,20 @@ function instrumentGlObjects(gl: WebGL2RenderingContext | WebGLRenderingContext)
  *
  * `vtkImageData.getOffsetIndexFromWorld` is a genuinely independent second
  * implementation: a world->index matrix plus vtk.js's own `computeOffsetIndex`,
- * sharing no code with `gridNodeIndex`. If this page ever hands vtk.js a
- * permuted `setDimensions`/`setOrigin`/`setSpacing` -- the real, page-owned
- * transposition risk in the render path -- the two disagree and this throws.
+ * sharing no code with `gridNodeIndex`.
+ *
+ * Be precise about which leg catches what, because the obvious reading is
+ * wrong. A permuted `setDimensions`/`setOrigin`/`setSpacing` is caught by the
+ * plain componentwise equality loop below, which throws first -- the vtk.js
+ * legs never fire for those. What the matrix path adds is four classes that
+ * loop cannot see at all: a permuted or flipped `direction` matrix, a wrong
+ * `numberOfComponents`, a wrongly bound scalar array, and a shifted extent.
+ * The last two are invisible to any componentwise comparison of dims, origin
+ * and spacing. Verified by negative control, one permutation at a time.
+ *
+ * Known structural limit: x<->y via dims/spacing is a genuine no-op on both
+ * shipped grids (32x32 and 64x64 in x/y), so it is undetectable here by
+ * construction rather than by omission. x<->y via `direction` IS caught.
  *
  * What it still cannot check: whether the *shipped payload* is in the order it
  * claims. That is a declaration check, and only the smoke grid ships a
@@ -888,6 +899,14 @@ function build(ui: Ui, bundle: ScientificBundle, heatValues: Float32Array): void
     apiRenderWindow.setSize(Math.max(1, Math.floor(rect.width * dpr)), Math.max(1, Math.floor(rect.height * dpr)));
     renderer.resetCameraClippingRange();
     renderWindow.render();
+    // Resizing is the ONLY thing that leaks (vtk.js drops a texture and a
+    // framebuffer per drawing-buffer resize), so it is the one path that must
+    // refresh the counts that would reveal it. Without this, Task 7's "100
+    // control/resize cycles with stable resource counts" gate reads the
+    // pre-resize snapshot and concludes "stable" while 100 textures and 100
+    // framebuffers have leaked -- the gate passing for the wrong reason, which
+    // is the exact thing the live-count change was made to stop.
+    publish();
   });
   resizeObserver.observe(ui.canvasHost);
   observers += 1;
@@ -968,6 +987,10 @@ function build(ui: Ui, bundle: ScientificBundle, heatValues: Float32Array): void
       resizeObserver.observe(ui.canvasHost);
       renderWindow.render();
       recordRenderSurface('interactive');
+      // After the restore setSize, not before it: the in-try publish() above
+      // runs while the surface is still pinned to BENCHMARK_SURFACE, so it
+      // misses the restore's own resize leak and under-reports by one.
+      publish();
       const resourcesAfter = {...glCounts, listeners, observers};
       if (!resourcesEqual(resourcesBefore, resourcesAfter)) {
         ui.probe(`vtk.js 36.12.1 GL-object growth across one benchmark run: `
