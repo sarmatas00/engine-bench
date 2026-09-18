@@ -1,10 +1,9 @@
-# DRAFT: not posted
+# POSTED as dtcc-core#111
 
-Intended target: `dtcc-core` issues. **Nothing here has been posted.** Posting needs
-explicit approval plus an immediate `sarmatas00` identity check.
+https://github.com/dtcc-platform/dtcc-core/issues/111
 
-Second upstream finding from the post-#85 regeneration, independent of the
-classification-dtype regression in `dtcc-core-classification-dtype.md`.
+Filed 2026-09-18 by `sarmatas00` (identity verified with `gh api user` at post time).
+The text below is what was posted, minus this header.
 
 ---
 

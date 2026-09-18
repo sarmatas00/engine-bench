@@ -1,9 +1,9 @@
-# DRAFT: not posted
+# POSTED as dtcc-core#110
 
-Intended target: `dtcc-core` issues. **Nothing here has been posted.** Posting needs
-explicit approval plus an immediate `sarmatas00` identity check (`gh auth status`).
+https://github.com/dtcc-platform/dtcc-core/issues/110
 
-Recorded as ledger ruling R6 / decision `548c3d0a`.
+Filed 2026-09-18 by `sarmatas00` (identity verified with `gh api user` at post time).
+The text below is what was posted, minus this header.
 
 ---
 
