@@ -13,8 +13,15 @@ const rows: [string, string, string, string, string][] = [
   ['09-cesium-terrain', 'Cesium terrain', 'Polygon clamps; model clamps only at its origin.', 'Why Cesium lost.', 'Cesium does not solve Limitation 1 for 3D shapes.'],
   ['10-cesium-voxels', 'Cesium voxels', '3-D temperature plume as a VoxelPrimitive.', 'Why it was reopened.', 'The only engine that draws volume data. Candidate for a simulation view, not the map.'],
   ['11-vtkjs-grid', 'VTK.js', 'Grid volume + isosurface; the mesh itself never loaded.', 'Narrowed to one job.', 'Needs a grid, not our mesh. That conversion now exists and feeds page 10 too.'],
-  ['12-playcanvas', 'PlayCanvas', 'Mesh renders; no CRS, basemap or terrain API.', 'Rejected.', 'Rejected on geography, not rendering.']
+  ['12-playcanvas', 'PlayCanvas', 'Mesh renders; no CRS, basemap or terrain API.', 'Rejected.', 'Rejected on geography, not rendering.'],
+  ['13-vtkjs-scientific', 'VTK.js scientific', 'One scene: Gothenburg terrain and buildings, the DTCC smoke field as a volume, a slice and Core\'s streamlines. Click a building to read its marker back.', 'The vtk.js reference path.', 'Whether one vtk.js scene carries city geometry and scientific fields together with identity and values readable back. Task 6 mirrors it in Three.js.']
 ];
+
+/**
+ * Pages that load one bundle and have no synthetic/real variant, so their link
+ * must never carry the dataset query the matrix pages take.
+ */
+const COMBINED = new Set(['13-vtkjs-scientific']);
 
 // The briefing's own argument order, so the index reads as the case rather than a file listing.
 const sections: Record<string, string> = {
@@ -22,7 +29,8 @@ const sections: Record<string, string> = {
   '02-deckgl-floats': 'Limitation 1 — our data will not follow the hills',
   '04-values-lost': 'Limitation 2 — colouring by simulation results',
   '05-fix-a1-deck-terrain': 'What the fixes cost',
-  '09-cesium-terrain': 'What else was considered, and why it lost'
+  '09-cesium-terrain': 'What else was considered, and why it lost',
+  '13-vtkjs-scientific': 'Scientific visualization — one scene carrying the city and the fields'
 };
 
 // Three rows describe something the synthetic scene does and the real tile does not. Overridden
@@ -74,6 +82,6 @@ document.body.innerHTML = `
   ${pipelineBlock}</header>
   <main style="padding:14px;overflow:auto"><table style="border-collapse:collapse">
   <thead><tr><th align="left">Page</th><th align="left">What you should see</th><th align="left">What it decides</th></tr></thead>
-  <tbody>${rows.map(([slug, t, e, , d]) => (sections[slug] ? `<tr><td colspan="3" style="padding:14px 0 4px;font-weight:600;border-bottom:1px solid #ccc">${sections[slug]}</td></tr>` : '') + `<tr><td style="padding:4px 12px 4px 0;white-space:nowrap"><a href="${assetUrl(`${slug}/${q}`)}">${slug.slice(0, 2)} · ${t}</a></td><td style="padding:4px 12px 4px 0">${(ds === 'real' && realExpect[slug]) || e}</td><td style="padding:4px 0">${d}</td></tr>`).join('')}</tbody>
+  <tbody>${rows.map(([slug, t, e, , d]) => (sections[slug] ? `<tr><td colspan="3" style="padding:14px 0 4px;font-weight:600;border-bottom:1px solid #ccc">${sections[slug]}</td></tr>` : '') + `<tr><td style="padding:4px 12px 4px 0;white-space:nowrap"><a href="${assetUrl(`${slug}/${COMBINED.has(slug) ? '' : q}`)}">${slug.slice(0, 2)} · ${t}</a></td><td style="padding:4px 12px 4px 0">${(ds === 'real' && realExpect[slug]) || e}</td><td style="padding:4px 0">${d}</td></tr>`).join('')}</tbody>
   </table></main>`;
 window.__bench = {ready: true, probe: {}};

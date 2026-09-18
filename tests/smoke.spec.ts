@@ -12,6 +12,9 @@ type PageSpec = {
    * why a combined page must not be listed in FIELD_PAGES.
    */
   mode?: 'matrix' | 'combined';
+  /** Runs before `page.goto`, for anything that must be installed in the page
+   *  before its own scripts do (see page 13's ResizeObserver counter). */
+  init?: (page: Page) => Promise<void>;
   extraChecks?: (page: Page, probe: Record<string, unknown>) => Promise<void>;
 };
 
@@ -23,6 +26,7 @@ type ScientificProbeJson = {
   provenance: {smoke: string; heat: string};
   selectedObject?: {marker: number; sourceIndexes: number[]; dtccIds: string[]; traceability: string};
   selectedValue?: {field: string; value: number; unit: string; world: [number, number, number]};
+  benchmark?: {cpuFrameTimesMs: number[]; gpuFrameTimesMs: number[] | null; cameraPath: string; forcedFrames: number};
   resources: {buffers: number; textures: number; renderTargets: number; listeners: number; observers: number};
   measurementValid: boolean;
 };
@@ -103,7 +107,22 @@ export const PAGES: PageSpec[] = [
   {slug: '10-cesium-voxels'},
   {slug: '11-vtkjs-grid'},
   {slug: '12-playcanvas'},
-  {slug: '13-vtkjs-scientific', mode: 'combined', extraChecks: async (page, probe) => {
+  {slug: '13-vtkjs-scientific', mode: 'combined', init: async page => {
+    // A second witness for resources.observers: the page reports its own
+    // integer, and nothing else in this spec could tell a second, leaked
+    // ResizeObserver from an honest one.
+    await page.addInitScript(() => {
+      const Real = window.ResizeObserver;
+      const stats = {constructed: 0, observed: 0, disconnected: 0};
+      (window as any).__roStats = stats;
+      class Counting extends Real {
+        constructor(callback: ResizeObserverCallback) { super(callback); stats.constructed++; }
+        observe(target: Element, options?: ResizeObserverOptions) { stats.observed++; super.observe(target, options); }
+        disconnect() { stats.disconnected++; super.disconnect(); }
+      }
+      window.ResizeObserver = Counting;
+    });
+  }, extraChecks: async (page, probe) => {
     // The four obligations Task 4 deferred to this page, plus the Contract
     // Amendments' identity facts. Every one is asserted, never inspected.
     const sci = probe.scientific as ScientificProbeJson | undefined;
@@ -120,8 +139,34 @@ export const PAGES: PageSpec[] = [
     // One canvas, counted twice: the probe's own number is never the only witness.
     expect(sci!.canvasCount).toBe(1);
     await expect(page.locator('#host canvas')).toHaveCount(1);
-    // Non-negotiable: one ResizeObserver, and it is counted.
+    // One ResizeObserver, on two independent witnesses: the page's own count,
+    // and a counting subclass installed before the page's scripts ran.
     expect(sci!.resources.observers).toBe(1);
+    expect(await page.evaluate(() => (window as any).__roStats))
+      .toEqual({constructed: 1, observed: 1, disconnected: 0});
+
+    // The rendered slice is the plane the page claims, at the exact requested
+    // height — not the nearest node layer. Checked at the manifest's own slice
+    // position and then at a deliberately off-node height.
+    type SliceGeometry = {requestedZ: number; renderedZ: number; dims: number[]; originZ: number; nodeSpacingZ: number};
+    const sliceGeometry = () => page.evaluate(() => (window as any).__bench.sliceGeometry() as SliceGeometry);
+    const atDefault = await sliceGeometry();
+    expect(atDefault.renderedZ).toBe(atDefault.requestedZ);
+    expect(atDefault.dims[2], 'the slice image is a single layer').toBe(1);
+    await page.locator('#slice-z').evaluate(el => {
+      const input = el as HTMLInputElement;
+      input.value = '24';
+      input.dispatchEvent(new Event('input'));
+    });
+    const moved = await sliceGeometry();
+    expect(moved.requestedZ).not.toBe(atDefault.requestedZ);
+    // The probe height has to sit off the node lattice, or snapping back to the
+    // nearest layer would satisfy the next assertion by accident.
+    const lattice = (moved.requestedZ - moved.originZ) / moved.nodeSpacingZ;
+    expect(Math.abs(lattice - Math.round(lattice)),
+      `z=${moved.requestedZ} is ${lattice} node layers up — too close to a layer to detect snapping`)
+      .toBeGreaterThan(0.1);
+    expect(moved.renderedZ, 'the drawn plane must follow the requested height exactly').toBe(moved.requestedZ);
 
     // The fixed startup pick's sampled value.
     expect(sci!.selectedValue, 'the fixed startup probe must publish a selectedValue').toBeTruthy();
@@ -193,6 +238,56 @@ export const PAGES: PageSpec[] = [
     await page.click('#camera-reset');
     expect(await calls() - before).toBe(1);
 
+    // The forced-render benchmark. The length check proves orbit-v1 ran whole;
+    // the CPU-vs-GPU check is the actual guard, and is what would have caught
+    // this page's first benchmark reporting a 0.45 ms CPU frame while the GPU
+    // timer reported 95 ms on the very same frames. Deleting the one-pixel
+    // readback that forces frame completion would fail here and nowhere else.
+    const resourcesBefore = (await readScientific(page)).resources;
+    const bench = await page.evaluate(async () => {
+      const result = await (window as any).__bench.runBenchmark();
+      const mean = (a: number[]) => a.reduce((x: number, y: number) => x + y, 0) / a.length;
+      return {
+        frames: result.cpuFrameTimesMs.length,
+        cameraPath: result.cameraPath,
+        forcedFrames: result.forcedFrames,
+        cpuMean: mean(result.cpuFrameTimesMs),
+        gpuCount: result.gpuFrameTimesMs ? result.gpuFrameTimesMs.length : null,
+        gpuMean: result.gpuFrameTimesMs && result.gpuFrameTimesMs.length ? mean(result.gpuFrameTimesMs) : null,
+      };
+    });
+    expect(bench.frames).toBe(180);
+    expect(bench.cameraPath).toBe('orbit-v1');
+    expect(bench.forcedFrames).toBe(180);
+    expect(bench.cpuMean).toBeGreaterThan(0);
+    if (bench.gpuMean !== null) {
+      expect(bench.cpuMean,
+        `cpu mean ${bench.cpuMean.toFixed(2)} ms vs gpu mean ${bench.gpuMean.toFixed(2)} ms — a CPU frame time far `
+        + 'below the GPU time for the same frame means the render was submitted but never waited on')
+        .toBeGreaterThan(0.5 * bench.gpuMean);
+    }
+    expect((await readScientific(page)).benchmark, 'runBenchmark must publish into the probe').toMatchObject(
+      {cameraPath: 'orbit-v1', forcedFrames: 180});
+    // The resource counts are live GL object counts, so this is a real gate.
+    // What it finds is a vtk.js 36.12.1 defect, bounded here rather than
+    // hidden: vtkOpenGLRenderWindow leaks up to one texture and one framebuffer
+    // per drawing-buffer resize and never deletes them, and a benchmark run
+    // resizes twice (pin the surface, restore it). The bound is what matters —
+    // growth must scale with resizes, not with the 210 forced frames. A
+    // per-frame leak would land here two orders of magnitude out.
+    const RESIZES_PER_RUN = 2;
+    const resourcesAfter = (await readScientific(page)).resources;
+    for (const key of ['textures', 'renderTargets'] as const) {
+      const delta = resourcesAfter[key] - resourcesBefore[key];
+      expect(delta, `${key} grew by ${delta} across 210 forced frames`).toBeGreaterThanOrEqual(0);
+      expect(delta, `${key} grew by ${delta}, more than one per drawing-buffer resize`)
+        .toBeLessThanOrEqual(RESIZES_PER_RUN);
+    }
+    // Everything the page itself owns must be exactly flat.
+    for (const key of ['buffers', 'listeners', 'observers'] as const) {
+      expect(resourcesAfter[key], `page-owned ${key} moved across the benchmark`).toBe(resourcesBefore[key]);
+    }
+
     // Forced context loss on the drawing canvas vtk.js renders into.
     const forced = await page.evaluate(() => {
       const canvas = document.querySelector('#host canvas') as HTMLCanvasElement | null;
@@ -256,6 +351,7 @@ async function runPage(page: Page, spec: PageSpec, dataset: 'synthetic' | 'real'
   page.on('pageerror', e => errors.push(`pageerror: ${e.message}`));
   page.on('console', m => { if (m.type() === 'error') errors.push(`console.error: ${m.text()}`); });
 
+  if (spec.init) await spec.init(page);
   const query = dataset === 'real' ? '?dataset=real' : '';
   await page.goto(`/${spec.slug}/${query}`);
   await page.waitForFunction(() => (window as any).__bench?.ready === true, null, {timeout: 30_000});
@@ -287,6 +383,11 @@ for (const dataset of ['synthetic', 'real'] as const) {
 test.describe('combined', () => {
   for (const spec of PAGES) {
     if (spec.mode !== 'combined') continue;
-    test(spec.slug, async ({page}) => { await runPage(page, spec, null); });
+    test(spec.slug, async ({page}) => {
+      // These pages run orbit-v1's full 210 forced frames in-test; on a
+      // software rasterizer that alone is well over half the default budget.
+      test.slow();
+      await runPage(page, spec, null);
+    });
   }
 });

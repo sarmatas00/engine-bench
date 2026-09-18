@@ -46,8 +46,9 @@ import {loadScientificBundle} from '@lib/scientific-data';
 import type {MeshPair, ScientificBundle, ScientificManifest} from '@lib/scientific-data';
 import {
   ALIGNMENT_TOLERANCE_M, alignmentDistance, attachContextLoss, createBenchmarkDriver,
-  describeTraceability, gridField, heatGridField, interpolatedTolerance, objectRefForCell,
-  orbitV1Pose, poseToEye, probeGridNode, sampleGridTrilinear,
+  describeTraceability, diffResources, gridField, gridNodeIndex, heatGridField,
+  interpolatedTolerance, objectRefForCell, orbitV1Pose, probeGridNode, resourcesEqual,
+  sampleGridTrilinear,
 } from '@lib/scientific-probes';
 import type {
   BenchmarkResult, CameraPose, GpuTimer, GridField, PlacedCameraPose, ScientificProbe,
@@ -63,6 +64,15 @@ const FIXED_PICK_CELL = 0;
 
 /** The three data cases, named once so the select and the case table agree. */
 const CASE_IDS = ['smoke · speed', 'smoke · pressure', 'heat · temperature'] as const;
+
+/**
+ * The drawing-buffer size every benchmark run is forced to, so the number is a
+ * property of the renderer and not of this page's header height. The canvas
+ * otherwise fills whatever space the chrome leaves (1280x492 here), and Task
+ * 6's header text is a different length -- without this its frame times would
+ * differ for a reason that has nothing to do with Three.js.
+ */
+const BENCHMARK_SURFACE: [number, number] = [1280, 720];
 
 /** vtk.js entry points this page uses — the custom-code-burden list Task 7 compares. */
 const VTK_APIS = [
@@ -187,6 +197,176 @@ function rangeOf(values: Float32Array): [number, number] {
 }
 
 // ---------------------------------------------------------------------------
+// Live GPU-object counts.
+
+type GlCounts = {buffers: number; textures: number; renderTargets: number};
+
+/**
+ * Counts the GL objects vtk.js actually creates and deletes, by wrapping the
+ * six create/delete entry points on the context instance before the first
+ * render.
+ *
+ * The first version of this page hand-incremented `probe.resources` at each
+ * construction site, which made every number a literal fixed at build time:
+ * `resourcesEqual(before, after)` over 100 control/resize cycles was then true
+ * by construction and could never have caught a leak. The declared numbers
+ * were also wrong -- 10 buffers, 3 "textures" (vtkImageData objects, which are
+ * CPU-side arrays) and 0 render targets, against a real 9 buffers, 18 textures
+ * and 11 framebuffers. These counts are measurements.
+ */
+function instrumentGlObjects(gl: WebGL2RenderingContext | WebGLRenderingContext): GlCounts {
+  const counts: GlCounts = {buffers: 0, textures: 0, renderTargets: 0};
+  const target = gl as unknown as Record<string, (...args: unknown[]) => unknown>;
+  const wrap = (createName: string, deleteName: string, key: keyof GlCounts) => {
+    const create = target[createName].bind(gl);
+    const destroy = target[deleteName].bind(gl);
+    target[createName] = (...args: unknown[]) => {
+      const object = create(...args);
+      if (object) counts[key]++;
+      return object;
+    };
+    target[deleteName] = (...args: unknown[]) => {
+      if (args[0]) counts[key]--;
+      return destroy(...args);
+    };
+  };
+  wrap('createBuffer', 'deleteBuffer', 'buffers');
+  wrap('createTexture', 'deleteTexture', 'textures');
+  wrap('createFramebuffer', 'deleteFramebuffer', 'renderTargets');
+  return counts;
+}
+
+// ---------------------------------------------------------------------------
+// Geometry-wiring assertions. These throw; they are not reported.
+
+/**
+ * Cross-checks the shared module's grid indexing against vtk.js's own, on the
+ * very image this page renders.
+ *
+ * This replaces a far-corner probe that compared `probeGridNode` against
+ * `sampleGridTrilinear` and was a tautology: at an exact node the trilinear
+ * sampler's `w === 0` skip collapses it to a single `probeGridNode` call
+ * through the same `gridNodeIndex` and the same `field.dims`, so the two sides
+ * are the same array element by construction, under any permutation of the
+ * payload. Measured: it reported "identical" for a correct payload, a
+ * z-fastest transposed payload and a reversed-garbage payload alike. Moving
+ * the probe to an interior node does not help -- the collapse happens at every
+ * exact node, and on this grid's irrational spacing the residual difference is
+ * float noise (1e-15) that is present on the *correct* payload too.
+ *
+ * `vtkImageData.getOffsetIndexFromWorld` is a genuinely independent second
+ * implementation: a world->index matrix plus vtk.js's own `computeOffsetIndex`,
+ * sharing no code with `gridNodeIndex`. If this page ever hands vtk.js a
+ * permuted `setDimensions`/`setOrigin`/`setSpacing` -- the real, page-owned
+ * transposition risk in the render path -- the two disagree and this throws.
+ *
+ * What it still cannot check: whether the *shipped payload* is in the order it
+ * claims. That is a declaration check, and only the smoke grid ships a
+ * declaration (`order`, asserted against GRID_ORDER in scientific-data.ts).
+ * field.grid.json carries no `order` field; see the probe panel.
+ */
+function assertGridWiring(caseId: string, field: GridField, image: ReturnType<typeof vtkImageData.newInstance>): void {
+  const [nx, ny, nz] = field.dims;
+  const dims = image.getDimensions();
+  const origin = image.getOrigin();
+  const spacing = image.getSpacing();
+  for (let axis = 0; axis < 3; axis++) {
+    if (dims[axis] !== field.dims[axis] || origin[axis] !== field.origin[axis] || spacing[axis] !== field.spacing[axis]) {
+      throw new Error(
+        `${caseId}: the vtkImageData geometry does not match the shipped grid -- `
+        + `dims ${JSON.stringify(dims)} vs ${JSON.stringify(field.dims)}, `
+        + `origin ${JSON.stringify(origin)} vs ${JSON.stringify(field.origin)}, `
+        + `spacing ${JSON.stringify(spacing)} vs ${JSON.stringify(field.spacing)}`,
+      );
+    }
+  }
+  // Asymmetric nodes, anchored at (1, 1, 1) and stepped one node along each
+  // axis in turn: the three offsets differ from the anchor's by 1, nx and
+  // nx*ny, which stay distinct under every permutation of the axes. Plus one
+  // off-axis node and three near-far nodes for reach along each axis.
+  //
+  // Every coordinate is strictly interior, in [1, n-2], and that is not
+  // fastidiousness. `origin + i * spacing` does not round-trip exactly:
+  // vtk.js's worldToIndex put the smoke grid's last x node at
+  // 31.000000000000004 against an extent of 31, and the heat grid's y=0 face
+  // at -3.6e-15, and getOffsetIndexFromWorld answers NaN outside the extent.
+  // Both are float artefacts of probing the very edge of the volume -- and
+  // this check reported both as indexing disagreements on its first two runs,
+  // which is at least the right direction to fail in.
+  const nodes: Array<[number, number, number]> = ([
+    [1, 1, 1], [2, 1, 1], [1, 2, 1], [1, 1, 2], [3, 5, 7], [nx - 2, 1, 1], [1, ny - 2, 1], [1, 1, nz - 2],
+  ] as Array<[number, number, number]>).filter(([i, j, k]) => i >= 1 && j >= 1 && k >= 1 && i <= nx - 2 && j <= ny - 2 && k <= nz - 2);
+  for (const [i, j, k] of nodes) {
+    const world: [number, number, number] = [
+      field.origin[0] + i * field.spacing[0],
+      field.origin[1] + j * field.spacing[1],
+      field.origin[2] + k * field.spacing[2],
+    ];
+    const vtkOffset = image.getOffsetIndexFromWorld(world);
+    const libOffset = gridNodeIndex(field.dims, i, j, k);
+    if (vtkOffset !== libOffset) {
+      throw new Error(`${caseId}: node (${i}, ${j}, ${k}) is offset ${libOffset} to gridNodeIndex but ${vtkOffset} to vtk.js`);
+    }
+    const vtkValue = image.getScalarValueFromWorld(world);
+    const libValue = probeGridNode(field, i, j, k)[0];
+    if (vtkValue !== libValue) {
+      throw new Error(`${caseId}: node (${i}, ${j}, ${k}) reads ${libValue} through probeGridNode but ${vtkValue} through vtk.js`);
+    }
+  }
+}
+
+/**
+ * Core's precomputed FieldSlice against the volume grid, trilinear at the same
+ * world points, on PRESSURE.
+ *
+ * Pressure, not speed: the shipped smoke speed field is bit-identically
+ * z-invariant (measured max |f(z) - f(z=0)| = 0.0, against 12.02 for pressure),
+ * so a speed cross-check has exactly zero power over the z axis -- it would
+ * report the same 1e-16 agreement for any slice height whatsoever. Pressure is
+ * the only shipped slice array that varies in z.
+ *
+ * Asserted, not reported. It is the one check here that genuinely discriminates:
+ * transposing the slice's a/b order moves the worst deviation from 3.8e-6 to
+ * 24.7, against a tolerance of 8.2e-4.
+ */
+function assertCoreSliceAgrees(bundle: ScientificBundle, pressure: GridField, pressureSpan: number): number {
+  const slice = bundle.smoke.slice;
+  if (slice.axis !== 'z' || slice.fixedLocalAxis !== 2 || slice.localAxes[0] !== 0 || slice.localAxes[1] !== 1) {
+    // Downgrading to a "not cross-checked" log line would leave the only
+    // discriminating check in this file silently switched off.
+    throw new Error(
+      `smoke.slice: this page's a-fastest adapter is only known to be world-ascending for axis "z" with `
+      + `localAxes [0, 1] and fixedLocalAxis 2; the manifest ships axis=${JSON.stringify(slice.axis)}, `
+      + `localAxes=${JSON.stringify(slice.localAxes)}, fixedLocalAxis=${slice.fixedLocalAxis}. `
+      + 'Re-measure the on-disk order before rendering it.',
+    );
+  }
+  const res = slice.resolution;
+  const [xmin, ymin, , xmax, ymax] = slice.domainLocalBounds;
+  let worst = 0;
+  for (let b = 0; b < res; b++) {
+    for (let a = 0; a < res; a++) {
+      const world: [number, number, number] = [
+        xmin + (a * (xmax - xmin)) / (res - 1),
+        ymin + (b * (ymax - ymin)) / (res - 1),
+        slice.fixedLocalCoordinate,
+      ];
+      // "a-fastest, b-slower" over localAxes [0, 1] = x fastest, then y.
+      const delta = Math.abs(slice.pressure[a + res * b] - sampleGridTrilinear(pressure, world)[0]);
+      if (delta > worst) worst = delta;
+    }
+  }
+  const tolerance = interpolatedTolerance(pressureSpan);
+  if (!(worst <= tolerance)) {
+    throw new Error(
+      `smoke.slice: Core's FieldSlice pressure disagrees with the volume grid at z=${slice.fixedLocalCoordinate} m by `
+      + `${worst.toExponential(4)} Pa, over the ${tolerance.toExponential(4)} interpolated tolerance for a span of ${pressureSpan}.`,
+    );
+  }
+  return worst;
+}
+
+// ---------------------------------------------------------------------------
 // Provenance and camera.
 
 /**
@@ -211,14 +391,23 @@ function provenanceOf(manifest: ScientificManifest): ScientificProbe['provenance
  * states a z-up frame with azimuth measured from +x and vtk.js's default frame
  * is not that. BenchmarkDriver's `RenderFrame` callback type widens the pose
  * back to a bare `CameraPose`, which is why this reads `eye` defensively and
- * falls back to the shared `poseToEye` (never to hand-rolled trig) for a pose
- * that genuinely lacks it. Narrowing `RenderFrame` to `PlacedCameraPose` in
- * scientific-probes.ts would remove the need for this — reported, not changed,
- * since this task does not own that file.
+ * throws rather than silently recomputing when it is absent. A fallback would
+ * be an unreachable branch that quietly switches the camera derivation -- the
+ * exact shape of bug Task 4's residual fix existed to remove. Narrowing
+ * `RenderFrame` to `PlacedCameraPose` in scientific-probes.ts would make this
+ * function unnecessary; logged, not changed, since this task does not own
+ * that file.
  */
 function eyeOf(pose: CameraPose): [number, number, number] {
   const placed = pose as Partial<PlacedCameraPose>;
-  return placed.eye ?? poseToEye(pose);
+  if (!placed.eye) {
+    throw new Error(
+      'camera pose arrived without its derived eye position: every pose this page renders comes from '
+      + 'orbitV1Pose, which ships `eye` with the pose. Re-deriving it here would silently reintroduce the '
+      + 'z-up/azimuth-origin mismatch CameraPose exists to prevent.',
+    );
+  }
+  return placed.eye;
 }
 
 // ---------------------------------------------------------------------------
@@ -288,10 +477,25 @@ function chromeOptions(bundle?: ScientificBundle) {
     findings: [
       'Identity is unstable_observed, measured over two loads. An attributed marker reads back as run-local; a '
       + 'split-added marker reads back as having no source building, stated in words rather than as a blank row.',
-      'The slice is the volume grid\'s own z slice. Core\'s FieldSlice artifact is carried in full (axis, position, '
-      + 'localAxes, domain) and is cross-checked against the volume grid at the same world points — see the probe panel.',
-      'Both grids are sampled through the shared sampleGridTrilinear. The heat grid is 64x64x32, not a cube, so it is '
-      + 'the one shipped fixture that can catch a transposed axis; the volume grid at 32x32x32 cannot.',
+      'The slice is the TRUE plane at the requested height, resampled through sampleGridTrilinear, not the nearest '
+      + 'node layer. Snapping put it at 41.29 m while the page claimed 40 m: 0.15 Pa and 0.91 degC of error on the '
+      + 'z-varying cases, invisible only on speed, which is z-invariant. Core\'s FieldSlice is cross-checked against '
+      + 'the volume grid on pressure and the check now fails the page rather than logging a line.',
+      'Measured vtk.js defect, reported not worked around: vtkOpenGLRenderWindow leaks up to one texture and one '
+      + 'framebuffer per drawing-buffer resize and never deletes them. The counts climb monotonically — 8 textures / '
+      + '1 framebuffer at startup, 14 / 7 after six viewport resizes, 20 / 13 after three benchmark runs — and never '
+      + 'come back down. Growth tracks resizes, never frames. The probe\'s resources are live GL object counts, so '
+      + 'the spec\'s "stable resource counts over 100 control/resize cycles" gate is a real measurement here, and '
+      + 'this is what it finds.',
+      'Axis order is asserted by running vtk.js\'s own world-to-offset implementation against the shared '
+      + 'gridNodeIndex at asymmetric nodes on every grid. The check this replaced — probeGridNode against '
+      + 'sampleGridTrilinear at the far corner — was a tautology: at an exact node the trilinear sampler collapses to '
+      + 'a single probeGridNode call through the same index formula, and it reported "identical" for a correct '
+      + 'payload, a transposed one and reversed garbage alike. The replacement was negative-controlled: permuting '
+      + 'x/z in setDimensions or in setSpacing both fail the page at startup, and the slice cross-check fails at '
+      + '24.69 Pa against a 8.2e-4 tolerance when its a/b order is transposed. Note that permuting x/y is a genuine '
+      + 'no-op on these grids — 32x32 and 64x64 — so no check can see it. Whether a shipped payload matches its '
+      + 'declared order is a declaration check; field.grid.json ships no order field. See the probe panel.',
       'Defect we found and fixed here: gl.finish() alone does not force a completed frame under Chrome\'s '
       + 'ANGLE/SwiftShader command buffer. The benchmark first reported a 0.45 ms mean CPU frame while the GPU timer '
       + 'reported 95 ms on the same frames — a 200x overstated frame rate. Each forced render now ends in a one-pixel '
@@ -301,10 +505,16 @@ function chromeOptions(bundle?: ScientificBundle) {
   };
 }
 
-/** The urban-heat grid's values. loadScientificBundle already hash-verified
- *  these bytes as a declared dependency but keeps only the reference, so the
- *  array itself is fetched here (from cache) and re-checked against the
- *  reference's own dims before use. */
+/**
+ * The urban-heat grid's values. loadScientificBundle already fetched and
+ * hash-verified these bytes as a declared dependency but keeps only the
+ * reference, so the array is fetched again here. Whether that second fetch is
+ * served from the HTTP cache is the browser's business, not a guarantee -- and
+ * either way these bytes are NOT re-hashed, only length-checked against the
+ * reference's own dims. Returning the verified bytes from
+ * loadScientificBundle would close that; out of scope here, since it is a
+ * src/lib change.
+ */
 async function loadHeatValues(bundle: ScientificBundle): Promise<Float32Array> {
   const ref = bundle.heat.grid;
   const res = await fetch(assetUrl(ref.dataUrl));
@@ -341,26 +551,33 @@ function build(ui: Ui, bundle: ScientificBundle, heatValues: Float32Array): void
     canvasCount: 0,
     field: true,
     provenance: provenanceOf(manifest),
-    // Counted by this page, at each creation site below. `renderTargets` stays
-    // 0 on purpose: vtk.js owns every framebuffer it renders through, and this
-    // page creates none of its own. Task 7 compares these before/after control
-    // and resize cycles, so what matters is that each number is attributable.
+    // buffers/textures/renderTargets are live GL object counts (see
+    // instrumentGlObjects); listeners/observers are this page's own DOM
+    // bookkeeping. Refreshed on every publish, so Task 7's before/after
+    // comparison is a measurement rather than a pair of constants.
     resources: {buffers: 0, textures: 0, renderTargets: 0, listeners: 0, observers: 0},
     measurementValid: true,
   };
-  const publish = () => ui.setScientificProbe(probe);
+  let glCounts: GlCounts = {buffers: 0, textures: 0, renderTargets: 0};
+  let listeners = 0;
+  let observers = 0;
+  const publish = () => {
+    probe.resources = {...glCounts, listeners, observers};
+    // Recomputed, not snapshotted once: after context loss vtk.js's teardown
+    // removes the canvas, and a stale 1 here would be the page reporting a
+    // canvas that no longer exists.
+    probe.canvasCount = ui.canvasHost.querySelectorAll('canvas').length;
+    ui.setScientificProbe(probe);
+  };
 
   // --- geometry ------------------------------------------------------------
   const terrainPd = polyDataFromMesh(bundle.city.terrain);
-  probe.resources.buffers += 3;                       // points, polys, normals
   const buildingsPd = polyDataFromMesh(bundle.city.buildings);
-  probe.resources.buffers += 3;
   // Carried as cell data so picking resolves a picked cell to its marker
   // through the dataset itself rather than through a side table.
   buildingsPd.getCellData().addArray(vtkDataArray.newInstance({
     name: CELL_OBJECT_INDEX, values: cellObjectIndex, numberOfComponents: 1,
   }));
-  probe.resources.buffers += 1;
   buildingsPd.buildCells();                           // vtkCellPicker needs random cell access
   if (buildingsPd.getNumberOfCells() !== buildingsPd.getPolys().getNumberOfCells()) {
     // vtkCellPicker's cell id counts verts, then lines, then polys. This page
@@ -376,7 +593,6 @@ function build(ui: Ui, bundle: ScientificBundle, heatValues: Float32Array): void
   streamlinePd.getPointData().setScalars(vtkDataArray.newInstance({
     name: 'speed', values: bundle.smoke.streamlines.speed, numberOfComponents: 1,
   }));
-  probe.resources.buffers += 3;
 
   // --- data cases ----------------------------------------------------------
   const smokeSpeedRange = rangeOf(grid.speed);
@@ -402,8 +618,17 @@ function build(ui: Ui, bundle: ScientificBundle, heatValues: Float32Array): void
         scalars: {name: 'temperature', values: heatValues}}),
     },
   ];
-  probe.resources.textures += cases.length;           // one vtkImageData per case
   let active = cases[0];
+
+  // --- wiring assertions, before a single actor exists ---------------------
+  // These throw. A throw here reaches main()'s catch and renders the failure
+  // panel, so the page can never come up "ready" with a grid it has not
+  // checked. Reporting them instead is what let a tautological check sit in
+  // this file unnoticed through a whole review round.
+  for (const c of cases) assertGridWiring(c.id, c.field, c.image);
+  const pressureField = gridField(grid, 'pressure');
+  const pressureSpan = smokePressureRange[1] - smokePressureRange[0];
+  const sliceWorstPa = assertCoreSliceAgrees(bundle, pressureField, pressureSpan);
 
   // --- render window -------------------------------------------------------
   const container = document.createElement('div');
@@ -430,6 +655,9 @@ function build(ui: Ui, bundle: ScientificBundle, heatValues: Float32Array): void
   // function declaration, and TypeScript will not carry a narrowing into one.
   const canvas: HTMLCanvasElement = drawingCanvas;
   const gl = apiRenderWindow.get3DContext() as WebGL2RenderingContext | WebGLRenderingContext | null;
+  // Wrapped before the first render, so every GL object vtk.js creates for this
+  // scene is counted.
+  if (gl) glCounts = instrumentGlObjects(gl);
 
   // --- actors --------------------------------------------------------------
   const terrainMapper = vtkMapper.newInstance(); terrainMapper.setInputData(terrainPd); terrainMapper.setScalarVisibility(false);
@@ -464,8 +692,14 @@ function build(ui: Ui, bundle: ScientificBundle, heatValues: Float32Array): void
   volume.getProperty().setScalarOpacity(0, ofun);
   renderer.addVolume(volume);
 
+  // The slice actor renders its own single-layer image, resampled at the exact
+  // requested height (see applySlice) rather than the volume's nearest node
+  // plane. Snapping to a node plane put the drawn surface 1.29 m off the 40 m
+  // this page claims, which is 0.15 Pa / 0.91 degC of error on the z-varying
+  // cases -- invisible only on speed, which is z-invariant.
+  const sliceImage = vtkImageData.newInstance();
   const imageMapper = vtkImageMapper.newInstance();
-  imageMapper.setInputData(active.image);
+  imageMapper.setInputData(sliceImage);
   const imageSlice = vtkImageSlice.newInstance(); imageSlice.setMapper(imageMapper);
   imageSlice.getProperty().setRGBTransferFunction(0, ctf);
   imageSlice.getProperty().setPiecewiseFunction(0, sliceOpacity);
@@ -506,24 +740,49 @@ function build(ui: Ui, bundle: ScientificBundle, heatValues: Float32Array): void
     ofun.addPoint(lo, 0);
     ofun.addPoint(lo + 0.5 * (hi - lo), 0.05 * opacityScale);
     ofun.addPoint(hi, 0.6 * opacityScale);
-    // The slice is translucent on purpose: an opaque plane at 40 m hides the
-    // terrain and buildings underneath it, and the point of this page is that
-    // one scene carries both. The same opacity control drives it and the
-    // volume, so there is one knob, not two.
-    const sliceAlpha = Math.min(1, 0.25 + opacityScale);
+    // The slice is translucent on purpose: an opaque plane hides the terrain
+    // and buildings underneath it, and the point of this page is that one scene
+    // carries both. The same opacity control drives it and the volume, so there
+    // is one knob, not two -- and it is capped below 1 so the control's top end
+    // cannot quietly undo that.
+    const sliceAlpha = 0.25 + 0.6 * opacityScale;
     sliceOpacity.removeAllPoints();
     sliceOpacity.addPoint(lo, sliceAlpha);
     sliceOpacity.addPoint(hi, sliceAlpha);
     ui.setReadout('Colour range', `${lo.toFixed(2)} – ${hi.toFixed(2)} ${active.unit}`);
   }
 
+  /**
+   * Rebuilds the slice image as the true horizontal plane at `sliceHeightM`,
+   * resampled through the shared `sampleGridTrilinear` onto the active grid's
+   * own x/y lattice. Requested height == rendered height by construction, so a
+   * Three.js page sampling at the same height in Task 6 is comparing like with
+   * like.
+   */
   function applySlice(): void {
-    const [, , originZ] = active.field.origin;
-    const spacingZ = active.field.spacing[2];
-    const maxK = active.field.dims[2] - 1;
-    const k = Math.min(maxK, Math.max(0, Math.round((sliceHeightM - originZ) / spacingZ)));
-    imageMapper.setKSlice(k);
-    ui.setReadout('Slice', `k=${k} of ${maxK}, z=${(originZ + k * spacingZ).toFixed(2)} m (requested ${sliceHeightM.toFixed(2)} m)`);
+    const field = active.field;
+    const [nx, ny] = field.dims;
+    const values = new Float32Array(nx * ny);
+    for (let j = 0; j < ny; j++) {
+      for (let i = 0; i < nx; i++) {
+        values[i + nx * j] = sampleGridTrilinear(field, [
+          field.origin[0] + i * field.spacing[0],
+          field.origin[1] + j * field.spacing[1],
+          sliceHeightM,
+        ])[0];
+      }
+    }
+    sliceImage.setDimensions([nx, ny, 1]);
+    sliceImage.setOrigin([field.origin[0], field.origin[1], sliceHeightM]);
+    // The third spacing is the single-layer thickness vtk.js needs for a
+    // [nx, ny, 1] image; it never positions anything, the origin does.
+    sliceImage.setSpacing([field.spacing[0], field.spacing[1], field.spacing[2]]);
+    sliceImage.getPointData().setScalars(vtkDataArray.newInstance({
+      name: `${active.fieldName}-slice`, values, numberOfComponents: 1,
+    }));
+    imageMapper.setKSlice(0);
+    ui.setReadout('Slice', `z = ${sliceHeightM.toFixed(2)} m exactly — the ${nx}×${ny} plane resampled through `
+      + 'sampleGridTrilinear, not snapped to the nearest node layer');
   }
 
   // --- camera --------------------------------------------------------------
@@ -570,7 +829,16 @@ function build(ui: Ui, bundle: ScientificBundle, heatValues: Float32Array): void
     if (!array) throw new Error(`buildings polydata lost its ${CELL_OBJECT_INDEX} cell-data array`);
     const markers = array.getData();
     if (!Number.isInteger(cellId) || cellId < 0 || cellId >= markers.length) {
+      // Clear, never leave the previous marker published: a stale
+      // selectedObject would read as the identity of a cell that was not
+      // selected.
+      delete probe.selectedObject;
       ui.setReadout('Pick', `cell ${cellId} is outside the buildings mesh (${markers.length} cells)`);
+      ui.setReadout('Marker', 'none — nothing is selected');
+      ui.setReadout('Source buildings', 'none — nothing is selected');
+      ui.setReadout('DTCC ids', 'none — nothing is selected');
+      ui.setReadout('Traceability', 'not applicable — nothing is selected');
+      publish();
       return;
     }
     const marker = markers[cellId];
@@ -593,7 +861,6 @@ function build(ui: Ui, bundle: ScientificBundle, heatValues: Float32Array): void
     if (!next) return;
     active = next;
     volumeMapper.setInputData(active.image);
-    imageMapper.setInputData(active.image);
     applyTransferFunctions();
     applySlice();
     ui.setReadout('Data case', `${active.id} (${active.unit}), grid ${active.field.dims.join('×')}`);
@@ -623,7 +890,7 @@ function build(ui: Ui, bundle: ScientificBundle, heatValues: Float32Array): void
     renderWindow.render();
   });
   resizeObserver.observe(ui.canvasHost);
-  probe.resources.observers += 1;
+  observers += 1;
 
   // --- picking -------------------------------------------------------------
   const picker = vtkCellPicker.newInstance();
@@ -644,7 +911,7 @@ function build(ui: Ui, bundle: ScientificBundle, heatValues: Float32Array): void
     renderWindow.render();
   };
   canvas.addEventListener('pointerdown', onPointerDown);
-  probe.resources.listeners += 1;
+  listeners += 1;
 
   // --- benchmark -----------------------------------------------------------
   const gpuTimer = gl ? makeGpuTimer(gl) : undefined;
@@ -674,11 +941,60 @@ function build(ui: Ui, bundle: ScientificBundle, heatValues: Float32Array): void
     gpuTimer,
   });
 
+  /**
+   * orbit-v1 at a fixed drawing-buffer size. The canvas otherwise fills
+   * whatever the page chrome leaves it, and this page's header is a different
+   * height from Task 6's -- pinning the surface keeps the frame times a
+   * property of the renderer. The ResizeObserver is stood down for the run so
+   * it cannot resize the surface mid-measurement.
+   *
+   * The two setSize calls that pin and restore the surface cost two GL objects
+   * apiece -- see the growth report below; that is vtk.js's, not this page's.
+   */
   async function runBenchmark(): Promise<BenchmarkResult> {
-    const result = await driver.runBenchmark();
-    probe.benchmark = result;
-    publish();
-    return result;
+    const resourcesBefore = {...glCounts, listeners, observers};
+    const restoreSize = apiRenderWindow.getSize() as [number, number];
+    resizeObserver.unobserve(ui.canvasHost);
+    apiRenderWindow.setSize(BENCHMARK_SURFACE[0], BENCHMARK_SURFACE[1]);
+    renderer.resetCameraClippingRange();
+    try {
+      const result = await driver.runBenchmark();
+      probe.benchmark = result;
+      recordRenderSurface('benchmark');
+      publish();
+      return result;
+    } finally {
+      apiRenderWindow.setSize(restoreSize[0], restoreSize[1]);
+      resizeObserver.observe(ui.canvasHost);
+      renderWindow.render();
+      recordRenderSurface('interactive');
+      const resourcesAfter = {...glCounts, listeners, observers};
+      if (!resourcesEqual(resourcesBefore, resourcesAfter)) {
+        ui.probe(`vtk.js 36.12.1 GL-object growth across one benchmark run: `
+          + `${JSON.stringify(diffResources(resourcesBefore, resourcesAfter))}. Measured, monotonic, and NOT this `
+          + 'page\'s doing: every drawing-buffer resize leaks up to one texture and one framebuffer that vtk.js '
+          + 'never deletes. Six viewport resizes take the counts from 8/1 to 14/7; three benchmark runs (two resizes '
+          + 'each) take them to 20/13. Nothing this page allocates grows -- buffers, listeners and observers are flat.');
+      }
+    }
+  }
+
+  /**
+   * The render surface every frame time has to be read against: Task 6 must
+   * record the same key, or its numbers are not comparable. antialias:true, in
+   * particular, means the one-pixel readback that forces frame completion also
+   * forces an MSAA resolve — a page at antialias:false pays a different cost at
+   * the same sync point.
+   */
+  function recordRenderSurface(phase: 'interactive' | 'benchmark'): void {
+    ui.setProbe('renderSurface', {
+      phase,
+      benchmarkSize: BENCHMARK_SURFACE,
+      drawingBufferWidth: gl ? gl.drawingBufferWidth : null,
+      drawingBufferHeight: gl ? gl.drawingBufferHeight : null,
+      devicePixelRatio: window.devicePixelRatio,
+      contextAttributes: gl ? gl.getContextAttributes() : null,
+    });
   }
 
   // --- context loss --------------------------------------------------------
@@ -687,9 +1003,9 @@ function build(ui: Ui, bundle: ScientificBundle, heatValues: Float32Array): void
     if (disposed) return;
     disposed = true;
     resizeObserver.disconnect();
-    probe.resources.observers -= 1;
+    observers -= 1;
     canvas.removeEventListener('pointerdown', onPointerDown);
-    probe.resources.listeners -= 1;
+    listeners -= 1;
     try {
       fs.delete();
     } catch (err) {
@@ -711,7 +1027,7 @@ function build(ui: Ui, bundle: ScientificBundle, heatValues: Float32Array): void
       ui.fail('The WebGL context was lost. Measurements from this session are no longer valid — reload to start a new one.');
     },
   });
-  probe.resources.listeners += 1;
+  listeners += 1;
 
   // --- first frame ---------------------------------------------------------
   applyTransferFunctions();
@@ -722,12 +1038,13 @@ function build(ui: Ui, bundle: ScientificBundle, heatValues: Float32Array): void
   ui.setReadout('Data case', `${active.id} (${active.unit}), grid ${active.field.dims.join('×')}`);
   selectCell(FIXED_PICK_CELL);
 
-  probe.canvasCount = ui.canvasHost.querySelectorAll('canvas').length;
   publish();
 
   // --- probes and measurements --------------------------------------------
   const census = markerCensus(bundle, cellObjectIndex);
-  reportMeasurements(ui, bundle, cases, census, {streamlineCount, streamlinesDropped, gpuTimer: !!gpuTimer});
+  recordRenderSurface('interactive');
+  reportMeasurements(ui, bundle, cases, census,
+    {streamlineCount, streamlinesDropped, gpuTimer: !!gpuTimer, sliceWorstPa, pressureSpan});
 
   ui.setProbe('field', true);
   ui.setProbe('apis', VTK_APIS);
@@ -737,6 +1054,20 @@ function build(ui: Ui, bundle: ScientificBundle, heatValues: Float32Array): void
     setReadout: ui.setReadout,
     controlCalls,
     runBenchmark,
+    // Requested vs rendered slice height, so a smoke test has a second witness
+    // that the drawn plane is the plane the page claims. Snapping to the
+    // nearest node layer -- what this page did before review round 1 -- would
+    // make these two differ by up to half a layer.
+    sliceGeometry: () => ({
+      requestedZ: sliceHeightM,
+      renderedZ: sliceImage.getOrigin()[2],
+      dims: sliceImage.getDimensions(),
+      // The active grid's node lattice in z, so a caller can tell an
+      // off-lattice height (where snapping would be visible) from one that
+      // happens to sit on a node (where it would not).
+      originZ: active.field.origin[2],
+      nodeSpacingZ: active.field.spacing[2],
+    }),
   });
   ui.ready();
 }
@@ -780,7 +1111,8 @@ function markerCensus(bundle: ScientificBundle, cellObjectIndex: Uint32Array): M
 
 function reportMeasurements(
   ui: Ui, bundle: ScientificBundle, cases: DataCase[], census: MarkerCensus,
-  extras: {streamlineCount: number; streamlinesDropped: number; gpuTimer: boolean},
+  extras: {streamlineCount: number; streamlinesDropped: number; gpuTimer: boolean;
+           sliceWorstPa: number; pressureSpan: number},
 ): void {
   const grid = bundle.smoke.grid;
   const localBounds = bundle.manifest.coordinateFrame.localBounds;
@@ -807,65 +1139,35 @@ function reportMeasurements(
   ui.probe(`alignment landmarks (tolerance ${ALIGNMENT_TOLERANCE_M} m): smoke grid origin vs localBounds min = `
     + `${nearDelta.toFixed(4)} m; far corner vs localBounds max = ${farDelta.toFixed(4)} m.`);
 
-  // Core's FieldSlice vs the volume grid at the same world points. Reported,
-  // not asserted: the two are separate Core products and this spike exists to
-  // measure how far apart they are.
+  // Already ASSERTED in assertCoreSliceAgrees before the scene was built; the
+  // number is repeated here so a reader can see the margin, not to check it.
   const slice = bundle.smoke.slice;
-  if (slice.axis === 'z' && slice.fixedLocalAxis === 2 && slice.localAxes[0] === 0 && slice.localAxes[1] === 1) {
-    const speed = gridField(grid, 'speed');
-    const res = slice.resolution;
-    const [xmin, ymin, , xmax, ymax] = slice.domainLocalBounds;
-    let worst = 0;
-    for (let b = 0; b < res; b++) {
-      for (let a = 0; a < res; a++) {
-        const world: [number, number, number] = [
-          xmin + (a * (xmax - xmin)) / (res - 1),
-          ymin + (b * (ymax - ymin)) / (res - 1),
-          slice.fixedLocalCoordinate,
-        ];
-        // "a-fastest, b-slower" over localAxes [0, 1] = x fastest, then y.
-        const delta = Math.abs(slice.speed[a + res * b] - sampleGridTrilinear(speed, world)[0]);
-        if (delta > worst) worst = delta;
-      }
-    }
-    const span = rangeOf(grid.speed)[1] - rangeOf(grid.speed)[0];
-    ui.probe(`Core FieldSlice vs the volume grid, trilinear at the same ${res}×${res} world points, z=${slice.fixedLocalCoordinate} m: `
-      + `worst |Δspeed| = ${worst.toExponential(3)} m/s (the interpolated tolerance for a span of ${span.toFixed(3)} is `
-      + `${interpolatedTolerance(span).toExponential(3)}). Two independent Core products, reported not asserted.`);
-  } else {
-    ui.probe(`Core FieldSlice not cross-checked: localAxes=${JSON.stringify(slice.localAxes)}, axis=${JSON.stringify(slice.axis)}, `
-      + 'fixedLocalAxis=' + slice.fixedLocalAxis + ' — the on-disk "a-fastest" order is only known to be world-ascending for z/[0,1].');
+  ui.probe(`Core FieldSlice vs the volume grid, trilinear at the same ${slice.resolution}x${slice.resolution} world points, `
+    + `z=${slice.fixedLocalCoordinate} m, on PRESSURE: worst |dp| = ${extras.sliceWorstPa.toExponential(3)} Pa against an `
+    + `interpolated tolerance of ${interpolatedTolerance(extras.pressureSpan).toExponential(3)} (span ${extras.pressureSpan.toFixed(3)}). `
+    + 'Asserted, not reported -- transposing the slice\'s a/b order moves this to 24.7. Pressure and not speed because the '
+    + 'shipped speed field is bit-identically z-invariant (max |f(z) - f(z=0)| = 0.0 against 12.02 for pressure), so a speed '
+    + 'cross-check has no power at all over the z axis.');
 
+  // Axis order. The per-case wiring assertion (assertGridWiring) has already
+  // run vtk.js's own world->offset implementation against gridNodeIndex at
+  // asymmetric interior nodes on every grid; what is left is the part no
+  // browser-side check can reach.
+  for (const c of cases) {
+    ui.probe(`${c.id}: grid ${c.field.dims.join('x')}, vtk.js and gridNodeIndex agree on offset and value at every `
+      + 'asymmetric probe node (asserted before this scene was built).');
   }
-
-  // Grid-node vs trilinear at a node: a bit-identical read and an interpolated
-  // one must agree exactly *at* a node. Run on every case, because the shipped
-  // volume grid is a 32³ cube — a transposed axis is invisible on it — while
-  // the heat grid is 64×64×32 and is not.
-  for (const c of cases) reportCornerProbe(ui, `${c.id} grid`, c.field);
+  ui.probe('Axis-order gap, stated rather than papered over: whether a shipped payload is in the order it claims is a '
+    + 'DECLARATION check, not something any browser-side probe can derive from the bytes. The smoke grid ships '
+    + '"order": "x-fastest,y,z-slowest" and scientific-data.ts asserts it against GRID_ORDER. field.grid.json ships no '
+    + '"order" field at all -- scripts/real/sample_field.py writes the heat grid x-fastest (its own comment says so) but '
+    + 'does not record it. Adding it needs sample_field.py plus a regenerated scientific-manifest.json, whose dependency '
+    + 'record hashes field.grid.json; that is an artifact-regeneration task, not a page change.');
 
   ui.probe(`GPU timing: EXT_disjoint_timer_query_webgl2 ${extras.gpuTimer ? 'available — gpuFrameTimesMs will be recorded' : 'unavailable — gpuFrameTimesMs stays null'}. `
     + 'Run window.__bench.runBenchmark() for orbit-v1 (30 warmup + 180 forced frames). cpuFrameTimesMs is wall time for a '
     + 'COMPLETED frame: each forced render ends in a one-pixel readback, because gl.finish() alone returns before the '
     + 'frame is drawn under ANGLE/SwiftShader and reported a 0.45 ms frame against the GPU timer\'s 95 ms.');
-}
-
-/**
- * Trilinear sampling at the grid's own far corner must return exactly the
- * stored node value. On a non-cubic grid (the 64×64×32 heat field) this is the
- * one check that fails loudly if any axis has been transposed on the way in.
- */
-function reportCornerProbe(ui: Ui, label: string, field: GridField): void {
-  const [nx, ny, nz] = field.dims;
-  const corner: [number, number, number] = [
-    field.origin[0] + field.spacing[0] * (nx - 1),
-    field.origin[1] + field.spacing[1] * (ny - 1),
-    field.origin[2] + field.spacing[2] * (nz - 1),
-  ];
-  const node = probeGridNode(field, nx - 1, ny - 1, nz - 1)[0];
-  const interpolated = sampleGridTrilinear(field, corner)[0];
-  ui.probe(`${label} ${nx}×${ny}×${nz}: far-corner node ${node} vs trilinear ${interpolated} — `
-    + `${node === interpolated ? 'identical' : `DIFFER by ${Math.abs(node - interpolated)}`}.`);
 }
 
 // ---------------------------------------------------------------------------
