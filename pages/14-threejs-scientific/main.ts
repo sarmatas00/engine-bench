@@ -91,9 +91,9 @@ const DEFAULT_OPACITY = 0.3;
 const THREE_APIS = [
   'WebGLRenderer', 'Scene', 'PerspectiveCamera', 'BufferGeometry', 'BufferAttribute', 'Mesh',
   'MeshLambertMaterial', 'AmbientLight', 'DirectionalLight', 'LineSegments', 'LineBasicMaterial',
-  'Data3DTexture', 'DataTexture', 'ShaderMaterial', 'RawShaderMaterial (none — ShaderMaterial only)',
+  'Data3DTexture', 'DataTexture', 'ShaderMaterial',
   'WebGLRenderTarget', 'DepthTexture', 'Raycaster', 'BoxGeometry', 'PlaneGeometry',
-  'addons/controls/OrbitControls', 'addons/shaders/VolumeShader (measured against, not used)',
+  'addons/controls/OrbitControls',
 ];
 
 // ---------------------------------------------------------------------------
@@ -401,11 +401,23 @@ function streamlineSegments(vertexOffsets: number[]): {indices: Uint32Array; lin
     if (end - start >= 2) kept.push([start, end]);
     else dropped++;
   }
-  const size = kept.reduce((n, [s, e]) => n + (e - s - 1) * 2, 0);
-  const indices = new Uint32Array(size);
+  const keptVertices = kept.reduce((n, [start, end]) => n + (end - start), 0);
+  const indices = new Uint32Array((keptVertices - kept.length) * 2);
   let w = 0;
   for (const [start, end] of kept) {
     for (let v = start; v < end - 1; v++) { indices[w++] = v; indices[w++] = v + 1; }
+  }
+  // A polyline of n vertices is n-1 segments, so kept lines contribute
+  // (vertices - lines) segments in total. Emitting (vertices - 1) instead is
+  // what joining the end of one line to the start of the next looks like, and
+  // it is the ONE failure mode left here: scientific-data.ts already validates
+  // vertexOffsets against actualCount, [0] === 0, monotone non-decreasing and
+  // seedIndices in range before any page sees the array, so the "offsets are
+  // really counts" reading is caught before this function runs.
+  if (w !== indices.length || w !== (keptVertices - kept.length) * 2) {
+    throw new Error(
+      `smoke.streamlines: emitted ${w / 2} segments for ${kept.length} polylines over ${keptVertices} vertices; `
+      + `${keptVertices - kept.length} segments is the only count that does not join one line to the next`);
   }
   return {indices, lines: kept.length, dropped};
 }
@@ -422,7 +434,7 @@ function rangeOf(values: Float32Array): [number, number] {
 // ---------------------------------------------------------------------------
 // Live GPU-object counts.
 
-type GlCounts = {buffers: number; textures: number; renderTargets: number};
+type GlCounts = {buffers: number; textures: number; renderTargets: number; renderbuffers: number};
 
 /**
  * Counts the GL objects Three.js actually creates and deletes, by wrapping the
@@ -442,24 +454,35 @@ type GlCounts = {buffers: number; textures: number; renderTargets: number};
  * GROWTH, which is what the leak gate measures, is.
  */
 function instrumentGlObjects(gl: WebGL2RenderingContext): GlCounts {
-  const counts: GlCounts = {buffers: 0, textures: 0, renderTargets: 0};
+  const counts: GlCounts = {buffers: 0, textures: 0, renderTargets: 0, renderbuffers: 0};
   const target = gl as unknown as Record<string, (...args: unknown[]) => unknown>;
   const wrap = (createName: string, deleteName: string, key: keyof GlCounts) => {
     const create = target[createName].bind(gl);
     const destroy = target[deleteName].bind(gl);
+    // Membership, not truthiness: decrementing on any truthy argument lets a
+    // double delete -- or a delete of an object created before the wrappers
+    // were installed -- drive the count below the truth, and a count that can
+    // go negative is not a measurement.
+    const live = new WeakSet<object>();
     target[createName] = (...args: unknown[]) => {
       const object = create(...args);
-      if (object) counts[key]++;
+      if (object) { live.add(object as object); counts[key]++; }
       return object;
     };
     target[deleteName] = (...args: unknown[]) => {
-      if (args[0]) counts[key]--;
+      const object = args[0];
+      if (object && live.has(object as object)) { live.delete(object as object); counts[key]--; }
       return destroy(...args);
     };
   };
   wrap('createBuffer', 'deleteBuffer', 'buffers');
   wrap('createTexture', 'deleteTexture', 'textures');
   wrap('createFramebuffer', 'deleteFramebuffer', 'renderTargets');
+  // The fourth type, added after review: vtk.js leaks one RENDERBUFFER per
+  // drawing-buffer resize as well as one texture and one framebuffer, so
+  // counting only three understates the magnitude of its leak by a third.
+  // Three.js allocates renderbuffers only for the multisampled opaque target.
+  wrap('createRenderbuffer', 'deleteRenderbuffer', 'renderbuffers');
   return counts;
 }
 
@@ -506,6 +529,17 @@ function probeNodes(dims: readonly [number, number, number]): Array<[number, num
     .filter(([i, j, k]) => i >= 1 && j >= 1 && k >= 1 && i <= nx - 2 && j <= ny - 2 && k <= nz - 2);
 }
 
+/**
+ * The world point of slice-plane node (i, j) at height `metres`. ONE
+ * derivation, called by the code that fills the plane and by the code that
+ * checks it -- an earlier version wrote the same expression in both places,
+ * which meant a change to the world-point formula changed both copies together
+ * and the check could only ever see an index-order mistake.
+ */
+function sliceNodeWorld(field: GridField, i: number, j: number, metres: number): [number, number, number] {
+  return [field.origin[0] + i * field.spacing[0], field.origin[1] + j * field.spacing[1], metres];
+}
+
 function nodeWorld(field: GridField, i: number, j: number, k: number): [number, number, number] {
   return [
     field.origin[0] + i * field.spacing[0],
@@ -549,14 +583,29 @@ function nodeWorld(field: GridField, i: number, j: number, k: number): [number, 
  * written at the upload site, which it catches; the checks with genuinely
  * independent inputs are B and C.
  *
- * Leg B — independent offset arithmetic. Runs the shader's own world -> texel
- * mapping in TypeScript from the uniform values, converts the texel to a flat
- * offset with the TEXTURE's strides (`x + width*(y + height*z)`), and reads
- * `texture.image.data` there. Compared against `gridNodeIndex` and
- * `probeGridNode`. This is the leg that sees what no componentwise comparison
- * can: a payload that is in a different order from the one its dims declare,
- * or a texture bound to another case's array. Negative-controlled by uploading
- * a z-fastest transposed copy with correct dims — leg A passes, leg B throws.
+ * Leg B — the payload invariant, stated as what actually holds. An earlier
+ * version of this leg recomputed the shader's world -> texel -> flat-offset
+ * arithmetic in TypeScript and compared it against `gridNodeIndex`, then read
+ * `texture.image.data` at that offset and compared against `probeGridNode`.
+ * Review showed BOTH comparisons are algebraic identities as shipped, and the
+ * demonstration is worth keeping rather than quietly deleting: leg A has
+ * already asserted `textureDims === field.dims` and `liveSpacing/liveOrigin ===
+ * field.spacing/origin` by exact equality, so `texel` recovers (i, j, k)
+ * exactly and the offset IS gridNodeIndex's formula over the same dims;
+ * and `Data3DTexture` stores its array BY REFERENCE, so `image.data` IS
+ * `field.data` and the value comparison reduces to `field.data[X] !==
+ * field.data[X]`. Exhaustively confirmed over all 163,840 nodes of both
+ * shipped grids: 0 mismatches, and no defect in the upload path could make it
+ * fire because leg A throws first on every input that would. That is page 13's
+ * tautology restated one level sideways, which is exactly what this page was
+ * briefed not to do.
+ *
+ * What is left is the invariant that is actually load-bearing and actually
+ * checkable: the texture must be backed by the SHIPPED ARRAY ITSELF, not by a
+ * re-ordered or re-typed copy of it. That is a reference comparison, it has
+ * real content (the x<->y and z-fastest negative controls both fail it,
+ * because reordering a payload means allocating a different array), and it is
+ * honest about its reach.
  *
  * Leg C — GPU round trip. The scene's OWN sampler GLSL (the one string
  * VOLUME_SAMPLE_GLSL, shared with the volume material, not a re-typed copy)
@@ -617,34 +666,22 @@ function assertGridWiring(
         + `${JSON.stringify(field.spacing)}`);
     }
   }
+  // --- leg B ---------------------------------------------------------------
   const data = image.data as Float32Array;
+  if (data !== field.data) {
+    throw new Error(
+      `${caseId}: the Data3DTexture is backed by a different array from the shipped grid's. Data3DTexture holds its `
+      + 'array by reference, so anything but the shipped array means the payload was copied or reordered on the way '
+      + 'to the GPU, and the order it is in is no longer the order scientific-data.ts validated.');
+  }
   const expectedLength = field.dims[0] * field.dims[1] * field.dims[2];
   if (data.length !== expectedLength) {
     throw new Error(`${caseId}: the uploaded array holds ${data.length} values but dims ${field.dims.join('x')} need ${expectedLength}`);
   }
-  // --- legs B and C --------------------------------------------------------
+  // --- leg C ---------------------------------------------------------------
   for (const [i, j, k] of probeNodes(field.dims)) {
     const world = nodeWorld(field, i, j, k);
-    // The shader's arithmetic, from the uniforms, in TypeScript.
-    const texel: [number, number, number] = [0, 0, 0];
-    for (let axis = 0; axis < 3; axis++) {
-      const index = (world[axis] - liveOrigin[axis]) / liveSpacing[axis];
-      const texcoord = (index + 0.5) / liveSize[axis];
-      texel[axis] = Math.floor(texcoord * textureDims[axis]);
-    }
-    const uploadOffset = texel[0] + textureDims[0] * (texel[1] + textureDims[1] * texel[2]);
-    const libOffset = gridNodeIndex(field.dims, i, j, k);
-    if (uploadOffset !== libOffset) {
-      throw new Error(
-        `${caseId}: node (${i}, ${j}, ${k}) is offset ${libOffset} to gridNodeIndex but the texture upload puts it `
-        + `at texel ${JSON.stringify(texel)} = offset ${uploadOffset}`);
-    }
     const libValue = probeGridNode(field, i, j, k)[0];
-    if (data[uploadOffset] !== libValue) {
-      throw new Error(
-        `${caseId}: node (${i}, ${j}, ${k}) reads ${libValue} through probeGridNode but the uploaded array holds `
-        + `${data[uploadOffset]} at the offset the shader will sample`);
-    }
     const gpuValue = sampleOnGpu(world);
     const gpuDelta = Math.abs(gpuValue - libValue);
     if (gpuDelta > worstGpuDelta) worstGpuDelta = gpuDelta;
@@ -701,6 +738,26 @@ function assertGeometryPlacement(
   const bb = box.boundingBox!;
   check('the volume box mesh\'s low corner', [bb.min.x, bb.min.y, bb.min.z], min);
   check('the volume box mesh\'s high corner', [bb.max.x, bb.max.y, bb.max.z], max);
+  // The slice plane is sampled through its UVs, so the UV -> world mapping is
+  // load-bearing and is asserted rather than assumed. It holds today only
+  // because three's PlaneGeometry emits v = 1 - iy/gridY against vertices
+  // pushed at -y, i.e. v ascends with world y -- a library convention, and a
+  // flipped V would mirror the drawn plane with every other check on this page
+  // still green.
+  const uvAttr = plane.getAttribute('uv');
+  const posAttr = plane.getAttribute('position');
+  if (!uvAttr || !posAttr) throw new Error(`${caseId}: the slice plane carries no uv/position attribute`);
+  for (let v = 0; v < uvAttr.count; v++) {
+    const wantX = min[0] + uvAttr.getX(v) * (max[0] - min[0]);
+    const wantY = min[1] + uvAttr.getY(v) * (max[1] - min[1]);
+    const delta = Math.hypot(posAttr.getX(v) - wantX, posAttr.getY(v) - wantY);
+    if (!(delta <= ALIGNMENT_TOLERANCE_M)) {
+      throw new Error(
+        `${caseId}: slice-plane vertex ${v} carries uv (${uvAttr.getX(v)}, ${uvAttr.getY(v)}), which maps to world `
+        + `(${wantX}, ${wantY}), but the vertex is at (${posAttr.getX(v)}, ${posAttr.getY(v)}) -- `
+        + `${delta.toFixed(4)} m apart. The plane's UVs do not run with world x/y.`);
+    }
+  }
   plane.computeBoundingBox();
   const pb = plane.boundingBox!;
   // The plane geometry sits at local z = 0; the mesh's own position carries the
@@ -727,7 +784,7 @@ function assertSliceWiring(
   let worstGpuDelta = 0;
   const probes: Array<[number, number]> = [[1, 1], [2, 1], [1, 2], [3, 5], [nx - 2, 1], [1, ny - 2]];
   for (const [i, j] of probes) {
-    const uv: [number, number] = [i / (nx - 1), j / (ny - 1)];
+    const uv: [number, number] = [i / (nx - 1), j / (ny - 1)];  // see assertGeometryPlacement's UV leg
     const cpu = values[i + nx * j];
     const gpu = sampleOnGpu(uv);
     const gpuDelta = Math.abs(gpu - cpu);
@@ -741,9 +798,14 @@ function assertSliceWiring(
     // Math.fround, not a tolerance: the plane is a Float32Array, so the only
     // difference this leg may forgive is the float32 rounding of the double
     // sampleGridTrilinear returns. Anything else is a real disagreement.
-    const trilinear = sampleGridTrilinear(field, [
-      field.origin[0] + i * field.spacing[0], field.origin[1] + j * field.spacing[1], sliceHeightM,
-    ])[0];
+    //
+    // Reach, stated rather than overclaimed: this leg and fillSlice now call
+    // ONE sliceNodeWorld, so what it can still catch is an index-order mistake
+    // in the fill (rows written down columns), not a wrong world-point
+    // formula -- a wrong formula would move both sides together. The formula
+    // itself is covered by assertGeometryPlacement, which ties the plane's UVs
+    // to the same world extent.
+    const trilinear = sampleGridTrilinear(field, sliceNodeWorld(field, i, j, sliceHeightM))[0];
     if (cpu !== Math.fround(trilinear)) {
       throw new Error(
         `${caseId}: the slice plane holds ${cpu} at node (${i}, ${j}) but sampleGridTrilinear reads ${trilinear} `
@@ -924,26 +986,31 @@ function chromeOptions(bundle?: ScientificBundle) {
       'Depth occlusion between a volume and a city is not free here the way it is in vtk.js: terrain, buildings, '
       + 'streamlines and the slice render into an offscreen target with a depth texture, that colour is blitted to '
       + 'the canvas, and the volume pass reconstructs the opaque view distance from the depth texture and stops each '
-      + 'ray there. One WebGLRenderer, one canvas, two passes.',
+      + 'ray there. One WebGLRenderer, one canvas, two passes. The offscreen target is multisampled at the canvas\'s '
+      + 'own sample count, so the city is rasterized here exactly as page 13 rasterizes it — the first version of '
+      + 'this page left it single-sampled and thereby manufactured a ~12% Three.js speed advantage that does not '
+      + 'exist. See the probe panel.',
       'The slice is the TRUE plane at the requested height, resampled through sampleGridTrilinear, not the nearest '
       + 'node layer — same as page 13, and for the same reason: nz is 32 on both grids, so a K-index slider works by '
       + 'coincidence, and snapping put page 13\'s plane at 41.29 m while it claimed 40 m.',
-      'Axis order is asserted on three legs before any mesh exists, because Three.js ships no second world-to-offset '
-      + 'implementation to check against the way vtk.js does: the upload declaration, offset arithmetic written here '
-      + 'against the Data3DTexture upload parameters, and a GPU round trip through the scene\'s own sampler GLSL. '
-      + 'Each has its own negative control. x<->y stays undetectable in the DECLARATION on both shipped grids '
-      + '(32x32 and 64x64), but a transposed payload IS caught, which page 13\'s index-only legs could not do.',
+      'Axis order is asserted before any mesh exists, because Three.js ships no second world-to-offset '
+      + 'implementation to check against the way vtk.js does: the upload declaration, the payload invariant (the '
+      + 'texture must be backed by the shipped array itself), and a GPU round trip through the scene\'s own sampler '
+      + 'GLSL. The middle leg used to recompute offset arithmetic and compare it against gridNodeIndex; review '
+      + 'showed that could not fail, and it was removed rather than dressed up. x<->y stays undetectable in the '
+      + 'DECLARATION on both shipped grids (32x32 and 64x64), but a reordered payload IS caught.',
       'The benchmark ends every forced frame in a one-pixel readback, not gl.finish(): page 13 measured that '
       + 'gl.finish() alone returns before the frame is drawn under Chrome\'s ANGLE/SwiftShader command buffer. '
       + 'Verified here by stripping the readback from this page: cpu mean 0.17 ms against a gpu mean of 133.25 ms, a '
       + '780x overstatement (page 13\'s was 200x), and the smoke test catches it. Both pages pin the drawing '
-      + 'surface to 1280x720 for the run and record their context attributes, so the two frame times are comparable: '
-      + 'measured side by side in one session, 137.42 ms cpu / 137.58 ms gpu here against 153.87 / 153.74 on '
-      + 'page 13.',
+      + 'surface to 1280x720 and record their context attributes, and with the opaque pass sampled the same way on '
+      + 'both, the two renderers come out INDISTINGUISHABLE on this scene: p50 151.2 ms here against 152.8 ms on '
+      + 'page 13, three runs each, about 1% apart.',
       'Measured, and the answer Task 7 needs: Three.js 0.185.1 does NOT leak GL objects per drawing-buffer resize. '
-      + 'Live counts stay at 21 buffers / 12 textures / 4 framebuffers across a whole benchmark run and eight '
-      + 'further viewport resizes. vtk.js 36.12.1, instrumented the same way in the same session, goes from '
-      + '9/8/1 to 9/18/11 over the same eight resizes — one texture and one framebuffer per resize, never returned.',
+      + 'Live counts hold at 37 buffers / 12 textures / 5 framebuffers / 2 renderbuffers from ready onward — flat '
+      + 'across three benchmark runs, 100 control cycles and eight viewport resizes. vtk.js 36.12.1, instrumented '
+      + 'the same way in the same session, goes from 9/8/1 to 9/14/7 across three benchmark runs — one texture, one '
+      + 'framebuffer AND one renderbuffer per resize, never returned.',
     ],
     controls,
   };
@@ -1020,11 +1087,19 @@ function build(ui: Ui, bundle: ScientificBundle, heatValues: Float32Array): void
     resources: {buffers: 0, textures: 0, renderTargets: 0, listeners: 0, observers: 0},
     measurementValid: true,
   };
-  let glCounts: GlCounts = {buffers: 0, textures: 0, renderTargets: 0};
+  let glCounts: GlCounts = {buffers: 0, textures: 0, renderTargets: 0, renderbuffers: 0};
   let listeners = 0;
   let observers = 0;
   const publish = () => {
-    probe.resources = {...glCounts, listeners, observers};
+    // ScientificProbe.resources is a fixed five-key shape in src/lib, which
+    // this task does not own, so the fourth GL object type goes beside it
+    // rather than into it. Task 7 reads both; the controller mirrors the same
+    // shape onto page 13 and widens ResourceSnapshot as a residual.
+    probe.resources = {
+      buffers: glCounts.buffers, textures: glCounts.textures,
+      renderTargets: glCounts.renderTargets, listeners, observers,
+    };
+    ui.setProbe('glObjects', {...glCounts, listeners, observers});
     probe.canvasCount = ui.canvasHost.querySelectorAll('canvas').length;
     ui.setScientificProbe(probe);
   };
@@ -1165,8 +1240,28 @@ function build(ui: Ui, bundle: ScientificBundle, heatValues: Float32Array): void
   const depthTexture = new THREE.DepthTexture(1, 1, THREE.UnsignedIntType);
   depthTexture.minFilter = THREE.NearestFilter;
   depthTexture.magFilter = THREE.NearestFilter;
+  /**
+   * The opaque pass is rasterized at THE CANVAS'S OWN SAMPLE COUNT, read off
+   * the default framebuffer rather than hard-coded, so this page rasterizes
+   * terrain, buildings and streamlines with exactly the multisampling page 13
+   * gets from its antialias:true canvas.
+   *
+   * This is the single most consequential line on the page, and the first
+   * version got it wrong. It shipped `samples` unset (so 1 sample) with a
+   * divergence note claiming a multisampled target "cannot hand a depth
+   * TEXTURE to the volume pass". That claim is false for three 0.185.1:
+   * WebGLTextures.updateMultisampleRenderTarget resolves depth by
+   * blitFramebuffer into the single-sample framebuffer whose depth attachment
+   * is this DepthTexture, guarded by `resolveDepthBuffer`, which defaults
+   * true. Measured consequence of the mistake: page 14 p50 142.7 ms against
+   * page 13's 160.4 ms -- a ~12% "Three.js is faster" result that was really
+   * this page drawing the city at one sample while page 13 drew it at four.
+   * Sampled the same way the gap closes. A page artifact wearing a renderer
+   * property's clothes is exactly what this whole page exists not to produce.
+   */
+  const canvasSamples = gl.getParameter(gl.SAMPLES) as number;
   const opaqueTarget = new THREE.WebGLRenderTarget(1, 1, {
-    depthTexture, depthBuffer: true, stencilBuffer: false,
+    depthTexture, depthBuffer: true, stencilBuffer: false, samples: canvasSamples,
     minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter,
   });
   const uOpaqueDepth = {value: depthTexture as THREE.Texture};
@@ -1206,20 +1301,26 @@ function build(ui: Ui, bundle: ScientificBundle, heatValues: Float32Array): void
     return readback[0];
   }
 
-  /** Resamples one case's slice plane as the TRUE horizontal plane at
-   *  `metres`, through the shared sampleGridTrilinear on that grid's own x/y
-   *  lattice. Requested height == rendered height by construction. */
+  /**
+   * Resamples one case's slice plane as the TRUE horizontal plane at `metres`,
+   * through the shared sampleGridTrilinear on that grid's own x/y lattice.
+   *
+   * Records the z it ACTUALLY sampled at, and that recorded value is what
+   * sliceGeometry() reports as `renderedZ`. Reporting the mesh's transform
+   * instead would witness only that the plane was moved: a fillSlice that
+   * snapped its metres to a node lattice internally would still have satisfied
+   * renderedZ === requestedZ, because the wiring assertions run once at
+   * startup and never again after a slider move.
+   */
+  let sampledSliceZ = Number.NaN;
   function fillSlice(c: DataCase, metres: number): void {
     const [nx, ny] = c.field.dims;
     for (let j = 0; j < ny; j++) {
       for (let i = 0; i < nx; i++) {
-        c.sliceValues[i + nx * j] = sampleGridTrilinear(c.field, [
-          c.field.origin[0] + i * c.field.spacing[0],
-          c.field.origin[1] + j * c.field.spacing[1],
-          metres,
-        ])[0];
+        c.sliceValues[i + nx * j] = sampleGridTrilinear(c.field, sliceNodeWorld(c.field, i, j, metres))[0];
       }
     }
+    sampledSliceZ = metres;
     c.sliceTexture.needsUpdate = true;
   }
 
@@ -1399,6 +1500,13 @@ function build(ui: Ui, bundle: ScientificBundle, heatValues: Float32Array): void
   function applySlice(): void {
     fillSlice(active, sliceHeightM);
     slicePlane.position.z = sliceHeightM;
+    // The payload's height and the mesh's height are separate facts; a page
+    // that let them drift would draw one plane and report another.
+    if (sampledSliceZ !== slicePlane.position.z) {
+      throw new Error(
+        `the slice payload was resampled at z = ${sampledSliceZ} m but the plane was moved to `
+        + `${slicePlane.position.z} m`);
+    }
     const [nx, ny] = active.field.dims;
     ui.setReadout('Slice', `z = ${sliceHeightM.toFixed(2)} m exactly — the ${nx}×${ny} plane resampled through `
       + 'sampleGridTrilinear, not snapped to the nearest node layer');
@@ -1640,7 +1748,11 @@ function build(ui: Ui, bundle: ScientificBundle, heatValues: Float32Array): void
       // whatever the restore itself costs.
       publish();
       const resourcesAfter = {...glCounts, listeners, observers};
-      if (!resourcesEqual(resourcesBefore, resourcesAfter)) {
+      // resourcesEqual compares src/lib's five fixed keys, which do not
+      // include renderbuffers; the fourth type is compared explicitly so it
+      // cannot grow unnoticed on the very path this check exists to watch.
+      if (!resourcesEqual(resourcesBefore, resourcesAfter)
+        || resourcesBefore.renderbuffers !== resourcesAfter.renderbuffers) {
         ui.probe('Three.js 0.185.1 GL-object growth across one benchmark run: '
           + `${JSON.stringify(diffResources(resourcesBefore, resourcesAfter))}. Page 13 measures the same thing the `
           + 'same way, where vtk.js 36.12.1 leaks up to one texture and one framebuffer per drawing-buffer resize.');
@@ -1701,6 +1813,35 @@ function build(ui: Ui, bundle: ScientificBundle, heatValues: Float32Array): void
   applyPose(orbitV1Pose(0));
   renderScene();
 
+  /**
+   * Every case's GPU resources are allocated BEFORE the page reports ready.
+   *
+   * Three.js uploads a geometry's attribute buffers and a texture's pixels
+   * lazily, on the first render that uses them, so the first switch to a cold
+   * case allocated 8 buffers at that moment. Measured over 100 control cycles
+   * that read 21 -> 37 buffers where page 13 was flat at 9 -- not a leak
+   * (bounded by the three cases, and the page reported it correctly and live),
+   * but the spike's gate is worded "100 control/resize cycles with stable
+   * resource counts" and a one-off warm-up cost fails it for the wrong reason.
+   * Compiling every case's material/geometry pair up front moves that cost
+   * before ready() and leaves the counts flat from there, so Task 7 runs its
+   * gate unmodified against both pages.
+   */
+  for (const c of cases) {
+    applyCaseUniforms(c);
+    volumeMesh.geometry = c.boxGeometry;
+    slicePlane.geometry = c.planeGeometry;
+    renderer.compile(opaque, camera);
+    renderer.compile(volumeScene, camera);
+    renderScene();
+  }
+  applyCaseUniforms(active);
+  volumeMesh.geometry = active.boxGeometry;
+  slicePlane.geometry = active.planeGeometry;
+  applyTransferFunctions();
+  applySlice();
+  renderScene();
+
   ui.setReadout('Data case', `${active.id} (${active.unit}), grid ${active.field.dims.join('×')}`);
   selectCell(FIXED_PICK_CELL);
 
@@ -1713,7 +1854,7 @@ function build(ui: Ui, bundle: ScientificBundle, heatValues: Float32Array): void
   ui.setProbe('glslBurden', glsl);
   reportMeasurements(ui, bundle, cases, census,
     {streamlineCount, streamlinesDropped, gpuTimer: !!gpuTimer, sliceWorstPa, pressureSpan, glsl, floatLinear,
-     worstGpuDelta});
+     worstGpuDelta, opaqueTargetSamples: opaqueTarget.samples});
 
   ui.setProbe('field', true);
   ui.setProbe('apis', THREE_APIS);
@@ -1729,14 +1870,19 @@ function build(ui: Ui, bundle: ScientificBundle, heatValues: Float32Array): void
     // variable that set it.
     sliceGeometry: () => ({
       requestedZ: sliceHeightM,
-      renderedZ: slicePlane.position.z,
-      // Read off the DataTexture the plane actually samples, so the first two
-      // are real witnesses (a wrong case's texture would change them). The
-      // third is structurally 1: a Three.js DataTexture is two-dimensional by
-      // type, where page 13 reads a real vtkImageData z dimension. That leg of
-      // the smoke assertion is therefore weaker here than there, and is said so
-      // rather than left to look equivalent.
-      dims: [active.sliceTexture.image.width, active.sliceTexture.image.height, 1],
+      // The height fillSlice actually resampled at, not the mesh's transform:
+      // see fillSlice. applySlice asserts the two agree, so this witnesses
+      // both.
+      renderedZ: sampledSliceZ,
+      // All three read off the DataTexture the plane samples and the payload
+      // that fills it. The third is COMPUTED rather than the literal 1 it used
+      // to be -- it would read 2 the moment the plane gained a layer, which is
+      // what makes the smoke test's "the slice image is a single layer"
+      // assertion mean something here as well as on page 13.
+      dims: [
+        active.sliceTexture.image.width, active.sliceTexture.image.height,
+        active.sliceValues.length / (active.sliceTexture.image.width * active.sliceTexture.image.height),
+      ],
       originZ: active.field.origin[2],
       nodeSpacingZ: active.field.spacing[2],
     }),
@@ -1787,7 +1933,7 @@ function reportMeasurements(
   ui: Ui, bundle: ScientificBundle, cases: DataCase[], census: MarkerCensus,
   extras: {streamlineCount: number; streamlinesDropped: number; gpuTimer: boolean;
            sliceWorstPa: number; pressureSpan: number; glsl: ReturnType<typeof glslOverlap>; floatLinear: boolean;
-           worstGpuDelta: number},
+           worstGpuDelta: number; opaqueTargetSamples: number},
 ): void {
   const grid = bundle.smoke.grid;
   const localBounds = bundle.manifest.coordinateFrame.localBounds;
@@ -1828,6 +1974,20 @@ function reportMeasurements(
       + 'through the scene\'s own sampler GLSL at asymmetric interior nodes, plus the placement of the volume box '
       + 'and slice plane against the grid they claim to cover.');
   }
+  ui.probe('What the three legs can and cannot do, corrected after review, because the first version of this panel '
+    + 'credited a leg that could not fail. Leg A pins the DECLARATION: the texture\'s own dims and the live shader '
+    + 'uniforms against the shipped grid, by exact equality. Leg B is now the PAYLOAD invariant and nothing more -- '
+    + 'the texture must be backed by the shipped array itself, since Data3DTexture holds its array by reference, so '
+    + 'any reordering or re-typing on the way to the GPU means a different array object and fails here. Leg C proves '
+    + 'the SAMPLER, by running the scene\'s own VOLUME_SAMPLE_GLSL on the real texture and reading the result back; '
+    + 'it is the only leg that can see a wrong texcoord formula, filter or swizzle, and it is strictly more than '
+    + 'page 13 has. What was REMOVED: leg B used to recompute the world -> texel -> offset arithmetic and compare it '
+    + 'against gridNodeIndex, then read the uploaded array at that offset and compare against probeGridNode. Both '
+    + 'were algebraic identities given leg A\'s exact equalities and Data3DTexture\'s by-reference storage -- '
+    + 'confirmed over all 163,840 nodes of both shipped grids with 0 mismatches and no upload defect able to make '
+    + 'either fire. That is page 13\'s tautology restated sideways, and it is gone rather than dressed up. What '
+    + 'REMAINS unchecked, stated plainly: whether the shipped bytes are in the order they claim is a declaration '
+    + 'question, answerable only against a second decode of the file, which nothing here does.');
   ui.probe(`GPU sampling round trip: worst |delta| between what probeGridNode reads and what the scene's own sampler `
     + `GLSL returns for the same world point, over every case and every probe node, is `
     + `${extras.worstGpuDelta.toExponential(3)} in field units. Not bit-exact, and it cannot be: (world - origin) / `
@@ -1844,10 +2004,13 @@ function reportMeasurements(
     + 'one at a time to the shipped source, rebuilt, and loaded:\n'
     + '  (1) dims handed to Data3DTexture permuted to (nz, ny, nx): leg A throws on heat - temperature (texture dims '
     + '[32,64,64] vs [64,64,32]) and is a GENUINE NO-OP on the 32x32x32 smoke cube, which is the stated limit.\n'
-    + '  (2) payload reordered z-fastest, dims/origin/spacing left correct: leg A passes, leg B throws at node '
-    + '(2,1,1) -- 2.1591 expected, 2.1353 uploaded.\n'
-    + '  (2b) payload transposed x<->y, dims untouched: leg B throws at node (2,1,1) -- 2.1591 expected, 1.7701 '
-    + 'uploaded. Page 13 compares offsets and could not have caught this.\n'
+    + '  (2) payload reordered z-fastest, dims/origin/spacing left correct: leg A passes, leg B throws. Read the '
+    + 'reason honestly: it fires because reordering a payload means ALLOCATING A DIFFERENT ARRAY, which is exactly '
+    + 'the invariant leg B now states, and not because any arithmetic detected the transposition. The earlier '
+    + 'version of this control was reported as node-level offset/value disagreement (2.1591 expected, 2.1353 '
+    + 'uploaded), which made a tautological check look discriminating.\n'
+    + '  (2b) payload transposed x<->y, dims untouched: same leg, same reason. Worth keeping separately because '
+    + 'x<->y is invisible to every DECLARATION check on both shipped grids.\n'
     + '  (3) half-texel centring dropped from the shared sampler GLSL: legs A and B pass, leg C throws off by '
     + '1.8694e-1 against a 1.1032e-4 tolerance -- 1700x the bound.\n'
     + '  (3b) applyCaseUniforms mis-wired to write uSpacing into uOrigin: leg A throws, naming both. The earlier '
@@ -1857,6 +2020,13 @@ function reportMeasurements(
     + 'That is the one link the sampler legs cannot see -- they prove the sampler answers correctly for a world '
     + 'point handed to it, not that the ray asks about the right world points.\n'
     + '  (4) slice plane filled b-fastest: the slice leg throws at node (2,1).\n'
+    + '  (4b) the slice sampler\'s V flipped in the ONE shared SLICE_SAMPLE_GLSL string: the slice GPU leg throws, '
+    + '7.94 off at uv (0.032, 0.032). This control exists because review pointed out that the plane\'s UV -> world '
+    + 'mapping was relying silently on three\'s PlaneGeometry convention; it is now asserted per vertex as well.\n'
+    + '  (9) the streamline walk changed to emit a segment from each vertex to the next across line boundaries: '
+    + 'throws, 4073 segments emitted where 4049 is the only count that does not join one polyline to the next. '
+    + 'scientific-data.ts already validates vertexOffsets against actualCount, [0] === 0, monotonicity and '
+    + 'seedIndices range before this page sees the array, so this was the one failure mode left.\n'
     + '  (5) Core FieldSlice a/b order transposed: 24.691 Pa against a 8.2015e-4 tolerance, the same number page 13 '
     + 'records for the same control.\n'
     + '  (6) the one-pixel readback stripped from the benchmark\'s frame completion: cpu mean 0.17 ms against a gpu '
@@ -1874,34 +2044,56 @@ function reportMeasurements(
     + 'colormap and the volume sampler are one string each included by more than one shader. Against '
     + `three/addons/shaders/VolumeShader.js (${extras.glsl.stockSubstantiveLines} substantive lines): `
     + `${extras.glsl.identicalToStock} lines are textually identical, but every distinct one of them is boilerplate `
-    + `(${JSON.stringify(extras.glsl.identicalLines)}), so REUSE FROM STOCK IS ${extras.glsl.reusedFromStock} LINES `
-    + `and ${extras.glsl.ownDistinctLines} distinct lines are this repo's to maintain. The raw intersection is `
-    + 'reported alongside the discounted one on purpose: taken alone it would read as reuse that does not exist. The '
-    + 'addon supplies maximum-intensity and isosurface casting only -- neither transparent front-to-back compositing '
-    + 'nor any interaction with opaque depth -- so it could be measured against but not reused. Task 8 '
-    + 'maintenance-burden input.');
+    + `(${JSON.stringify(extras.glsl.identicalLines)}), so lines REUSED VERBATIM = ${extras.glsl.reusedFromStock}.\n`
+    + 'That zero is a line-intersection metric and it would be dishonest to leave it as a maintenance-burden '
+    + `statement, so here is the structure behind it. Of the ${extras.glsl.distinctLines} distinct lines owned, `
+    + 'about 11 are the shared five-stop colormap (src/lib/colormap.ts\'s COLORMAP_GLSL -- shared-library code that '
+    + 'this count charges to this page) and about 5 are verification scaffolding that never runs in a frame. What is '
+    + 'genuinely NEW is the front-to-back compositor and the opaque depth stop: the addon does maximum-intensity and '
+    + 'isosurface casting only, with no transparent compositing and no interaction with opaque geometry. What is NOT '
+    + 'new, merely re-typed rather than reused, is the addon\'s own algorithm skeleton -- the slab ray/AABB '
+    + 'intersection, the bounded march with a hard MAX_STEPS and an in-loop break, the clim normalisation, the '
+    + 'sample-helper factoring, the half-texel centring and the terminal alpha discard. And `#include <packing>` '
+    + 'pulls perspectiveDepthToViewZ out of three\'s own chunk library, which is real reuse this count does not see '
+    + '-- so compiledLines is not "what the GPU sees" either. Task 8 should read this as: the compositor and depth '
+    + 'stop are ours to maintain, the ray-march skeleton is a re-typed library algorithm, and roughly a fifth of the '
+    + 'owned lines are shared or test-only.');
 
-  ui.probe('Resource behaviour, measured on both pages in one session through the same instrumentation and the same '
-    + 'eight viewport resizes: THREE.JS DOES NOT LEAK PER DRAWING-BUFFER RESIZE. buffers/textures/renderTargets stay '
-    + 'at 21/12/4 across a whole benchmark run (two surface changes) and across eight further resizes. vtk.js '
-    + '36.12.1, measured the same way at the same time, goes 9/8/1 -> 9/10/3 across one benchmark run and -> 9/18/11 '
-    + 'after eight resizes: one texture and one framebuffer per resize, monotonically, never returned. That is the '
-    + 'comparison Task 7 needs, and it is only available because both pages count live GL objects and both publish '
-    + 'on the resize path.');
-  ui.probe('What DOES move the counts here, found by measuring a case switch rather than by reading the code: the '
-    + 'first draw of each case uploads that case\'s box and plane geometry, +8 buffers, because Three.js uploads a '
-    + 'geometry\'s attribute buffers lazily. Bounded by the three cases and never returned to the pool while the '
-    + 'page lives, which is a one-off cost and not a leak. It is recorded because it was briefly MIS-recorded: '
-    + 'setCase published before its render and therefore reported 21 buffers where the truth was 29 until some '
-    + 'later publish corrected it -- page 13\'s residual defect (a publish that runs before the allocation it '
-    + 'reports) in a new place. Fixed by publishing after the render. Page 13 publishes before its own render on '
-    + 'that path; measured on the same build, vtk.js allocates nothing there, so the ordering is invisible on it.');
-  ui.probe('Frame times measured side by side in one session, both pinned to 1280x720, orbit-v1, 30 warmup + 180 '
-    + 'forced frames, software rasterizer (ANGLE/SwiftShader): THIS PAGE cpu mean 137.42 ms / gpu mean 137.58 ms '
-    + '(p50 135.90, p95 152.30, 180/180 GPU samples kept); PAGE 13 cpu mean 153.87 ms / gpu mean 153.74 ms (p50 '
-    + '150.20, p95 173.80). CPU and GPU agree to within 0.1% on both, which is the signature of a frame that was '
-    + 'actually waited on. Both are far under the 30 FPS gate and neither says anything about a hardware GPU; what '
-    + 'they support is the RATIO between the two renderers on identical work.');
+  ui.probe('Resource behaviour, measured on both pages in one session through the same instrumentation: THREE.JS '
+    + 'DOES NOT LEAK PER DRAWING-BUFFER RESIZE. This page holds 37 buffers / 12 textures / 5 framebuffers / 2 '
+    + 'renderbuffers from ready onward -- flat across three whole benchmark runs (two surface changes each), flat '
+    + 'across 100 control cycles, and flat across eight viewport resizes. vtk.js 36.12.1, measured the same way at '
+    + 'the same time, goes 9/8/1 at ready to 9/14/7 after three benchmark runs, one texture and one framebuffer per '
+    + 'resize, monotonically, never returned.\n'
+    + 'A FOURTH OBJECT TYPE was added after review and it makes vtk.js\'s leak a third larger than first reported: '
+    + 'renderbuffers leak per resize as well, so the shape is one texture + one framebuffer + one renderbuffer per '
+    + 'resize rather than two objects. This page allocates exactly 2 renderbuffers in total, both belonging to the '
+    + 'multisampled opaque target, and neither moves. The direction of the comparison is unchanged; its magnitude '
+    + 'was understated.');
+  ui.probe('Nothing moves the counts after ready, and getting there took two fixes worth recording. Three.js '
+    + 'uploads a geometry\'s attribute buffers lazily, on the first render that uses them, so the first switch to '
+    + 'each cold case used to allocate 8 buffers at that moment: 21 -> 37 over 100 control cycles, where page 13 was '
+    + 'flat at 9. Not a leak -- bounded by the three cases, reported live and correctly -- but the spike\'s gate is '
+    + 'worded "100 control/resize cycles with stable resource counts" and a one-off warm-up cost fails it for the '
+    + 'wrong reason, so every case is now compiled and drawn once before ready() and the counts are flat from there. '
+    + 'Before that, the same measurement caught this page publishing BEFORE the render that allocates in setCase, '
+    + 'reporting 21 where the truth was 29 -- page 13\'s residual defect in a new place, found by measuring a case '
+    + 'switch rather than by reading the code, and fixed by publishing after the render.');
+  ui.probe('Frame times, three runs per page, measured side by side in one session, both pinned to 1280x720, '
+    + 'orbit-v1, 30 warmup + 180 forced frames, software rasterizer (ANGLE/SwiftShader), 180/180 GPU samples kept '
+    + 'throughout. Reported as p50, which is the robust statistic here -- the means carry a long tail from the '
+    + 'rasterizer (p95 runs 189-212 ms).\n'
+    + '  THIS PAGE (Three.js): cpu p50 153.5 / 148.3 / 151.2 ms, median of medians 151.2 (means 161.0 / 153.6 / 155.7).\n'
+    + '  PAGE 13 (vtk.js):     cpu p50 152.8 / 154.2 / 150.2 ms, median of medians 152.8 (means 158.0 / 162.1 / 156.6).\n'
+    + 'ON EQUAL TERMS THE TWO RENDERERS ARE INDISTINGUISHABLE ON THIS SCENE -- about 1% apart, well inside the '
+    + 'run-to-run spread of either page. CPU and GPU agree to within 0.2% on both, which is the signature of a frame '
+    + 'that was actually waited on rather than merely submitted.\n'
+    + 'These numbers REPLACE the ones this page published before review, and the correction is the point: at one '
+    + 'sample in the opaque pass this page measured p50 142.7 against page 13\'s 160.4 and would have reported a '
+    + '~12% Three.js advantage. That advantage was this page rasterizing terrain, buildings and streamlines at one '
+    + 'sample while page 13 rasterized them at four. Sampling the opaque pass at the canvas\'s own count closes it '
+    + 'entirely. A software rasterizer says nothing about a hardware GPU; what these support is the RATIO between '
+    + 'two renderers doing identical work, and the ratio is 1.');
   ui.probe(`GPU timing: EXT_disjoint_timer_query_webgl2 ${extras.gpuTimer ? 'available — gpuFrameTimesMs will be recorded' : 'unavailable — gpuFrameTimesMs stays null'}. `
     + 'Run window.__bench.runBenchmark() for orbit-v1 (30 warmup + 180 forced frames). cpuFrameTimesMs is wall time for a '
     + 'COMPLETED frame: each forced render ends in a one-pixel readback, because gl.finish() alone returns before the '
@@ -1917,10 +2109,18 @@ function reportMeasurements(
     + 'Here terrain, buildings, streamlines and the slice render into an offscreen target with a depth texture, that '
     + 'colour is blitted to the canvas, and the volume shader reconstructs the opaque view distance and stops each ray '
     + 'there. One WebGLRenderer, one canvas, two passes.\n'
-    + '3. FORCED — the offscreen target is NOT multisampled, because a multisampled target cannot hand a depth TEXTURE '
-    + 'to the volume pass. City edges are therefore aliased on this page and resolved on page 13. The CANVAS is '
-    + 'multisampled on both (antialias left at the browser default of true on both), so the one-pixel readback that '
-    + 'ends each benchmark frame pays the same MSAA resolve on both.\n'
+    + `3. NOT a divergence any more, and the correction that matters most on this page: the offscreen opaque target `
+    + `is multisampled at the canvas's own sample count (measured ${extras.opaqueTargetSamples}, read from `
+    + 'gl.SAMPLES rather than hard-coded), so terrain, buildings and streamlines are rasterized here with exactly '
+    + 'the multisampling page 13 gets from its antialias:true canvas. The first version of this page left the '
+    + 'target single-sampled and told you that was FORCED, because "a multisampled target cannot hand a depth '
+    + 'TEXTURE to the volume pass". That is false for three 0.185.1: '
+    + 'WebGLTextures.updateMultisampleRenderTarget blits depth into the single-sample framebuffer whose depth '
+    + 'attachment is the DepthTexture, guarded by resolveDepthBuffer, which defaults true. The cost of the mistake '
+    + 'was the headline number: at one sample this page measured p50 142.7 ms against page 13\'s 160.4 ms and '
+    + 'would have published "Three.js draws the same scene ~12% faster", when what it had actually measured was '
+    + 'this page drawing the city at one sample and page 13 drawing it at four. See the frame-time probe for the '
+    + 'numbers on equal terms.\n'
     + '4. FORCED — lighting. vtk.js lights a renderer automatically with a headlight; Three.js has no default lighting, '
     + 'so this page adds one ambient and one directional light. Same two flat greys.\n'
     + '5. FORCED — streamline width. Page 13 sets lineWidth 2; WebGL implementations may ignore any width but 1 and '
@@ -1952,7 +2152,13 @@ function reportMeasurements(
     + 'after it returns.\n'
     + `13. MEASURED — 3D texture filtering is ${extras.floatLinear ? 'linear (OES_texture_float_linear present)' : 'NEAREST: OES_texture_float_linear is absent'}. `
     + 'Recorded because it changes what the volume looks like between machines.\n'
-    + '14. LIMITATION, same on both as far as this page can tell: the volume ray stops at OPAQUE depth, so the '
+    + '14. MEASURED, and undeclared in the first version of this ledger: this page calls publish() at the end of '
+    + 'every control handler (slice height, colour range, opacity, streamlines, camera reset); page 13\'s '
+    + 'equivalents only render. That is the same shape as the defect closed on page 13\'s RESIZE path in ce187bf, '
+    + 'still present on its control paths and silently fixed here. It changes no number today -- measured, vtk.js '
+    + 'allocates nothing on a control path, so the two pages agree -- but it is a real difference in the __bench '
+    + 'surface Task 7 joins on and it belongs in this list rather than in a commit message.\n'
+    + '15. LIMITATION, same on both as far as this page can tell: the volume ray stops at OPAQUE depth, so the '
     + 'translucent slice does not attenuate volume behind it. Page 13 draws its slice as a translucent vtkImageSlice '
     + 'actor, which is also not in the volume mapper\'s depth input, but that has not been measured here and is not '
     + 'claimed.');

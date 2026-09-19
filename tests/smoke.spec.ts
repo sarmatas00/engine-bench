@@ -224,12 +224,21 @@ function scientificPageChecks(renderer: 'vtkjs' | 'threejs') {
     // with the 210 forced frames. A per-frame leak would land here two orders of
     // magnitude out.
     const RESIZES_PER_RUN = 2;
+    // The bound is per RENDERER, set by what that renderer was measured to do,
+    // not one bound for both. vtk.js leaks up to one texture and one
+    // framebuffer per drawing-buffer resize and a run resizes twice, so its
+    // bound is 2. Three.js was measured to leak nothing at all, so its bound
+    // is 0 — leaving it at 2 would encode vtk.js's defect as the contract for
+    // the page whose headline finding is that it has no such defect, and a
+    // future Three.js regression of exactly one leaked object per resize would
+    // land at 2 and pass.
+    const MAX_GROWTH = renderer === 'vtkjs' ? RESIZES_PER_RUN : 0;
     const resourcesAfter = (await readScientific(page)).resources;
     for (const key of ['textures', 'renderTargets'] as const) {
       const delta = resourcesAfter[key] - resourcesBefore[key];
       expect(delta, `${key} grew by ${delta} across 210 forced frames`).toBeGreaterThanOrEqual(0);
-      expect(delta, `${key} grew by ${delta}, more than one per drawing-buffer resize`)
-        .toBeLessThanOrEqual(RESIZES_PER_RUN);
+      expect(delta, `${key} grew by ${delta}, more than the ${MAX_GROWTH} this renderer was measured to grow by`)
+        .toBeLessThanOrEqual(MAX_GROWTH);
     }
     // Everything the page itself owns must be exactly flat.
     for (const key of ['buffers', 'listeners', 'observers'] as const) {
