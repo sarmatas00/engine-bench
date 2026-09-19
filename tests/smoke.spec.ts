@@ -13,7 +13,7 @@ type PageSpec = {
    */
   mode?: 'matrix' | 'combined';
   /** Runs before `page.goto`, for anything that must be installed in the page
-   *  before its own scripts do (see page 13's ResizeObserver counter). */
+   *  before its own scripts do (see countingResizeObserverInit below). */
   init?: (page: Page) => Promise<void>;
   extraChecks?: (page: Page, probe: Record<string, unknown>) => Promise<void>;
 };
@@ -35,99 +35,43 @@ const readScientific = (page: Page) =>
   page.evaluate(() => (window as any).__bench.probe.scientific as ScientificProbeJson);
 
 // One entry per page. Later tasks append here.
-export const PAGES: PageSpec[] = [
-  {slug: '00-index'},
-  {slug: '01-maplibre-baseline'},
-  {slug: '02-deckgl-floats'},
-  {slug: '04-values-lost', extraChecks: async (_page, probe) => {
-    const sg = probe.scenegraph as any, sm = probe.simpleMesh as any;
-    // ScenegraphLayer: value survives to the GPU buffer, fails only at the shader.
-    expect(sg).toMatchObject({loaded: true, inBufferLayout: true, inShaderLayout: false, inVsSource: false});
-    // SimpleMeshLayer: stripped by normalizeGeometryAttributes before any buffer exists.
-    expect(sm).toMatchObject({loaded: true, inBufferLayout: false, inShaderLayout: false, inVsSource: false});
-  }},
-  {slug: '06-fix-a2-predraped'},
-  {slug: '07-fix-b1-shader', extraChecks: async (page, probe) => {
-    // The subclass declares _TEMPERATURE in its own shader, so it now binds and colours.
-    expect(probe.scenegraph).toMatchObject({loaded: true, inBufferLayout: true, inShaderLayout: true, inVsSource: true});
-
-    // Colour-pixel assertion: the rendered surface must actually be coloured, not grey/white/black.
-    // Try live gl.readPixels first, then a toDataURL/getImageData fallback, then the page's own
-    // centerPixel probe (captured inside deck.gl's onAfterRender, while the WebGL context is live —
-    // see pages/07-fix-b1-shader/main.ts) if the drawing buffer wasn't preserved for either read.
-    const sampled = await page.evaluate(async () => {
-      const canvas = document.querySelector('#host canvas.maplibregl-canvas') as HTMLCanvasElement | null;
-      if (!canvas) return {route: 'no-canvas', rgb: [0, 0, 0]};
-      const cx = Math.floor(canvas.width / 2);
-      const cy = Math.floor(canvas.height / 2);
-
-      const gl = canvas.getContext('webgl2') as WebGL2RenderingContext | null;
-      if (gl) {
-        const px = new Uint8Array(4);
-        gl.readPixels(cx, gl.drawingBufferHeight - cy, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
-        if (Math.max(px[0], px[1], px[2]) - Math.min(px[0], px[1], px[2]) > 40) {
-          return {route: 'gl.readPixels', rgb: [px[0], px[1], px[2]]};
-        }
-      }
-
-      try {
-        const dataUrl = canvas.toDataURL();
-        const img = new Image();
-        const loaded = new Promise<void>((resolve, reject) => { img.onload = () => resolve(); img.onerror = reject; });
-        img.src = dataUrl;
-        await loaded;
-        const c2 = document.createElement('canvas');
-        c2.width = canvas.width; c2.height = canvas.height;
-        const ctx = c2.getContext('2d')!;
-        ctx.drawImage(img, 0, 0);
-        const data = ctx.getImageData(cx, cy, 1, 1).data;
-        if (Math.max(data[0], data[1], data[2]) - Math.min(data[0], data[1], data[2]) > 40) {
-          return {route: 'toDataURL', rgb: [data[0], data[1], data[2]]};
-        }
-      } catch { /* fall through to the page-provided sample */ }
-
-      return {route: 'zero', rgb: [0, 0, 0]};
-    });
-
-    let route = sampled.route, rgb = sampled.rgb;
-    if (route === 'zero' || route === 'no-canvas') {
-      const centerPixel = await page.evaluate(() => (window as any).__bench.probe.centerPixel as number[] | undefined);
-      if (centerPixel) { route = 'page.centerPixel'; rgb = centerPixel; }
+/**
+ * Installed before a combined page's own scripts run: a second witness for
+ * resources.observers. The page reports its own integer, and nothing else in
+ * this spec could tell a second, leaked ResizeObserver from an honest one.
+ */
+const countingResizeObserverInit = async (page: Page): Promise<void> => {
+  await page.addInitScript(() => {
+    const Real = window.ResizeObserver;
+    const stats = {constructed: 0, observed: 0, disconnected: 0};
+    (window as any).__roStats = stats;
+    class Counting extends Real {
+      constructor(callback: ResizeObserverCallback) { super(callback); stats.constructed++; }
+      observe(target: Element, options?: ResizeObserverOptions) { stats.observed++; super.observe(target, options); }
+      disconnect() { stats.disconnected++; super.disconnect(); }
     }
+    window.ResizeObserver = Counting;
+  });
+};
 
-    console.log(`page 07 colour-pixel route: ${route}, rgb=${JSON.stringify(rgb)}`);
-    expect(Math.max(rgb[0], rgb[1], rgb[2]) - Math.min(rgb[0], rgb[1], rgb[2]), `route=${route} rgb=${JSON.stringify(rgb)}`).toBeGreaterThan(40);
-  }},
-  {slug: '08-fix-b2-baked', extraChecks: async (_page, probe) => {
-    expect((probe.simpleMesh as any).inBufferLayout).toBe(true);   // colors reach the GPU on the mesh path
-  }},
-  {slug: '05-fix-a1-deck-terrain'},
-  {slug: '03-threejs-floats'},
-  {slug: '09-cesium-terrain'},
-  {slug: '10-cesium-voxels'},
-  {slug: '11-vtkjs-grid'},
-  {slug: '12-playcanvas'},
-  {slug: '13-vtkjs-scientific', mode: 'combined', init: async page => {
-    // A second witness for resources.observers: the page reports its own
-    // integer, and nothing else in this spec could tell a second, leaked
-    // ResizeObserver from an honest one.
-    await page.addInitScript(() => {
-      const Real = window.ResizeObserver;
-      const stats = {constructed: 0, observed: 0, disconnected: 0};
-      (window as any).__roStats = stats;
-      class Counting extends Real {
-        constructor(callback: ResizeObserverCallback) { super(callback); stats.constructed++; }
-        observe(target: Element, options?: ResizeObserverOptions) { stats.observed++; super.observe(target, options); }
-        disconnect() { stats.disconnected++; super.disconnect(); }
-      }
-      window.ResizeObserver = Counting;
-    });
-  }, extraChecks: async (page, probe) => {
-    // The four obligations Task 4 deferred to this page, plus the Contract
+/**
+ * The combined scientific pages' checks, shared verbatim between page 13
+ * (vtk.js) and page 14 (Three.js) and parametrised only by the renderer name.
+ *
+ * Shared rather than copied on purpose. Task 7 compares the two pages' probes
+ * and blames the renderer for every difference it finds, which is only sound
+ * if both pages were held to the SAME assertions -- two copies of this block
+ * could drift apart silently and Task 7 would read the drift as a renderer
+ * result. Anything genuinely renderer-specific belongs in the page's own probe
+ * panel, not in a branch here.
+ */
+function scientificPageChecks(renderer: 'vtkjs' | 'threejs') {
+  return async (page: Page, probe: Record<string, unknown>): Promise<void> => {
+    // The four obligations Task 4 deferred to these pages, plus the Contract
     // Amendments' identity facts. Every one is asserted, never inspected.
     const sci = probe.scientific as ScientificProbeJson | undefined;
-    expect(sci, 'page 13 must publish window.__bench.probe.scientific via setScientificProbe').toBeTruthy();
-    expect(sci!.renderer).toBe('vtkjs');
+    expect(sci, `the ${renderer} page must publish window.__bench.probe.scientific via setScientificProbe`).toBeTruthy();
+    expect(sci!.renderer).toBe(renderer);
     expect(sci!.status).toBe('ready');
     expect(sci!.field).toBe(true);
     // Both categories, both spellings: the smoke products are synthetic DTCC
@@ -268,13 +212,17 @@ export const PAGES: PageSpec[] = [
     }
     expect((await readScientific(page)).benchmark, 'runBenchmark must publish into the probe').toMatchObject(
       {cameraPath: 'orbit-v1', forcedFrames: 180});
-    // The resource counts are live GL object counts, so this is a real gate.
-    // What it finds is a vtk.js 36.12.1 defect, bounded here rather than
-    // hidden: vtkOpenGLRenderWindow leaks up to one texture and one framebuffer
-    // per drawing-buffer resize and never deletes them, and a benchmark run
-    // resizes twice (pin the surface, restore it). The bound is what matters —
-    // growth must scale with resizes, not with the 210 forced frames. A
-    // per-frame leak would land here two orders of magnitude out.
+    // The resource counts are live GL object counts on both pages, so this is a
+    // real gate rather than a comparison of two constants. On page 13 what it
+    // finds is a vtk.js 36.12.1 defect, bounded here rather than hidden:
+    // vtkOpenGLRenderWindow leaks up to one texture and one framebuffer per
+    // drawing-buffer resize and never deletes them, and a benchmark run resizes
+    // twice (pin the surface, restore it). Page 14 is measured against the same
+    // bound so Task 7 can say whether Three.js does the same — deliberately not
+    // pinned to an exact delta, which would encode vtk.js's defect as the
+    // contract. The bound is what matters: growth must scale with resizes, not
+    // with the 210 forced frames. A per-frame leak would land here two orders of
+    // magnitude out.
     const RESIZES_PER_RUN = 2;
     const resourcesAfter = (await readScientific(page)).resources;
     for (const key of ['textures', 'renderTargets'] as const) {
@@ -288,7 +236,7 @@ export const PAGES: PageSpec[] = [
       expect(resourcesAfter[key], `page-owned ${key} moved across the benchmark`).toBe(resourcesBefore[key]);
     }
 
-    // Forced context loss on the drawing canvas vtk.js renders into.
+    // Forced context loss on the drawing canvas the renderer draws into.
     const forced = await page.evaluate(() => {
       const canvas = document.querySelector('#host canvas') as HTMLCanvasElement | null;
       if (!canvas) return 'no-canvas';
@@ -317,7 +265,85 @@ export const PAGES: PageSpec[] = [
       return document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2) === b;
     });
     expect(topmost, 'the reload control is covered by another element').toBe(true);
-  }}
+  };
+}
+
+export const PAGES: PageSpec[] = [
+  {slug: '00-index'},
+  {slug: '01-maplibre-baseline'},
+  {slug: '02-deckgl-floats'},
+  {slug: '04-values-lost', extraChecks: async (_page, probe) => {
+    const sg = probe.scenegraph as any, sm = probe.simpleMesh as any;
+    // ScenegraphLayer: value survives to the GPU buffer, fails only at the shader.
+    expect(sg).toMatchObject({loaded: true, inBufferLayout: true, inShaderLayout: false, inVsSource: false});
+    // SimpleMeshLayer: stripped by normalizeGeometryAttributes before any buffer exists.
+    expect(sm).toMatchObject({loaded: true, inBufferLayout: false, inShaderLayout: false, inVsSource: false});
+  }},
+  {slug: '06-fix-a2-predraped'},
+  {slug: '07-fix-b1-shader', extraChecks: async (page, probe) => {
+    // The subclass declares _TEMPERATURE in its own shader, so it now binds and colours.
+    expect(probe.scenegraph).toMatchObject({loaded: true, inBufferLayout: true, inShaderLayout: true, inVsSource: true});
+
+    // Colour-pixel assertion: the rendered surface must actually be coloured, not grey/white/black.
+    // Try live gl.readPixels first, then a toDataURL/getImageData fallback, then the page's own
+    // centerPixel probe (captured inside deck.gl's onAfterRender, while the WebGL context is live —
+    // see pages/07-fix-b1-shader/main.ts) if the drawing buffer wasn't preserved for either read.
+    const sampled = await page.evaluate(async () => {
+      const canvas = document.querySelector('#host canvas.maplibregl-canvas') as HTMLCanvasElement | null;
+      if (!canvas) return {route: 'no-canvas', rgb: [0, 0, 0]};
+      const cx = Math.floor(canvas.width / 2);
+      const cy = Math.floor(canvas.height / 2);
+
+      const gl = canvas.getContext('webgl2') as WebGL2RenderingContext | null;
+      if (gl) {
+        const px = new Uint8Array(4);
+        gl.readPixels(cx, gl.drawingBufferHeight - cy, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+        if (Math.max(px[0], px[1], px[2]) - Math.min(px[0], px[1], px[2]) > 40) {
+          return {route: 'gl.readPixels', rgb: [px[0], px[1], px[2]]};
+        }
+      }
+
+      try {
+        const dataUrl = canvas.toDataURL();
+        const img = new Image();
+        const loaded = new Promise<void>((resolve, reject) => { img.onload = () => resolve(); img.onerror = reject; });
+        img.src = dataUrl;
+        await loaded;
+        const c2 = document.createElement('canvas');
+        c2.width = canvas.width; c2.height = canvas.height;
+        const ctx = c2.getContext('2d')!;
+        ctx.drawImage(img, 0, 0);
+        const data = ctx.getImageData(cx, cy, 1, 1).data;
+        if (Math.max(data[0], data[1], data[2]) - Math.min(data[0], data[1], data[2]) > 40) {
+          return {route: 'toDataURL', rgb: [data[0], data[1], data[2]]};
+        }
+      } catch { /* fall through to the page-provided sample */ }
+
+      return {route: 'zero', rgb: [0, 0, 0]};
+    });
+
+    let route = sampled.route, rgb = sampled.rgb;
+    if (route === 'zero' || route === 'no-canvas') {
+      const centerPixel = await page.evaluate(() => (window as any).__bench.probe.centerPixel as number[] | undefined);
+      if (centerPixel) { route = 'page.centerPixel'; rgb = centerPixel; }
+    }
+
+    console.log(`page 07 colour-pixel route: ${route}, rgb=${JSON.stringify(rgb)}`);
+    expect(Math.max(rgb[0], rgb[1], rgb[2]) - Math.min(rgb[0], rgb[1], rgb[2]), `route=${route} rgb=${JSON.stringify(rgb)}`).toBeGreaterThan(40);
+  }},
+  {slug: '08-fix-b2-baked', extraChecks: async (_page, probe) => {
+    expect((probe.simpleMesh as any).inBufferLayout).toBe(true);   // colors reach the GPU on the mesh path
+  }},
+  {slug: '05-fix-a1-deck-terrain'},
+  {slug: '03-threejs-floats'},
+  {slug: '09-cesium-terrain'},
+  {slug: '10-cesium-voxels'},
+  {slug: '11-vtkjs-grid'},
+  {slug: '12-playcanvas'},
+  {slug: '13-vtkjs-scientific', mode: 'combined', init: countingResizeObserverInit,
+    extraChecks: scientificPageChecks('vtkjs')},
+  {slug: '14-threejs-scientific', mode: 'combined', init: countingResizeObserverInit,
+    extraChecks: scientificPageChecks('threejs')},
 ];
 
 export const FIELD_PAGES = new Set(['04-values-lost', '07-fix-b1-shader', '08-fix-b2-baked', '10-cesium-voxels', '11-vtkjs-grid', '12-playcanvas']);

@@ -14,14 +14,15 @@ const rows: [string, string, string, string, string][] = [
   ['10-cesium-voxels', 'Cesium voxels', '3-D temperature plume as a VoxelPrimitive.', 'Why it was reopened.', 'The only engine that draws volume data. Candidate for a simulation view, not the map.'],
   ['11-vtkjs-grid', 'VTK.js', 'Grid volume + isosurface; the mesh itself never loaded.', 'Narrowed to one job.', 'Needs a grid, not our mesh. That conversion now exists and feeds page 10 too.'],
   ['12-playcanvas', 'PlayCanvas', 'Mesh renders; no CRS, basemap or terrain API.', 'Rejected.', 'Rejected on geography, not rendering.'],
-  ['13-vtkjs-scientific', 'VTK.js scientific', 'One scene: Gothenburg terrain and buildings, the DTCC smoke field as a volume, a slice and Core\'s streamlines. Click a building to read its marker back.', 'The vtk.js reference path.', 'Whether one vtk.js scene carries city geometry and scientific fields together with identity and values readable back. Task 6 mirrors it in Three.js.']
+  ['13-vtkjs-scientific', 'VTK.js scientific', 'One scene: Gothenburg terrain and buildings, the DTCC smoke field as a volume, a slice and Core\'s streamlines. Click a building to read its marker back.', 'The vtk.js reference path.', 'Whether one vtk.js scene carries city geometry and scientific fields together with identity and values readable back. Task 6 mirrors it in Three.js.'],
+  ['14-threejs-scientific', 'Three.js scientific', 'The same scene as page 13 in Three.js: Gothenburg terrain and buildings, the DTCC smoke field as a volume, a slice and Core\'s streamlines, with the volume occluded by the city through a depth texture. Click a building to read its marker back.', 'The Three.js comparison path.', 'The second measurement of page 13\'s scene. Three.js ships no volume renderer, so the compositor and its depth stop are code we would own — the probe panel carries the measured line count.']
 ];
 
 /**
  * Pages that load one bundle and have no synthetic/real variant, so their link
  * must never carry the dataset query the matrix pages take.
  */
-const COMBINED = new Set(['13-vtkjs-scientific']);
+const COMBINED = new Set(['13-vtkjs-scientific', '14-threejs-scientific']);
 
 // The briefing's own argument order, so the index reads as the case rather than a file listing.
 const sections: Record<string, string> = {
