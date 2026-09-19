@@ -47,7 +47,7 @@ import type {MeshPair, ScientificBundle, ScientificManifest} from '@lib/scientif
 import {
   ALIGNMENT_TOLERANCE_M, alignmentDistance, attachContextLoss, createBenchmarkDriver,
   describeTraceability, diffResources, gridField, gridNodeIndex, heatGridField,
-  interpolatedTolerance, objectRefForCell, orbitV1Pose, probeGridNode, resourcesEqual,
+  interpolatedTolerance, objectRefForCell, orbitV1Pose, poseToEye, probeGridNode, resourcesEqual,
   sampleGridTrilinear,
 } from '@lib/scientific-probes';
 import type {
@@ -73,6 +73,40 @@ const CASE_IDS = ['smoke · speed', 'smoke · pressure', 'heat · temperature'] 
  * differ for a reason that has nothing to do with Three.js.
  */
 const BENCHMARK_SURFACE: [number, number] = [1280, 720];
+
+// ---------------------------------------------------------------------------
+// The cross-renderer parity surface (Task 7). Every constant, every field and
+// every function here exists on page 14 too, under the same name, in the same
+// shape and the same units. A parity field that exists on one page only is
+// worse than no field at all: the suite looks thorough and tests nothing.
+
+/**
+ * The drawing surface every parity measurement is pinned to, page 14's value.
+ * It has to be pinned and it has to match: a parity test names a ray by a
+ * FRACTION of the drawing surface, and that fraction only picks out the same
+ * ray on both pages when both cameras have the same aspect ratio — which is
+ * this surface's. The interactive surface is 1280x492 on both pages by a
+ * header-wrapping coincidence (divergence #12), which is exactly the kind of
+ * thing that must not be relied on.
+ */
+const PARITY_SURFACE: [number, number] = [1280, 720];
+
+/** The fixed grid node every parity probe reports. Interior on both shipped
+ *  grids (32^3 smoke, 64x64x32 heat), and asymmetric, so a transposed index
+ *  would not land on itself. Page 14's value. */
+const PARITY_NODE: [number, number, number] = [3, 5, 7];
+
+/** The fixed OFF-node point, in node units, the interpolated probe reports.
+ *  Deliberately half-way between nodes on every axis. Page 14's value. */
+const PARITY_OFFSET: [number, number, number] = [3.5, 5.5, 7.5];
+
+/** IEEE-754 float32 bit pattern of a value, so a grid-node readout can be
+ *  compared bit-for-bit rather than approximately. Page 14's helper. */
+function f32bits(value: number): number {
+  const buf = new Float32Array(1);
+  buf[0] = value;
+  return new Uint32Array(buf.buffer)[0];
+}
 
 /** vtk.js entry points this page uses — the custom-code-burden list Task 7 compares. */
 const VTK_APIS = [
@@ -522,6 +556,21 @@ function chromeOptions(bundle?: ScientificBundle) {
       + '24.69 Pa against a 8.2e-4 tolerance when its a/b order is transposed. Note that permuting x/y is a genuine '
       + 'no-op on these grids — 32x32 and 64x64 — so no check can see it. Whether a shipped payload matches its '
       + 'declared order is a declaration check; field.grid.json ships no order field. See the probe panel.',
+      'DEFECT TASK 7 FOUND ON THIS PAGE, and it was on the screen the whole time: the colour-range control moved '
+      + 'the volume and left the SLICE almost untouched. vtkImageProperty maps a scalar through its transfer '
+      + 'function over [colorLevel - colorWindow/2, colorLevel + colorWindow/2] -- not over the transfer function\'s '
+      + 'own range -- and vtk.js defaults those to 127.5/255. Measured: at a slice value of 4.51 m/s inside a '
+      + '0.18..11.21 range this page drew rgb 35,109,175, the ramp sampled at 4.51/255, where the shared colormap '
+      + 'says 97,200,140 -- which is exactly what page 14 drew for the same world point. Nothing on this page alone '
+      + 'was wrong enough to fail a check; it took reading back the rendered pixel and comparing it with the other '
+      + 'renderer. Fixed by driving colorWindow/colorLevel from the active colour range.',
+      'Normalised for Task 7, and recorded because it is a real vtk.js behaviour: vtkCellPicker picks with a '
+      + 'TOLERANCE by default (0.025 of the viewport diagonal in world units), and Three.js\'s Raycaster has none. '
+      + 'Measured over the same 102-ray sweep under the same camera: vtk.js reported 77 hits to Three.js\'s 59, and '
+      + 'where both hit they sometimes named different cells at different depths -- the tolerance lets a ray that '
+      + 'misses every triangle report the nearest one anyway. With setTolerance(0) the two agree on all 59 hits, on '
+      + 'the cell id, the marker and the intersection point to within a centimetre. A click still selects a building '
+      + 'it lands on; what it no longer does is select one it merely lands near.',
       'Defect we found and fixed here: gl.finish() alone does not force a completed frame under Chrome\'s '
       + 'ANGLE/SwiftShader command buffer. The benchmark first reported a 0.45 ms mean CPU frame while the GPU timer '
       + 'reported 95 ms on the same frames — a 200x overstated frame rate. Each forced render now ends in a one-pixel '
@@ -601,6 +650,11 @@ function build(ui: Ui, bundle: ScientificBundle, heatValues: Float32Array): void
     // removes the canvas, and a stale 1 here would be the page reporting a
     // canvas that no longer exists.
     probe.canvasCount = ui.canvasHost.querySelectorAll('canvas').length;
+    // The parity surface, refreshed on the same schedule as everything else
+    // so Task 7 never reads a camera or a surface from before the last
+    // control, resize or benchmark. Page 14 publishes it from its own
+    // publish() the same way.
+    ui.setProbe('parity', parityProbe());
     ui.setScientificProbe(probe);
   };
 
@@ -783,6 +837,19 @@ function build(ui: Ui, bundle: ScientificBundle, heatValues: Float32Array): void
     sliceOpacity.removeAllPoints();
     sliceOpacity.addPoint(lo, sliceAlpha);
     sliceOpacity.addPoint(hi, sliceAlpha);
+    // DEFECT FOUND BY TASK 7, and it was visible on the screen the whole
+    // time. vtkImageProperty maps a scalar through its transfer function over
+    // [colorLevel - colorWindow/2, colorLevel + colorWindow/2] -- NOT over the
+    // transfer function's own range -- and vtk.js defaults those to 127.5/255.
+    // The volume honoured the colour-range control and the slice did not.
+    // Measured: at a slice value of 4.51 m/s inside a 0.18..11.21 range the
+    // drawn pixel was [35,109,175], which is the ramp sampled at 4.51/255,
+    // where the shared colormap says [97,200,140] -- the colour page 14 drew
+    // for the same world point through the same ramp. Task 7's GPU-pixel
+    // comparison is what caught it: nothing on this page alone was wrong
+    // enough to fail a check.
+    imageSlice.getProperty().setColorWindow(hi - lo);
+    imageSlice.getProperty().setColorLevel((hi + lo) / 2);
     ui.setReadout('Colour range', `${lo.toFixed(2)} – ${hi.toFixed(2)} ${active.unit}`);
   }
 
@@ -941,6 +1008,7 @@ function build(ui: Ui, bundle: ScientificBundle, heatValues: Float32Array): void
 
   // --- picking -------------------------------------------------------------
   const picker = vtkCellPicker.newInstance();
+  picker.setTolerance(0);
   picker.setPickFromList(true);
   picker.initializePickList();
   picker.addPickList(buildingsActor);
@@ -979,8 +1047,19 @@ function build(ui: Ui, bundle: ScientificBundle, heatValues: Float32Array): void
   const forceCompletion = gl
     ? () => { gl.finish(); gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel); }
     : () => { /* no context, nothing to sync */ };
+  /**
+   * Benchmark frames rendered so far, published through the parity surface so
+   * a test can force context loss WHILE A RUN IS ACTUALLY IN FLIGHT instead of
+   * waiting a fixed number of seconds and hoping. Page 14 carries the same
+   * counter. Added after firefox caught the wall-clock version passing for the
+   * wrong reason: a whole 210-frame run finishes in about a second on a real
+   * GPU, so a 2-second wait meant the "sampling stopped" assertion was made
+   * against a benchmark that had already finished.
+   */
+  let benchmarkFrames = 0;
   const driver = createBenchmarkDriver({
     renderFrame: pose => {
+      benchmarkFrames += 1;
       applyPose(pose);
       renderWindow.render();
       forceCompletion();
@@ -1088,6 +1167,318 @@ function build(ui: Ui, bundle: ScientificBundle, heatValues: Float32Array): void
   });
   listeners += 1;
 
+  // --- cross-renderer parity surface (Task 7) ------------------------------
+  // Primitives, not conclusions. The fixed rays, the fixed poses and the
+  // thresholds live in tests/scientific.spec.ts, in ONE place, so the two
+  // pages cannot drift apart on them the way two copies of an assertion
+  // block could. What lives here is only what a page can answer about
+  // itself: where its camera is, what its own picker resolves, what its own
+  // shader wrote into its own drawing buffer.
+
+  // Read once, off the DEFAULT framebuffer, exactly as page 14 reads it:
+  // SAMPLES is a property of the BOUND framebuffer, and nothing this page
+  // renders has bound an FBO yet at the time publish() first runs. Recorded
+  // rather than re-read per publish so a later bound target cannot silently
+  // change the number Task 7 compares.
+  const canvasSamples = gl ? (() => {
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    return gl.getParameter(gl.SAMPLES) as number;
+  })() : null;
+
+  let parityRestore: (() => void) | null = null;
+  const parityPixelBuf = new Uint8Array(4);
+
+  /** Pins the drawing surface and applies one fixed pose. Idempotent; the
+   *  interactive surface is captured on the first call only. */
+  function parityBegin(pose: {target: [number, number, number]; radius: number; elevationDeg: number; azimuthDeg: number}) {
+    if (!parityRestore) {
+      const restoreSize = apiRenderWindow.getSize() as [number, number];
+      resizeObserver.unobserve(ui.canvasHost);
+      parityRestore = () => {
+        apiRenderWindow.setSize(restoreSize[0], restoreSize[1]);
+        resizeObserver.observe(ui.canvasHost);
+      };
+    }
+    apiRenderWindow.setSize(PARITY_SURFACE[0], PARITY_SURFACE[1]);
+    // poseToEye, not local trig: CameraPose is z-up with azimuth from +x and
+    // neither renderer's default frame is that. Both pages derive the eye
+    // through the one shared function, which is the only reason a pose named
+    // in the test means the same camera on both.
+    const placed: PlacedCameraPose = {...pose, eye: poseToEye(pose)};
+    applyPose(placed);
+    renderWindow.render();
+    publish();
+    return {width: PARITY_SURFACE[0], height: PARITY_SURFACE[1]};
+  }
+
+  function parityEnd(): void {
+    parityVolumeVisible(true);
+    parityIsolateVolume(false);
+    parityStreamlinesVisible(true);
+    parityBuildingsVisible(true);
+    paritySliceOpaque(false);
+    const restore = parityRestore;
+    parityRestore = null;
+    restore?.();
+    applyPose(orbitV1Pose(0));
+    renderWindow.render();
+    publish();
+  }
+
+  /**
+   * A REAL ray-cast pick at (u, v) of the drawing surface, v measured from
+   * the top. This is vtkCellPicker resolving a cell through the polydata's
+   * own cell data — the independent path page 14 answers with
+   * Raycaster.faceIndex over the shipped cellObjectIndex. selectCell(id) on
+   * both pages would only compare the shared lookup; this compares the two
+   * renderers' intersection machinery.
+   */
+  function parityPickAt(u: number, v: number) {
+    const [w, h] = apiRenderWindow.getSize() as [number, number];
+    // vtk.js display coordinates: render-window pixels, origin bottom-left.
+    picker.pick([u * w, (1 - v) * h, 0], renderer);
+    const cellId = picker.getCellId();
+    if (cellId < 0) {
+      return {hit: false, cellId: null, marker: null, sourceIndexes: null,
+              dtccIds: null, traceability: null, world: null, distanceM: null};
+    }
+    const array = buildingsPd.getCellData().getArrayByName(CELL_OBJECT_INDEX);
+    if (!array) throw new Error(`buildings polydata lost its ${CELL_OBJECT_INDEX} cell-data array`);
+    const marker = array.getData()[cellId];
+    const ref = objectRefForCell(objects, bundle.city.identityStability, marker);
+    const p = picker.getPickPosition() as [number, number, number];
+    const eye = renderer.getActiveCamera().getPosition() as [number, number, number];
+    return {
+      hit: true, cellId, marker,
+      sourceIndexes: ref.sourceIndexes, dtccIds: ref.dtccIds, traceability: ref.traceability,
+      world: [p[0], p[1], p[2]] as [number, number, number],
+      distanceM: Math.hypot(p[0] - eye[0], p[1] - eye[1], p[2] - eye[2]),
+    };
+  }
+
+  /**
+   * What THIS renderer's own shader wrote into its own drawing buffer at
+   * (u, v), after a fresh render. Renders first, in the same task, because a
+   * drawing buffer without preserveDrawingBuffer is only readable before the
+   * browser composites it.
+   */
+  function parityPixelAt(u: number, v: number): [number, number, number, number] {
+    if (!gl) throw new Error('no WebGL context to read pixels from');
+    renderWindow.render();
+    const [w, h] = apiRenderWindow.getSize() as [number, number];
+    const x = Math.min(w - 1, Math.max(0, Math.floor(u * w)));
+    // readPixels' origin is bottom-left; v is measured from the top, as in
+    // every other screen coordinate here.
+    const y = Math.min(h - 1, Math.max(0, Math.floor((1 - v) * h)));
+    gl.readPixels(x, y, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, parityPixelBuf);
+    return [parityPixelBuf[0], parityPixelBuf[1], parityPixelBuf[2], parityPixelBuf[3]];
+  }
+
+  function parityVolumeVisible(visible: boolean): void { volume.setVisibility(visible); renderWindow.render(); }
+  function parityStreamlinesVisible(visible: boolean): void { streamlineActor.setVisibility(visible); renderWindow.render(); }
+  /**
+   * Hides the buildings, which is how the occlusion comparison gets the SAME
+   * ray with and without an opaque occluder in it. Comparing two different
+   * rays instead (one that hits a building, one that misses it) sounds
+   * equivalent and is not: adjacent rays land on different terrain at
+   * different depths under different shading, and the pixel difference then
+   * measures the background as much as the volume. Measured: two adjacent
+   * rays at the same screen height, one hitting a building at 331 m and one
+   * hitting no building at all, gave IDENTICAL deltas of 12.67 on this page.
+   */
+  function parityBuildingsVisible(visible: boolean): void { buildingsActor.setVisibility(visible); renderWindow.render(); }
+
+  /**
+   * Isolates the volume: terrain, buildings and the background all go BLACK
+   * and the slice and streamlines are hidden, so the rendered pixel is the
+   * volume's own premultiplied contribution and nothing else.
+   *
+   * This exists because every colour-difference measure of "how much volume is
+   * in this pixel" is confounded by what is behind it. A composite is
+   * `C_volume + (1 - alpha) * background`, so comparing a ray that ends on a
+   * grey building against one that ends on a light background measures the two
+   * BACKGROUNDS as much as the two volume paths. Measured, and this is why the
+   * primitive exists rather than a comment about it: an occlusion check built
+   * on that difference still PASSED with page 14's opaque depth stop deleted,
+   * because the building is darker than the background by about as much as the
+   * occlusion was worth. Against a black background the background term is
+   * exactly zero and the pixel is the volume alone.
+   */
+  function parityIsolateVolume(on: boolean): void {
+    if (on) {
+      terrainActor.getProperty().setColor(0, 0, 0);
+      buildingsActor.getProperty().setColor(0, 0, 0);
+      renderer.setBackground(0, 0, 0);
+      imageSlice.setVisibility(false);
+      streamlineActor.setVisibility(false);
+    } else {
+      terrainActor.getProperty().setColor(0.62, 0.62, 0.60);
+      buildingsActor.getProperty().setColor(0.80, 0.78, 0.74);
+      renderer.setBackground(0.93, 0.93, 0.92);
+      imageSlice.setVisibility(true);
+      streamlineActor.setVisibility(true);
+    }
+    renderWindow.render();
+  }
+
+  /** Forces the slice plane fully opaque (and back). A translucent plane is
+   *  blended over terrain lit by each renderer's own lighting, so only an
+   *  opaque plane lets a pixel be compared against the colour the shared
+   *  colormap says that value has. */
+  function paritySliceOpaque(on: boolean): void {
+    if (on) {
+      const [lo, hi] = activeColourRange();
+      sliceOpacity.removeAllPoints();
+      sliceOpacity.addPoint(lo, 1);
+      sliceOpacity.addPoint(hi, 1);
+    } else {
+      applyTransferFunctions();
+    }
+    renderWindow.render();
+  }
+
+  /** CPU truth for a world point: the shared sampler and the shared colormap.
+   *  The SHARED half of the GPU-vs-CPU comparison, deliberately — what makes
+   *  that comparison a renderer test is the GPU half. */
+  function paritySampleCpu(world: [number, number, number]) {
+    const value = sampleGridTrilinear(active.field, world)[0];
+    const [lo, hi] = activeColourRange();
+    return {value, rgb: colormap(value, lo, hi)};
+  }
+
+  let lastParity: Record<string, unknown> | null = null;
+
+  /**
+   * The static parity surface: one object, every field on both pages, same
+   * shape and same units, `null` only where the other renderer genuinely has
+   * no equivalent and `parityNotes` says which and why.
+   */
+  function parityProbe(): Record<string, unknown> {
+    try {
+      const field = active.field;
+      const [i, j, k] = PARITY_NODE;
+      const nodeWorld: [number, number, number] = [
+        field.origin[0] + i * field.spacing[0],
+        field.origin[1] + j * field.spacing[1],
+        field.origin[2] + k * field.spacing[2],
+      ];
+      const offWorld: [number, number, number] = [
+        field.origin[0] + PARITY_OFFSET[0] * field.spacing[0],
+        field.origin[1] + PARITY_OFFSET[1] * field.spacing[1],
+        field.origin[2] + PARITY_OFFSET[2] * field.spacing[2],
+      ];
+      const nodeValue = probeGridNode(field, i, j, k)[0];
+      const cam = renderer.getActiveCamera();
+      const [sw, sh] = apiRenderWindow.getSize() as [number, number];
+      const aspect = sw / sh;
+      const [near, far] = cam.getClippingRange() as [number, number];
+      const projection = cam.getProjectionMatrix(aspect, near, far) as ArrayLike<number>;
+      const rect = canvas.getBoundingClientRect();
+      // NODE extent, read off vtk.js's own stored image geometry -- origin,
+      // spacing and dimensions as the mapper will use them -- NOT
+      // getBounds(), which pads by half a voxel at each face because vtk.js
+      // reports an image's bounds as cells centred on its nodes (measured:
+      // -1.29 .. 81.29 for a grid whose nodes span 0 .. 80). That padding is
+      // a reporting convention, not a placement, and page 14's box mesh has
+      // no equivalent of it, so comparing the two libraries' getBounds()
+      // would fail by half a node spacing for a reason that says nothing
+      // about either renderer.
+      const nodeExtent = (im: ReturnType<typeof vtkImageData.newInstance>) => {
+        const o = im.getOrigin() as number[];
+        const sp = im.getSpacing() as number[];
+        const d = im.getDimensions() as number[];
+        return {
+          min: [o[0], o[1], o[2]] as [number, number, number],
+          max: [o[0] + sp[0] * (d[0] - 1), o[1] + sp[1] * (d[1] - 1), o[2] + sp[2] * (d[2] - 1)] as [number, number, number],
+        };
+      };
+      const vb = nodeExtent(active.image);
+      const sb = nodeExtent(sliceImage);
+      lastParity = {
+        schema: 1,
+        renderer: 'vtkjs',
+        caseId: active.id,
+        colourRange: activeColourRange(),
+        sliceRequestedZ: sliceHeightM,
+
+        // INVARIANTS. Both pages read the same Float32Array through the same
+        // probeGridNode and interpolate through the same sampleGridTrilinear,
+        // so these are bit-identical BY CONSTRUCTION. They cannot fail unless
+        // src/lib is edited, they are not evidence that the two RENDERERS
+        // agree about anything, and Task 8 must not quote them as such. Kept
+        // because they are nearly free and a divergence would be alarming.
+        invariants: {
+          fixedGridNode: {index: [i, j, k], world: nodeWorld, value: nodeValue, bits: f32bits(nodeValue)},
+          interpolated: {world: offWorld, value: sampleGridTrilinear(field, offWorld)[0]},
+          fieldSpan: active.range[1] - active.range[0],
+        },
+
+        // MEASURED, renderer-side. Every one of these comes out of vtk.js's
+        // own objects, and page 14's comes out of Three.js's.
+        camera: {
+          fovDeg: cam.getViewAngle(), aspect, near, far,
+          // The two diagonal entries of the projection matrix, which depend
+          // only on fov and aspect and are therefore comparable across the
+          // two pages even though their clipping ranges differ (divergence
+          // #9). Diagonal entries are also transpose-invariant, so the two
+          // libraries' matrix conventions cannot make this pass or fail for
+          // the wrong reason.
+          projScaleX: projection[0], projScaleY: projection[5],
+          eye: cam.getPosition(), target: cam.getFocalPoint(), up: cam.getViewUp(),
+        },
+        surface: {
+          drawingBufferWidth: gl ? gl.drawingBufferWidth : null,
+          drawingBufferHeight: gl ? gl.drawingBufferHeight : null,
+          devicePixelRatio: window.devicePixelRatio,
+          cssWidth: Math.round(rect.width), cssHeight: Math.round(rect.height),
+          samples: canvasSamples,
+        },
+        // Where the volume and the slice actually are in THIS renderer's
+        // scene, read off the renderer's own objects rather than off the
+        // numbers they were built from: vtk.js derives these bounds from the
+        // image's dims/origin/spacing/direction, page 14 from the box mesh's
+        // real vertex data. A page that placed its volume wrong fails here.
+        volumeBounds: vb,
+        sliceBounds: sb,
+
+        depthTarget: null,
+        librarySample: (() => {
+          const rendererValue = active.image.getScalarValueFromWorld(nodeWorld);
+          return {world: nodeWorld, lib: nodeValue, renderer: rendererValue,
+                  delta: Math.abs(rendererValue - nodeValue)};
+        })(),
+        gpuSampleFloat: null,
+
+        parityNotes: [
+          'invariants.* compare src/lib with itself. Both pages call probeGridNode and sampleGridTrilinear on the '
+          + 'same Float32Array, so they are bit-identical by construction and can only fail if src/lib changes. '
+          + 'They are INVARIANTS, not evidence that the two renderers agree numerically.',
+          'depthTarget is null here and non-null on page 14 because vtk.js composites its volume against opaque '
+          + 'geometry inside one render pass and owns no page-visible depth target. Page 14 needs a depth-texture '
+          + 'prepass to do the same thing. Assert the null; it is a renderer difference, not a missing field.',
+          'gpuSampleFloat is null here and non-null on page 14: vtk.js 36.12.1 uploads its volume texture inside '
+          + 'vtkOpenGLVolumeMapper and exposes no supported way to read a sampled float back. What this page can '
+          + 'answer about its own GPU path is the rendered pixel (parity.pixelAt), which is what the suite uses on '
+          + 'both pages.',
+          'camera.projScaleX/projScaleY are each library\'s OWN projection matrix diagonal, and their absolute '
+          + 'scale is NOT comparable between the pages: measured, vtk.js\'s getProjectionMatrix returns an '
+          + 'unnormalised matrix (396.5 / 1031.6 where three returns 1.43 / 3.73 for the same 30 degree vertical '
+          + 'fov). Their RATIO is comparable and is the aspect ratio, which is what the suite compares.',
+          'librarySample is non-null here and null on page 14: vtkImageData.getScalarValueFromWorld is a second, '
+          + "library-owned world->value implementation. Three.js ships nothing of the kind, which is why page 14's "
+          + 'axis-order evidence is a GPU round trip instead.',
+        ],
+      };
+      return lastParity;
+    } catch (err) {
+      // After context loss vtk.js's teardown has removed the render window,
+      // and every read above throws. The last good snapshot is the honest
+      // answer; throwing here would stop onLost from ever rendering the
+      // visible failure panel.
+      return lastParity ?? {schema: 1, renderer: 'vtkjs', unavailable: (err as Error).message};
+    }
+  }
+
   // --- first frame ---------------------------------------------------------
   applyTransferFunctions();
   applySlice();
@@ -1127,6 +1518,23 @@ function build(ui: Ui, bundle: ScientificBundle, heatValues: Float32Array): void
       originZ: active.field.origin[2],
       nodeSpacingZ: active.field.spacing[2],
     }),
+    // The eleven parity primitives, identical in name and shape on page 14.
+    // tests/scientific.spec.ts asserts that these key sets match, so a primitive
+    // added to one page and not the other fails the suite instead of quietly
+    // making one of its comparisons untestable.
+    parity: {
+      begin: parityBegin,
+      end: parityEnd,
+      pickAt: parityPickAt,
+      pixelAt: parityPixelAt,
+      setVolumeVisible: parityVolumeVisible,
+      setStreamlinesVisible: parityStreamlinesVisible,
+      setBuildingsVisible: parityBuildingsVisible,
+      isolateVolume: parityIsolateVolume,
+      setSliceOpaque: paritySliceOpaque,
+      sampleCpu: paritySampleCpu,
+      framesRendered: () => benchmarkFrames,
+    },
   });
   ui.ready();
 }
@@ -1223,6 +1631,29 @@ function reportMeasurements(
     + 'does not record it. Adding it needs sample_field.py plus a regenerated scientific-manifest.json, whose dependency '
     + 'record hashes field.grid.json; that is an artifact-regeneration task, not a page change.');
 
+  ui.probe('TASK 7 PARITY SURFACE, published as window.__bench.probe.parity with the same shape on both pages, '
+    + 'plus the primitives window.__bench.parity.{begin, end, pickAt, pixelAt, setVolumeVisible, '
+    + 'setStreamlinesVisible, setBuildingsVisible, isolateVolume, setSliceOpaque, sampleCpu, framesRendered}. '
+    + 'READ THE SPLIT, because it is the whole point of the object: parity.invariants.* (the fixed grid node and '
+    + 'its float32 bits, the interpolated value, the field span) compare src/lib WITH ITSELF -- both pages read '
+    + 'the same Float32Array through the same probeGridNode and interpolate through the same sampleGridTrilinear, '
+    + 'so they are bit-identical by construction, cannot fail unless src/lib changes, and are NOT evidence that '
+    + 'the two renderers agree numerically. Everything else in the object is measured off this renderer\'s own '
+    + 'objects: the camera and its projection, the drawing surface and its sample count, where the volume and the '
+    + 'slice actually sit in this scene, and the library\'s own world->value answer. Where a field is null the '
+    + 'other renderer has something this one genuinely has not, and parityNotes says which and why -- the suite '
+    + 'asserts the nulls rather than skipping them.');
+  ui.probe('What the parity suite (tests/scientific.spec.ts) actually compares between the two renderers, as '
+    + 'opposed to what merely looks comparable: a REAL ray-cast pick at the same fraction of the same pinned '
+    + '1280x720 surface under the same camera (vtkCellPicker on page 13, Raycaster.faceIndex on page 14 -- two '
+    + 'independent '
+    + 'intersection implementations over one index space); the PIXEL each renderer\'s own shader wrote for a '
+    + 'known world point on the slice plane, against the shared colormap\'s answer; the volume accumulated along '
+    + 'a ray with and without an opaque building in it, measured against a black background so the number is the '
+    + 'volume\'s own contribution and not partly the background\'s; GL-object growth over 100 control cycles and '
+    + 'ten resizes, bounded PER RENDERER because the two genuinely differ; and what each library tears down when '
+    + 'the context is lost. selectCell(id) compared between the pages is none of these -- it is the shared lookup '
+    + 'compared with itself.');
   ui.probe(`GPU timing: EXT_disjoint_timer_query_webgl2 ${extras.gpuTimer ? 'available — gpuFrameTimesMs will be recorded' : 'unavailable — gpuFrameTimesMs stays null'}. `
     + 'Run window.__bench.runBenchmark() for orbit-v1 (30 warmup + 180 forced frames). cpuFrameTimesMs is wall time for a '
     + 'COMPLETED frame: each forced render ends in a one-pixel readback, because gl.finish() alone returns before the '
