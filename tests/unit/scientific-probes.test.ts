@@ -619,3 +619,358 @@ describe('orbitV1Pose ships the eye position with the pose', () => {
     expect(Math.abs(pose.eye[1] - pose.target[1])).toBeLessThan(1e-9);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Task 8: the pure aggregation layer in scripts/measure-scientific.ts.
+//
+// READ THE TWO RESOLUTIONS BEFORE ADDING AN ASSERTION HERE.
+//
+// (a) WARMUP EXCLUSION IS NOT TESTED AT THIS LAYER, BECAUSE IT CANNOT BE.
+//     createBenchmarkDriver already drops the 30 warmup frames -- its second
+//     loop starts at ORBIT_V1.warmupFrames -- so `cpuFrameTimesMs` arrives 180
+//     long and an aggregator that asserted "180 came out" would be testing the
+//     driver, not itself. The brief offered two honest resolutions; this file
+//     takes the SECOND. What the aggregator owns is a VALIDITY GATE, and it is
+//     labelled one: a CPU sample array whose length is not exactly
+//     ORBIT_V1.forcedFrames REJECTS THE RUN instead of being aggregated. That
+//     is a real decision with a real caller -- a stopped or context-lost run
+//     really does return a short array (see the driver's own stop() tests
+//     above) -- and the tests below have power over it: delete the gate, widen
+//     it to `>= 1`, or let it aggregate a short array and they fail.
+//     The first resolution (hand the aggregator all 210 samples plus a warmup
+//     count) was rejected on measurement, not taste: nothing in this repo can
+//     produce a 210-sample array. The driver never returns one and neither page
+//     publishes one, so that interface would exist only for its own test.
+//
+// (b) DISJOINT REJECTION IS LIKEWISE THE DRIVER'S, so it is not re-tested here.
+//     What the aggregator owns is the decision ABOUT a short GPU array: how
+//     many samples survived, at what rejection rate the GPU p50 stops being
+//     quotable, and the difference between "no timer on this browser" (null)
+//     and "the timer ran and every sample was disjoint" (present, empty). That
+//     needs the driver's lastGpuSampleStats(), which is why both pages now
+//     publish it.
+//
+// Every test states what could make it fail. None of them can be satisfied by
+// editing src/lib alone -- test 1 is the single deliberate exception, and it
+// exists precisely to fail when src/lib changes under the script.
+
+import {
+  aggregateCpuFrames,
+  aggregateGpuFrames,
+  classifyFps,
+  FPS_FAIL_BELOW,
+  FPS_TARGET_MIN,
+  GPU_MAX_REJECTION_RATE,
+  judgeRun,
+  percentile,
+  REQUIRED_CPU_SAMPLES,
+  type RunObservation,
+} from '../../scripts/measure-scientific';
+
+/** A run that passes every gate, so each test below can break exactly one thing. */
+function goodRun(over: Partial<RunObservation> = {}): RunObservation {
+  return {
+    renderer: 'threejs',
+    status: 'ready',
+    measurementValid: true,
+    // 180 samples, deliberately NOT all equal: an aggregator that returned
+    // samples[0] for every statistic would pass on a constant array.
+    cpuFrameTimesMs: Array.from({length: REQUIRED_CPU_SAMPLES}, (_, i) => 100 + i),
+    gpuFrameTimesMs: Array.from({length: REQUIRED_CPU_SAMPLES}, () => 5),
+    gpuSampleStats: {kept: REQUIRED_CPU_SAMPLES, rejected: 0},
+    renderSurfaceBenchmark: {phase: 'benchmark', drawingBufferWidth: 1280, drawingBufferHeight: 720},
+    resourceGrowth: {},
+    ...over,
+  };
+}
+
+describe('measure-scientific: the driver contract this script is pinned to', () => {
+  test('REQUIRED_CPU_SAMPLES is the driver\'s own forcedFrames, not a copy that can drift', () => {
+    // WHAT COULD MAKE THIS FAIL: ORBIT_V1.forcedFrames changing in src/lib
+    // without the script's gate following it. That is the ONE thing this file
+    // wants to hear about from src/lib, which is why the constant is written
+    // out as a literal in the script and compared here rather than imported.
+    expect(REQUIRED_CPU_SAMPLES).toBe(ORBIT_V1.forcedFrames);
+    expect(REQUIRED_CPU_SAMPLES).toBe(180);
+  });
+});
+
+describe('measure-scientific: percentile (nearest-rank, numeric, non-mutating)', () => {
+  test('p50 and p95 of 1..100 are exactly 50 and 95', () => {
+    // WHAT COULD MAKE THIS FAIL: an off-by-one in the nearest-rank index, or a
+    // default Array.prototype.sort (lexicographic: 1, 10, 100, 11, ... would
+    // put 55 at rank 50 and 91 at rank 95, not 50 and 95).
+    const values = Array.from({length: 100}, (_, i) => i + 1);
+    expect(percentile(values, 50)).toBe(50);
+    expect(percentile(values, 95)).toBe(95);
+    expect(percentile(values, 100)).toBe(100);
+  });
+
+  test('order of the input does not matter, and the caller\'s array is not reordered', () => {
+    // WHAT COULD MAKE THIS FAIL: sorting in place. The script writes the raw
+    // cpuFrameTimesMs into the JSON record AFTER aggregating it, so an
+    // in-place sort would publish a sorted "per-frame" series -- a number that
+    // is right and a series that is a lie.
+    const values = [30, 10, 20, 50, 40];
+    expect(percentile(values, 50)).toBe(30);
+    expect(values).toEqual([30, 10, 20, 50, 40]);
+  });
+
+  test('a single sample is its own every percentile', () => {
+    // WHAT COULD MAKE THIS FAIL: a nearest-rank index that goes negative or
+    // past the end on n === 1.
+    expect(percentile([7], 50)).toBe(7);
+    expect(percentile([7], 95)).toBe(7);
+  });
+});
+
+describe('measure-scientific: classifyFps (the spec\'s two boundaries, tested ON them)', () => {
+  test('the boundaries are the spec\'s 20 and 30, not a rounded pair', () => {
+    // WHAT COULD MAKE THIS FAIL: someone retuning the thresholds to fit a
+    // measurement instead of the spec.
+    expect(FPS_FAIL_BELOW).toBe(20);
+    expect(FPS_TARGET_MIN).toBe(30);
+  });
+
+  test('exactly 30.0 meets the target; exactly 20.0 is qualified, not a failure', () => {
+    // WHAT COULD MAKE THIS FAIL: `> 30` instead of `>= 30`, or `<= 20` instead
+    // of `< 20`. Both are one character and both move a published verdict.
+    expect(classifyFps(30.0)).toBe('meets-target');
+    expect(classifyFps(20.0)).toBe('qualified');
+  });
+
+  test('either side of each boundary lands in the neighbouring band', () => {
+    // WHAT COULD MAKE THIS FAIL: the bands being ordered wrongly, or the
+    // middle band collapsing so that anything under 30 reads as a failure.
+    expect(classifyFps(19.999)).toBe('fails-interactive-mvp');
+    expect(classifyFps(20.001)).toBe('qualified');
+    expect(classifyFps(29.999)).toBe('qualified');
+    expect(classifyFps(30.001)).toBe('meets-target');
+  });
+});
+
+describe('measure-scientific: aggregateCpuFrames', () => {
+  test('p50, p95, min, max and mean are each read from the right place', () => {
+    // WHAT COULD MAKE THIS FAIL: any two of these wired to the same
+    // expression. 1..180 makes every one of them a different number, so a
+    // min/p50 or p95/max mix-up cannot hide.
+    const cpu = aggregateCpuFrames(Array.from({length: 180}, (_, i) => i + 1));
+    expect(cpu.n).toBe(180);
+    expect(cpu.min).toBe(1);
+    expect(cpu.max).toBe(180);
+    expect(cpu.p50).toBe(90);
+    expect(cpu.p95).toBe(171);
+    expect(cpu.mean).toBeCloseTo(90.5, 9);
+  });
+
+  test('minSustainedFps is 1000/p95 -- the rate held for 95% of frames, not the best frame', () => {
+    // WHAT COULD MAKE THIS FAIL: minSustainedFps computed from p50 (it would
+    // read 20 here, not 10) or from the mean. A 50 ms floor with a 100 ms tail
+    // separates all three, which a constant array would not.
+    const cpu = aggregateCpuFrames([...Array(171).fill(50), ...Array(9).fill(100)]);
+    expect(cpu.p50).toBe(50);
+    expect(cpu.p95).toBe(50);
+    expect(cpu.minSustainedFps).toBeCloseTo(20, 9);
+  });
+
+  test('a 50 ms p95 is exactly 20.0 FPS and lands on the qualified side of the boundary', () => {
+    // WHAT COULD MAKE THIS FAIL: a millisecond/second conversion error (1/50
+    // rather than 1000/50), which would report 0.02 FPS and classify every run
+    // as a failure. 50 ms is chosen because 1000/50 is exact in binary
+    // floating point, so this sits ON the boundary rather than near it.
+    const cpu = aggregateCpuFrames(Array(180).fill(50));
+    expect(cpu.minSustainedFps).toBe(20);
+    expect(cpu.fpsVerdict).toBe('qualified');
+  });
+
+  test('a 33 ms p95 clears 30 FPS and a 60 ms p95 fails the interactive-MVP floor', () => {
+    // WHAT COULD MAKE THIS FAIL: the verdict being computed from something
+    // other than minSustainedFps, or the classification being inverted.
+    expect(aggregateCpuFrames(Array(180).fill(33)).fpsVerdict).toBe('meets-target');
+    expect(aggregateCpuFrames(Array(180).fill(60)).fpsVerdict).toBe('fails-interactive-mvp');
+  });
+
+  test('refuses an empty sample array instead of publishing NaN', () => {
+    // WHAT COULD MAKE THIS FAIL: percentile of nothing returning undefined and
+    // 1000/undefined reaching the document as NaN FPS.
+    expect(() => aggregateCpuFrames([])).toThrow();
+  });
+});
+
+describe('measure-scientific: aggregateGpuFrames (what the aggregator genuinely owns)', () => {
+  test('no GPU timer at all is null-and-unavailable, never zero', () => {
+    // WHAT COULD MAKE THIS FAIL: a `?? 0` anywhere on this path. A browser
+    // without EXT_disjoint_timer_query_webgl2 must produce an absent number,
+    // not a 0 ms GPU frame time that would read as the fastest result in the
+    // table.
+    const gpu = aggregateGpuFrames(null, null);
+    expect(gpu.available).toBe(false);
+    expect(gpu.quotable).toBe(false);
+    expect(gpu.p50).toBeNull();
+    expect(gpu.p95).toBeNull();
+    expect(gpu.kept).toBe(0);
+    expect(gpu.reason).toBeTruthy();
+  });
+
+  test('"the timer ran and kept nothing" is a DIFFERENT verdict from "there was no timer"', () => {
+    // WHAT COULD MAKE THIS FAIL: keying the availability decision on
+    // `samples.length === 0` instead of on gpuSampleStats. That is the exact
+    // conflation Deviation 2 exists to remove, and before gpuSampleStats was
+    // published a caller outside the page could not tell these two apart at
+    // all. Both cases yield a null p50; only the reason and `available`
+    // separate them.
+    const noTimer = aggregateGpuFrames(null, null);
+    const allDisjoint = aggregateGpuFrames([], {kept: 0, rejected: 180});
+    expect(allDisjoint.available).toBe(true);
+    expect(allDisjoint.quotable).toBe(false);
+    expect(allDisjoint.rejected).toBe(180);
+    expect(allDisjoint.rejectionRate).toBe(1);
+    expect(noTimer.available).toBe(false);
+    expect(noTimer.rejectionRate).toBeNull();
+    expect(allDisjoint.reason).not.toBe(noTimer.reason);
+  });
+
+  test('a clean run quotes p50 and p95 off the kept samples only', () => {
+    // WHAT COULD MAKE THIS FAIL: the rejected samples being zero-filled back
+    // into the series (the p50 would fall) or the percentile being taken over
+    // the CPU array by mistake.
+    const gpu = aggregateGpuFrames(Array.from({length: 100}, (_, i) => i + 1), {kept: 100, rejected: 0});
+    expect(gpu.available).toBe(true);
+    expect(gpu.quotable).toBe(true);
+    expect(gpu.p50).toBe(50);
+    expect(gpu.p95).toBe(95);
+    expect(gpu.rejectionRate).toBe(0);
+  });
+
+  test('the quotable threshold is a boundary, and it is tested ON it', () => {
+    // WHAT COULD MAKE THIS FAIL: `>=` where `>` belongs, which would throw
+    // away a run sitting exactly at the documented rate. 162/18 of 180 is
+    // exactly 0.1, so this is the boundary itself and not a value near it.
+    expect(GPU_MAX_REJECTION_RATE).toBe(0.1);
+    const atThreshold = aggregateGpuFrames(Array(162).fill(4), {kept: 162, rejected: 18});
+    expect(atThreshold.rejectionRate).toBeCloseTo(0.1, 12);
+    expect(atThreshold.quotable).toBe(true);
+    const overThreshold = aggregateGpuFrames(Array(161).fill(4), {kept: 161, rejected: 19});
+    expect(overThreshold.rejectionRate).toBeGreaterThan(GPU_MAX_REJECTION_RATE);
+    expect(overThreshold.quotable).toBe(false);
+    expect(overThreshold.p50).toBeNull();
+  });
+
+  test('stats and samples that disagree are a defect, not a number to publish', () => {
+    // WHAT COULD MAKE THIS FAIL: a page publishing gpuSampleStats from a
+    // different snapshot than the benchmark array it publishes beside it --
+    // the precise way Deviation 2 could go wrong on one page and not the
+    // other. The aggregator refuses rather than quoting a p50 over samples
+    // whose provenance it cannot confirm.
+    const mismatched = aggregateGpuFrames(Array(100).fill(4), {kept: 120, rejected: 60});
+    expect(mismatched.quotable).toBe(false);
+    expect(mismatched.p50).toBeNull();
+    expect(mismatched.reason).toMatch(/kept/);
+  });
+});
+
+describe('measure-scientific: judgeRun (the validity gate and the run-rejection rules)', () => {
+  test('a clean run is accepted, with no rejections and a real CPU aggregate', () => {
+    // WHAT COULD MAKE THIS FAIL: any gate firing on a good run, which would
+    // make `measure:scientific` reject everything and publish nothing.
+    const verdict = judgeRun(goodRun());
+    expect(verdict.rejections).toEqual([]);
+    expect(verdict.accepted).toBe(true);
+    expect(verdict.cpu!.n).toBe(180);
+    expect(verdict.cpu!.min).toBe(100);
+  });
+
+  test('THE VALIDITY GATE: a CPU array that is not exactly forcedFrames long rejects the run', () => {
+    // WHAT COULD MAKE THIS FAIL: the gate being deleted, or widened to a
+    // minimum. This is a gate and not "warmup exclusion" -- the driver already
+    // did the exclusion. It has a real caller: a run interrupted by context
+    // loss resolves with a SHORT array and measurementValid false, and a run
+    // whose driver contract changed would arrive long.
+    const short = judgeRun(goodRun({cpuFrameTimesMs: Array(179).fill(150)}));
+    expect(short.accepted).toBe(false);
+    expect(short.rejections.join(' ')).toMatch(/179/);
+    expect(short.cpu).toBeNull();
+    const long = judgeRun(goodRun({cpuFrameTimesMs: Array(181).fill(150)}));
+    expect(long.accepted).toBe(false);
+    expect(long.rejections.join(' ')).toMatch(/181/);
+  });
+
+  test('a short run is never aggregated on the way to being rejected', () => {
+    // WHAT COULD MAKE THIS FAIL: computing the statistics first and gating
+    // afterwards. A p50 over 12 frames that reaches the JSON is a number the
+    // document could quote even though the run was rejected.
+    expect(judgeRun(goodRun({cpuFrameTimesMs: [150, 151, 152]})).cpu).toBeNull();
+  });
+
+  test('status and measurementValid are each independently fatal', () => {
+    // WHAT COULD MAKE THIS FAIL: only one of the two being checked. They are
+    // NOT redundant: attachContextLoss sets both, but a page that failed to
+    // reach ready never sets measurementValid false at all.
+    expect(judgeRun(goodRun({status: 'context-lost'})).accepted).toBe(false);
+    expect(judgeRun(goodRun({status: 'failed'})).accepted).toBe(false);
+    expect(judgeRun(goodRun({measurementValid: false})).accepted).toBe(false);
+  });
+
+  test('THE SURFACE IS ASSERTED, NOT TRUSTED: anything but the pinned 1280x720 rejects', () => {
+    // WHAT COULD MAKE THIS FAIL: the surface being footnoted instead of
+    // gated. 1280x800 is the realistic wrong value -- it is the harness's own
+    // viewport, which is what a page that never pinned the benchmark surface
+    // would report -- so this is the failure that would actually happen.
+    const wrong = judgeRun(goodRun({
+      renderSurfaceBenchmark: {phase: 'benchmark', drawingBufferWidth: 1280, drawingBufferHeight: 800},
+    }));
+    expect(wrong.accepted).toBe(false);
+    expect(wrong.rejections.join(' ')).toMatch(/1280x800/);
+  });
+
+  test('a missing record, or one from the interactive phase, is not a surface proof', () => {
+    // WHAT COULD MAKE THIS FAIL: reading the rolling `renderSurface` key,
+    // which runBenchmark's finally block overwrites with the interactive
+    // record moments after the run -- so a page could pass this check while
+    // its 1280x720 evidence had already been clobbered.
+    expect(judgeRun(goodRun({renderSurfaceBenchmark: null})).accepted).toBe(false);
+    expect(judgeRun(goodRun({
+      renderSurfaceBenchmark: {phase: 'interactive', drawingBufferWidth: 1280, drawingBufferHeight: 720},
+    })).accepted).toBe(false);
+  });
+
+  test('resource growth over the no-resize stability cycles rejects the run', () => {
+    // WHAT COULD MAKE THIS FAIL: the growth check being dropped. Note the
+    // input is growth across CONTROL cycles with no resize in them -- vtk.js's
+    // measured per-resize leak is a RESULT and is recorded separately, so
+    // feeding resize growth in here would reject every vtk.js run and turn a
+    // finding into an outage.
+    const grew = judgeRun(goodRun({resourceGrowth: {textures: 1}}));
+    expect(grew.accepted).toBe(false);
+    expect(grew.rejections.join(' ')).toMatch(/textures/);
+    expect(judgeRun(goodRun({resourceGrowth: {textures: 0}})).accepted).toBe(true);
+  });
+
+  test('a GPU rejection rate past the threshold rejects the run; no timer at all does not', () => {
+    // WHAT COULD MAKE THIS FAIL: treating an absent timer as a 100% rejection
+    // rate, which would reject every run on a browser that simply does not
+    // expose EXT_disjoint_timer_query_webgl2 and leave the script with nothing
+    // to publish.
+    const noisy = judgeRun(goodRun({gpuFrameTimesMs: Array(100).fill(4), gpuSampleStats: {kept: 100, rejected: 80}}));
+    expect(noisy.accepted).toBe(false);
+    expect(noisy.rejections.join(' ')).toMatch(/rejection rate/i);
+    const noTimer = judgeRun(goodRun({gpuFrameTimesMs: null, gpuSampleStats: null}));
+    expect(noTimer.accepted).toBe(true);
+    expect(noTimer.gpu.available).toBe(false);
+  });
+
+  test('every reason a run was rejected is reported, not just the first one found', () => {
+    // WHAT COULD MAKE THIS FAIL: an early return. A run that is short AND at
+    // the wrong surface would otherwise be reported as one problem, and the
+    // second would be rediscovered only after the first was fixed.
+    const verdict = judgeRun(goodRun({
+      status: 'failed',
+      measurementValid: false,
+      cpuFrameTimesMs: Array(12).fill(150),
+      renderSurfaceBenchmark: {phase: 'benchmark', drawingBufferWidth: 900, drawingBufferHeight: 198},
+      resourceGrowth: {textures: 3},
+    }));
+    expect(verdict.accepted).toBe(false);
+    expect(verdict.rejections.length).toBeGreaterThanOrEqual(5);
+  });
+});

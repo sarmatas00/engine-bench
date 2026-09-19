@@ -14,7 +14,8 @@
     "test:unit": "bun test tests/unit",
     "test:scientific:python": ".venv/bin/python -m pytest scripts/scientific/tests -q",
     "test": "bun run test:unit && bun test scripts/scientific/validate.test.ts && bun run test:scientific:python && bun run build && playwright test",
-    "build:pages": "PAGES_BASE=/engine-bench/ bun run build"
+    "build:pages": "PAGES_BASE=/engine-bench/ bun run build",
+    "measure:scientific": "bun run build:pages && bun scripts/measure-scientific.ts"
   },
   "dependencies": {
     "@deck.gl/core": "9.4.0",

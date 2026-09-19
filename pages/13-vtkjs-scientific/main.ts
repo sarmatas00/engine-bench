@@ -650,6 +650,25 @@ function build(ui: Ui, bundle: ScientificBundle, heatValues: Float32Array): void
     // removes the canvas, and a stale 1 here would be the page reporting a
     // canvas that no longer exists.
     probe.canvasCount = ui.canvasHost.querySelectorAll('canvas').length;
+    // The driver's own kept/rejected GPU tally, {kept, rejected} or null, read
+    // from THIS publish() so it can never describe a different run from the
+    // benchmark array published beside it. Page 14 publishes the same key with
+    // the same shape, in the same commit -- this field on one page only would
+    // be worse than no field, because a comparison would silently read one
+    // page's stats against the other's absence.
+    //
+    // Why it exists: ScientificProbe.benchmark.gpuFrameTimesMs alone cannot
+    // separate "the timer ran and every sample was disjoint" (empty array)
+    // from "this browser has no EXT_disjoint_timer_query_webgl2" (null), and
+    // an outside caller can see only that the GPU array is shorter than the
+    // CPU one. Task 8 has to reject a run whose GPU samples are mostly
+    // disjoint and publish `null` for a browser with no timer at all, and
+    // those are different decisions. lastGpuSampleStats() is the only thing
+    // that tells them apart, and src/lib already computes it -- it was simply
+    // never published. Not added to ScientificProbe itself: that contract is
+    // src/lib's and this task does not own it, so it goes beside it exactly
+    // as glObjects does.
+    ui.setProbe('gpuSampleStats', driver.lastGpuSampleStats());
     // The parity surface, refreshed on the same schedule as everything else
     // so Task 7 never reads a camera or a surface from before the last
     // control, resize or benchmark. Page 14 publishes it from its own
