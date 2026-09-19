@@ -2084,6 +2084,14 @@ function build(ui: Ui, bundle: ScientificBundle, heatValues: Float32Array): void
         caseId: active.id,
         colourRange: activeColourRange(),
         sliceRequestedZ: sliceHeightM,
+        // The two control-driven scene states that nothing else publishes.
+        // Without them a suite can prove a control's CALLBACK ran and not that
+        // it reached the scene: 100 cycles of opacity and streamline toggling
+        // would look identical whether the handlers were wired to the renderer
+        // or to nothing at all. Read live off the mesh and the uniform, not
+        // off the variable the handler set.
+        opacityScale: uOpacityScale.value,
+        streamlinesVisible: streamlineMesh.visible,
 
         // INVARIANTS. Both pages read the same Float32Array through the same
         // probeGridNode and interpolate through the same sampleGridTrilinear,
@@ -2116,7 +2124,14 @@ function build(ui: Ui, bundle: ScientificBundle, heatValues: Float32Array): void
           drawingBufferWidth: gl.drawingBufferWidth,
           drawingBufferHeight: gl.drawingBufferHeight,
           devicePixelRatio: window.devicePixelRatio,
-          cssWidth: Math.round(rect.width), cssHeight: Math.round(rect.height),
+          // EXACT, not rounded. Rounding hid the one case that does not
+          // hold: the host is 492.67 css px tall at a 1280x800 viewport, so
+          // a rounded 493 against a 492-pixel buffer made
+          // `buffer === css * dpr` look false when it is the rounding that
+          // is false. The two pages also floor at different points (page 13
+          // floors width*dpr, page 14 floors width and then multiplies),
+          // which is a page difference worth being able to see.
+          cssWidth: rect.width, cssHeight: rect.height,
           samples: canvasSamples,
         },
         // Where the volume and the slice actually are in THIS renderer's
@@ -2142,10 +2157,12 @@ function build(ui: Ui, bundle: ScientificBundle, heatValues: Float32Array): void
           'invariants.* compare src/lib with itself. Both pages call probeGridNode and sampleGridTrilinear on the '
           + 'same Float32Array, so they are bit-identical by construction and can only fail if src/lib changes. '
           + 'They are INVARIANTS, not evidence that the two renderers agree numerically.',
-          'depthTarget is non-null here and null on page 13 because Three.js has no volume renderer and no automatic '
-          + 'depth interaction: this page renders the opaque scene into an offscreen target with a depth texture and '
-          + 'stops each volume ray at that depth, where vtk.js composites inside one pass. Assert the null on page '
-          + '13; it is a renderer difference, not a missing field.',
+          'depthTarget is non-null here and null on page 13 because page 13 owns no PAGE-LEVEL depth target -- NOT '
+          + 'because vtk.js does without one. Both renderers use THE SAME MECHANISM: opaque geometry into a depth '
+          + 'texture, each volume ray clamped against it. vtkOpenGLVolumeMapper does it inside the library (the '
+          + '//VTK::ZBuffer::Impl substitution, dists.y = min(zdepth, dists.y)); this page does it by hand with an '
+          + 'offscreen target, a DepthTexture and a reconstructed view distance. What differs is VENDORED versus '
+          + 'HAND-WRITTEN, which is a maintenance-burden fact and not an architectural one.',
           'gpuSampleFloat is non-null here and null on page 13: this page can run its own sampler GLSL against its '
           + 'own uploaded texture and read the float back, and vtk.js 36.12.1 exposes no supported equivalent. The '
           + 'GPU evidence the suite compares on BOTH pages is the rendered pixel (parity.pixelAt).',
@@ -2517,10 +2534,15 @@ function reportMeasurements(
     + '1. FORCED — volume rendering. vtk.js ships vtkVolumeMapper; Three.js ships no volume renderer at all. The '
     + 'front-to-back compositor, its opacity ramp (the same 0 / 0.05*scale / 0.6*scale piecewise function page 13 '
     + `hands vtkPiecewiseFunction) and its ${VOLUME_STEP_M} m step (page 13's setSampleDistance(${VOLUME_STEP_M})) are written here.\n`
-    + '2. FORCED — depth interaction. vtk.js composites its volume against opaque geometry inside one render pass. '
-    + 'Here terrain, buildings, streamlines and the slice render into an offscreen target with a depth texture, that '
-    + 'colour is blitted to the canvas, and the volume shader reconstructs the opaque view distance and stops each ray '
-    + 'there. One WebGLRenderer, one canvas, two passes.\n'
+    + '2. FORCED, and CORRECTED at review — depth interaction. The first version of this entry said vtk.js '
+    + '"composites its volume against opaque geometry inside one render pass", implying it needs no depth prepass '
+    + 'and this page invented one. THAT IS WRONG, and it is the kind of wrong that becomes a maintenance-burden '
+    + 'conclusion: vtkOpenGLVolumeMapper renders opaque geometry to a depth texture and clamps every ray against '
+    + 'it in the //VTK::ZBuffer::Impl substitution, dists.y = min(zdepth, dists.y). BOTH RENDERERS USE THE SAME '
+    + 'MECHANISM. What is forced here is writing it: terrain, buildings, streamlines and the slice render into an '
+    + 'offscreen target with a depth texture, that colour is blitted to the canvas, and the volume shader '
+    + 'reconstructs the opaque view distance and stops each ray there. One WebGLRenderer, one canvas, two passes. '
+    + 'The honest burden statement is VENDORED versus HAND-WRITTEN, not "vtk.js does not need this".\n'
     + `3. NOT a divergence any more, and the correction that matters most on this page: the offscreen opaque target `
     + `is multisampled at the canvas's own sample count (measured ${extras.opaqueTargetSamples}, read from `
     + 'gl.SAMPLES rather than hard-coded), so terrain, buildings and streamlines are rasterized here with exactly '

@@ -429,6 +429,34 @@ export type BenchmarkDriver = {
   lastGpuSampleStats(): {kept: number; rejected: number} | null;
 };
 
+/**
+ * One real macrotask, awaited once per frame by `runBenchmark`.
+ *
+ * `renderFrame` is synchronous on both renderer pages, so `await
+ * opts.renderFrame(pose)` yields only a MICROTASK -- and microtasks do not let
+ * the event loop deliver events. Before this existed the only macrotask in a
+ * whole 210-frame run was the `setTimeout(0)` inside `GpuTimer.readResult`,
+ * which meant two things, both measured rather than reasoned about:
+ *
+ *  - On a browser with no `EXT_disjoint_timer_query_webgl2` there is no
+ *    GpuTimer at all, so the loop never returns to the event loop, a queued
+ *    `webglcontextlost` is starved until the run ends, and `stop()` stops
+ *    nothing. MEASURED ON FIREFOX: both scientific pages returned all 180
+ *    frames AFTER their context was forcibly lost, so "sampling stops on
+ *    context loss" was true on chromium and false on firefox.
+ *  - Even WITH a GpuTimer the interruption was incidental: `readResult` only
+ *    reaches its `setTimeout(0)` when the query is not ready on the first
+ *    poll, so nothing guaranteed a yield on chromium either.
+ *
+ * Awaited at the END of each frame, after the frame has been timed and its
+ * GPU sample read, so it is outside the `t0..t1` window and cannot inflate
+ * `cpuFrameTimesMs`. Confirmed on chromium/SwiftShader over three isolated
+ * runs per page before and after this change: the p50s moved inside their own
+ * run-to-run spread and the CPU/GPU agreement (the signature of a frame that
+ * was actually waited on) held.
+ */
+const yieldToEventLoop = () => new Promise<void>(resolve => setTimeout(resolve, 0));
+
 export function createBenchmarkDriver(opts: BenchmarkDriverOptions): BenchmarkDriver {
   const now = opts.now ?? (() => performance.now());
   let stopped = false;
@@ -447,6 +475,7 @@ export function createBenchmarkDriver(opts: BenchmarkDriverOptions): BenchmarkDr
 
       for (let f = 0; f < ORBIT_V1.warmupFrames && !stopped; f++) {
         await opts.renderFrame(orbitV1Pose(f));
+        await yieldToEventLoop();
       }
 
       const cpuFrameTimesMs: number[] = [];
@@ -467,6 +496,11 @@ export function createBenchmarkDriver(opts: BenchmarkDriverOptions): BenchmarkDr
           if (sample && !sample.disjoint) { gpuFrameTimesMs.push(sample.ms); gpuStats!.kept++; }
           else gpuStats!.rejected++;
         }
+        // AFTER the frame has been timed and its GPU sample read, so the
+        // yield is outside the measurement window and cannot inflate
+        // cpuFrameTimesMs. Verified by measurement, not by argument -- see
+        // yieldToEventLoop.
+        await yieldToEventLoop();
       }
 
       return {

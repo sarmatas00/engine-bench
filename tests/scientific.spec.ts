@@ -24,8 +24,15 @@
  *   2. GPU-SAMPLED VALUES — what each renderer's own shader read out of its own
  *      texture upload and wrote into its own drawing buffer, against CPU truth.
  *   3. OCCLUSION — the same ray with and without an opaque building in it.
- *      vtk.js composites inside one pass; page 14 runs a depth-texture prepass.
- *      Different mechanisms, comparable outcome.
+ *      CORRECTED AT REVIEW: this said "genuinely different mechanisms". It is
+ *      the SAME mechanism on both — opaque geometry into a depth texture, the
+ *      volume ray clamped against it. vtk.js does it inside the library
+ *      (vtkOpenGLVolumeMapper's //VTK::ZBuffer::Impl substitution,
+ *      `dists.y = min(zdepth,dists.y)`); page 14 does it by hand with an
+ *      offscreen target and a reconstructed view distance. What differs is
+ *      VENDORED versus HAND-WRITTEN, which is a maintenance-burden fact and
+ *      not an architectural one. Task 9 must not claim vtk.js needs no depth
+ *      prepass.
  *   4. RESOURCE BEHAVIOUR over 100 deterministic cycles, already measured to
  *      differ (vtk.js leaks per drawing-buffer resize, Three.js does not).
  *   5. CONTEXT-LOSS teardown, where the two libraries differ.
@@ -84,10 +91,33 @@ const PICK_RAYS: Array<[number, number]> = [
  * The GPU-value probes. Each is a world point ON the slice plane; the pose
  * targets it, so the ray through the centre pixel of the pinned surface hits
  * the plane exactly there and the world point is known without asking either
- * page for it. Offsets are fractions of the grid's own x/y span, filled in
- * from the page's published volumeBounds.
+ * page for it. Offsets are fractions of the ACTIVE case's own x/y span, taken
+ * from that case's published volumeBounds.
+ *
+ * Run over ALL THREE CASES, which is not decoration. smoke.speed is
+ * BIT-IDENTICALLY Z-INVARIANT on this tile -- moving a sample 1.29 m in z
+ * changes it by 8.9e-16 and the drawn colour by 0 of 255 -- so a comparison
+ * that only ever ran on it had no power whatever over the z axis, the exact
+ * axis Task 5's review singled out ("cross-check on PRESSURE, never speed").
+ * The same 1.29 m moves pressure by 1-2 and heat by 9, both outside the 2/255
+ * tolerance below. The heat case also puts the real dtcc-sim grid -- different
+ * dims, origin, spacing and a separate upload -- under the pixel comparison,
+ * which the brief named and the first version of this suite never reached.
+ *
+ * The offsets were chosen by measurement so that EVERY probe can see the
+ * colour-window defect this comparison found, on every case. The centre of the
+ * grid cannot: smoke.speed reads 0.249 there against a 0.18..11.21 range, so
+ * the correct ramp position (0.006) and the defect's (0.001) round to the same
+ * colour, and a probe there passed with the fix reverted.
  */
-const SLICE_PROBES: Array<[number, number]> = [[0, 0], [0.25, -0.2], [-0.3, 0.3]];
+const SLICE_PROBES: Array<[number, number]> = [[-0.4, -0.1], [0.25, -0.2], [-0.3, 0.3]];
+/**
+ * Colour-range fractions the comparison runs at. The default window plus a
+ * narrowed one, because the colour-window defect was found and fixed at the
+ * DEFAULT range only -- a re-break confined to non-default windows would have
+ * passed a regression test that never moved the sliders.
+ */
+const SLICE_WINDOWS: Array<[number, number]> = [[0, 1], [0.2, 0.8]];
 const SLICE_POSE = {radius: 420, elevationDeg: 75, azimuthDeg: 35};
 
 /**
@@ -95,30 +125,52 @@ const SLICE_POSE = {radius: 420, elevationDeg: 75, azimuthDeg: 35};
  * three stated criteria, not by looking for ones that pass:
  *   (a) both pages' pickers report a building hit at the same distance;
  *   (b) with the buildings hidden the pixel is the CLEAR BACKGROUND on both
- *       pages — so the building is the ray's only opaque occluder, and hiding
+ *       pages -- so the building is the ray's only opaque occluder, and hiding
  *       it lengthens the volume path all the way to the far wall of the box;
- *   (c) the lit building face is not near-black, because the measure is a
- *       colour difference and a near-black background inflates it (measured:
- *       one candidate ray sits on a face vtk.js renders at rgb 3,3,3 and its
- *       ratio inverts).
- * Two adjacent rays — one hitting a building, one missing it — were tried
+ *   (c) the lit building face is not near-black, because an earlier version of
+ *       this measure was a colour difference and a near-black background
+ *       inflates one.
+ * Two adjacent rays -- one hitting a building, one missing it -- were tried
  * first and rejected by measurement: in a dense city the neighbouring ray hits
  * terrain at almost the same depth, and the two gave IDENTICAL deltas.
+ *
+ * `expected` is each ray's MEASURED ratio, pinned rather than floored, and the
+ * reason is the most important thing in this file. A floor of 1.15 with a mean
+ * floor of 1.3 and a cross-page bound of 2x PASSED a break of the very
+ * mechanism it exists to test: with page 14's ray allowed to overshoot the
+ * opaque depth by 8 m -- eight metres of volume rendered THROUGH a solid
+ * building on every ray -- the ratios fell to 1.85/1.22/1.32/1.54 and every
+ * one of those gates was still satisfied. WORSE, THE CROSS-PAGE BOUND IMPROVED
+ * UNDER THE REGRESSION (1.01 against the healthy 1.20): a floor-and-bound gate
+ * REWARDED the break. Bracketed: +15 m was caught by exactly one ray, and only
+ * a 1.5x overshoot or outright deletion (ratio 1.00) failed loudly, so the old
+ * gate's detection threshold sat somewhere between 8 and 15 m of depth error
+ * on a 500x500x80 m scene.
+ *
+ * Pinning is defensible here because these ratios are DETERMINISTIC, which is
+ * a measurement and not a hope: identical to two decimal places across
+ * chromium/SwiftShader and firefox on an Apple GPU, and across four
+ * independent sessions (two of mine, two of the reviewer's). +/-10% is wide
+ * enough to absorb a different rasteriser and tight enough that the 8 m break
+ * (-17%, -15%, -11%, -16%) fails on every ray.
+ *
+ * If a legitimate change moves these: RE-MEASURE AND RE-PIN, and say in the
+ * commit which renderer moved and why. Do not widen the tolerance.
  */
 const OCCLUSION_POSE = {target: [0, 0, 40] as [number, number, number], radius: 520, elevationDeg: 12, azimuthDeg: 20};
-const OCCLUSION_RAYS: Array<[number, number]> = [[0.11, 0.84], [0.14, 0.90], [0.17, 0.86], [0.32, 0.90]];
-
-/**
- * Floors on (volume accumulated with the building hidden) / (volume
- * accumulated with it there), measured against a black background so the
- * number is the volume's own contribution and not partly the background's.
- * Measured: vtk.js 1.31-1.72 per ray (mean 1.50), Three.js 1.43-2.22 (mean
- * 1.77). A renderer that ignored opaque depth returns exactly 1.00, which is
- * what the negative control produces, so the margin here is to the FLOOR of
- * the measured range and not to the ceiling of the broken one.
- */
-const OCCLUSION_MIN_RATIO = 1.15;
-const OCCLUSION_MEAN_RATIO = 1.3;
+const OCCLUSION_RAYS: Array<{u: number; v: number; expected: Record<Renderer, number>}> = [
+  {u: 0.11, v: 0.84, expected: {vtkjs: 1.66, threejs: 2.22}},
+  {u: 0.14, v: 0.90, expected: {vtkjs: 1.31, threejs: 1.43}},
+  {u: 0.17, v: 0.86, expected: {vtkjs: 1.31, threejs: 1.49}},
+  {u: 0.32, v: 0.90, expected: {vtkjs: 1.55, threejs: 1.84}},
+];
+/** Mean over the four rays, pinned the same way. */
+const OCCLUSION_MEAN: Record<Renderer, number> = {vtkjs: 1.46, threejs: 1.75};
+/** How far the two renderers' mean occlusion ratios sit apart, pinned because
+ *  the old "within 2x" bound was satisfied MORE comfortably by the broken
+ *  build (1.01) than by the healthy one (1.20). */
+const OCCLUSION_CROSS_PAGE = 1.20;
+const OCCLUSION_TOLERANCE = 0.10;
 
 /** 100 deterministic control cycles, in ten blocks of ten, with a viewport
  *  flip between blocks. */
@@ -276,11 +328,17 @@ test.describe('cross-renderer', () => {
         expect(pinned[r].surface.drawingBufferHeight, `${r} did not pin the parity surface`).toBe(PARITY_SURFACE.height);
       }
 
-      // FAILS IF: one renderer interprets the shared CameraPose differently --
-      // a horizontal instead of a vertical field of view, a different aspect,
-      // or (the trap this exists for) a y-up orbit against a z-up one. Three.js
-      // defaults to y-up and vtk.js to its own frame; both must land on the
-      // pose's z-up eye.
+      // PAGE-DRIFT GUARD, NOT RENDERER EVIDENCE -- reclassified at review, and
+      // the old comment here claimed more than the code does. FAILS IF: a page
+      // stops consuming poseToEye's result and derives its own eye instead.
+      // That is all. Both pages assign the SHARED poseToEye(pose) value
+      // straight into their camera (13:applyPose, 14:applyPose) and the parity
+      // probe reads those same numbers back out, so eye/target/up/fovDeg
+      // cannot differ for any RENDERER reason -- only a page edit moves them.
+      // THE ACTUAL CAMERA EVIDENCE IS THE PICKING SWEEP BELOW: a camera that
+      // orbited y instead of z would move every one of its twenty rays, and
+      // that control reproduces. Task 8 should cite the picking sweep, not
+      // these four lines, as proof the two paths share a camera.
       expect(a.camera.fovDeg).toBe(b.camera.fovDeg);
       expect(a.camera.aspect).toBeCloseTo(b.camera.aspect, 6);
       expect(a.camera.eye[0]).toBeCloseTo(b.camera.eye[0], 6);
@@ -390,41 +448,66 @@ test.describe('cross-renderer', () => {
   });
 
   test('GPU-sampled values: each renderer\'s own shader against CPU truth', async ({browser}) => {
+    test.setTimeout(300_000);
     await withBothPages(browser, async pages => {
       const measure = async (r: Renderer) => pages[r].page.evaluate(args => {
         const b = (window as any).__bench;
-        const p = b.probe.parity;
-        const spanX = p.volumeBounds.max[0] - p.volumeBounds.min[0];
-        const spanY = p.volumeBounds.max[1] - p.volumeBounds.min[1];
-        const cx = (p.volumeBounds.max[0] + p.volumeBounds.min[0]) / 2;
-        const cy = (p.volumeBounds.max[1] + p.volumeBounds.min[1]) / 2;
+        const fire = (id: string, value: string, event: string) => {
+          const el = document.querySelector(id) as HTMLInputElement | HTMLSelectElement;
+          (el as HTMLInputElement).value = value;
+          el.dispatchEvent(new Event(event));
+        };
+        const cases = [...document.querySelectorAll('#data-case option')].map(o => (o as HTMLOptionElement).value);
         const out: any[] = [];
-        for (const [fx, fy] of args.probes as Array<[number, number]>) {
-          const target: [number, number, number] = [cx + fx * spanX, cy + fy * spanY, p.sliceRequestedZ];
-          b.parity.begin({target, radius: args.pose.radius,
-            elevationDeg: args.pose.elevationDeg, azimuthDeg: args.pose.azimuthDeg});
-          // Only the slice may contribute to this pixel: the volume would
-          // composite over it, the streamlines could cross it, and a
-          // translucent plane would be blended over terrain lit by each
-          // renderer's own lights -- which would make this a comparison of
-          // lighting, not of texture sampling.
-          b.parity.setVolumeVisible(false);
-          b.parity.setStreamlinesVisible(false);
-          b.parity.setSliceOpaque(true);
-          out.push({target, gpu: b.parity.pixelAt(0.5, 0.5), cpu: b.parity.sampleCpu(target)});
+        for (const caseId of cases) {
+          fire('#data-case', caseId, 'change');
+          for (const [lo, hi] of args.windows as Array<[number, number]>) {
+            fire('#range-low', String(lo), 'input');
+            fire('#range-high', String(hi), 'input');
+            // Read the ACTIVE case's own extent: the heat grid has different
+            // dims, origin and spacing from the smoke grid, so a probe offset
+            // is only the same world point on both pages if each page resolves
+            // it against the case it is actually showing.
+            const p = b.probe.parity;
+            const cx = (p.volumeBounds.max[0] + p.volumeBounds.min[0]) / 2;
+            const cy = (p.volumeBounds.max[1] + p.volumeBounds.min[1]) / 2;
+            const spanX = p.volumeBounds.max[0] - p.volumeBounds.min[0];
+            const spanY = p.volumeBounds.max[1] - p.volumeBounds.min[1];
+            for (const [fx, fy] of args.probes as Array<[number, number]>) {
+              const target: [number, number, number] = [cx + fx * spanX, cy + fy * spanY, p.sliceRequestedZ];
+              b.parity.begin({target, radius: args.pose.radius,
+                elevationDeg: args.pose.elevationDeg, azimuthDeg: args.pose.azimuthDeg});
+              // Only the slice may contribute to this pixel: the volume would
+              // composite over it, the streamlines could cross it, and a
+              // translucent plane would be blended over terrain lit by each
+              // renderer's own lights -- which would make this a comparison of
+              // lighting, not of texture sampling.
+              b.parity.setVolumeVisible(false);
+              b.parity.setStreamlinesVisible(false);
+              b.parity.setSliceOpaque(true);
+              out.push({caseId, window: [lo, hi], offset: [fx, fy], target,
+                gpu: b.parity.pixelAt(0.5, 0.5), cpu: b.parity.sampleCpu(target)});
+            }
+          }
         }
         b.parity.end();
         return out;
-      }, {probes: args_probes(), pose: SLICE_POSE});
+      }, {probes: SLICE_PROBES, windows: SLICE_WINDOWS, pose: SLICE_POSE});
 
       const a = await measure('vtkjs');
       const b = await measure('threejs');
+      expect(a.length).toBe(3 * SLICE_WINDOWS.length * SLICE_PROBES.length);
+      expect(b.length).toBe(a.length);
 
-      for (let i = 0; i < SLICE_PROBES.length; i++) {
-        const where = `slice probe ${JSON.stringify(SLICE_PROBES[i])}`;
-        // Non-vacuity: the three probes must actually span the colour ramp, or
-        // three identical blues would agree for no reason.
+      const valuesByCase: Record<string, number[]> = {};
+      for (let i = 0; i < a.length; i++) {
+        const where = `${a[i].caseId} window ${JSON.stringify(a[i].window)} probe ${JSON.stringify(a[i].offset)}`;
+        // FAILS IF: the two pages resolved the same offset to different world
+        // points -- which is what would happen if one of them read the wrong
+        // case's extent after a switch.
         expect(a[i].target, `${where}: the two pages probed different world points`).toEqual(b[i].target);
+        expect(a[i].cpu.value, `${where}: the shared sampler disagrees between the pages`).toBe(b[i].cpu.value);
+        (valuesByCase[a[i].caseId] ??= []).push(a[i].cpu.value);
         for (const [r, m] of [['vtkjs', a[i]], ['threejs', b[i]]] as const) {
           // FAILS IF: that renderer's own texture upload, its own sampler, its
           // own colour mapping or its own plane placement is wrong. This is
@@ -444,18 +527,25 @@ test.describe('cross-renderer', () => {
           }
         }
         // FAILS IF: the two renderers disagree about the colour of the same
-        // world point on the same plane. Measured on chromium: bit-identical.
+        // world point on the same plane. Measured on chromium and firefox:
+        // every channel within 1 of 255, most bit-identical.
         for (const c of [0, 1, 2]) {
           expect(Math.abs(a[i].gpu[c] - b[i].gpu[c]),
             `${where}: vtk.js drew ${a[i].gpu.slice(0, 3)}, Three.js drew ${b[i].gpu.slice(0, 3)}`)
             .toBeLessThanOrEqual(2);
         }
       }
-      // FAILS IF: the probes stop spanning the ramp, which would let three
-      // identical colours pass the comparisons above for no reason.
-      const spread = Math.max(...a.map(m => m.cpu.value)) - Math.min(...a.map(m => m.cpu.value));
-      expect(spread, 'the three probes sample nearly the same value -- the colour comparison is vacuous')
-        .toBeGreaterThan(1);
+      // FAILS IF: a case's probes stop spanning its range, which would let
+      // three identical colours satisfy every comparison above for no reason.
+      for (const [caseId, values] of Object.entries(valuesByCase)) {
+        const spread = Math.max(...values) - Math.min(...values);
+        expect(spread, `${caseId}: the probes sample nearly the same value -- the comparison is vacuous there`)
+          .toBeGreaterThan(1);
+      }
+      console.log('GPU-sampled slice colour, worst channel delta against the shared colormap over '
+        + `${a.length} probes (3 cases x ${SLICE_WINDOWS.length} colour windows x ${SLICE_PROBES.length} points): `
+        + RENDERERS.map((r, k) => `${r} ${Math.max(...(k === 0 ? a : b).map((m: any) =>
+          Math.max(...[0, 1, 2].map(c => Math.abs(m.gpu[c] - m.cpu.rgb[c])))))}`).join(', '));
     });
   });
 
@@ -489,14 +579,14 @@ test.describe('cross-renderer', () => {
           blackWith: blackWith[i].slice(0, 3), blackFree: blackFree[i].slice(0, 3),
           occluded: lum(withBuilding[i]), free: lum(withoutBuilding[i]),
         }));
-      }, {pose: OCCLUSION_POSE, rays: OCCLUSION_RAYS});
+      }, {pose: OCCLUSION_POSE, rays: OCCLUSION_RAYS.map(r => [r.u, r.v] as [number, number])});
 
       const a = await measure('vtkjs');
       const b = await measure('threejs');
       const ratios: Record<string, number[]> = {vtkjs: [], threejs: []};
 
       for (let i = 0; i < OCCLUSION_RAYS.length; i++) {
-        const where = `ray ${JSON.stringify(OCCLUSION_RAYS[i])}`;
+        const where = `ray (${OCCLUSION_RAYS[i].u}, ${OCCLUSION_RAYS[i].v})`;
         for (const [r, m] of [['vtkjs', a[i]], ['threejs', b[i]]] as const) {
           // The ray's premise, re-measured every run rather than assumed.
           // FAILS IF: the scene, the tile or the camera changes so that these
@@ -519,16 +609,28 @@ test.describe('cross-renderer', () => {
           // volume path to the far wall of the box, so the accumulated
           // contribution must rise; a renderer that ignored opaque depth would
           // return the SAME number in both conditions, i.e. ratio 1.00 exactly.
-          // Page 14 stops each ray at a depth texture written by an opaque
-          // prepass; vtk.js composites against its own depth buffer inside one
-          // pass. Different mechanisms, one comparable outcome.
-          // NEGATIVE-CONTROLLED: deleting page 14's `tFar = min(tFar,
-          // opaqueViewZ / rayViewZ)` drives every ratio to 1.00 and fails here.
+          // Both renderers clamp the ray against an opaque depth texture --
+          // page 14 in its own GLSL, vtk.js in vtkOpenGLVolumeMapper's
+          // //VTK::ZBuffer::Impl substitution. Same mechanism, one vendored
+          // and one hand-written; this compares the outcome.
+          // NEGATIVE-CONTROLLED ON BOTH SIDES, symmetrically: deleting page
+          // 14's `tFar = min(tFar, opaqueViewZ / rayViewZ)` drives its ratios
+          // to 1.00, and neutralising vtk.js's own `dists.y = min(zdepth,
+          // dists.y)` in the built chunk drives page 13's to 1.00 (105.7 with
+          // the building, 105.7 without).
           const ratio = m.free / m.occluded;
           ratios[r].push(ratio);
-          expect(ratio, `${r} ${where}: the volume contributes ${m.occluded.toFixed(1)} with the building and `
-            + `${m.free.toFixed(1)} without it -- ratio ${ratio.toFixed(2)}, so the building is barely stopping `
-            + 'the ray').toBeGreaterThan(OCCLUSION_MIN_RATIO);
+          const want = OCCLUSION_RAYS[i].expected[r];
+          const detail = `${r} ${where}: the volume contributes ${m.occluded.toFixed(1)} with the building and `
+            + `${m.free.toFixed(1)} without it -- ratio ${ratio.toFixed(2)} against the measured ${want.toFixed(2)}`;
+          expect(ratio, `${detail}. BELOW the pin: the building is stopping the ray LESS than it was measured to. `
+            + 'A ray that overshoots the opaque depth lands here -- 8 m of overshoot on a 500x500x80 m scene moves '
+            + 'these ratios 11-17% down, which is exactly what this tolerance exists to catch.')
+            .toBeGreaterThan(want * (1 - OCCLUSION_TOLERANCE));
+          expect(ratio, `${detail}. ABOVE the pin. Not automatically a defect -- a tighter depth stop would land `
+            + 'here too -- but it is a change in a measured renderer property, so RE-MEASURE AND RE-PIN rather '
+            + 'than widening the tolerance.')
+            .toBeLessThan(want * (1 + OCCLUSION_TOLERANCE));
         }
         // FAILS IF: the two pickers stop agreeing about where the occluder is,
         // which would mean the two pages are not comparing the same occlusion.
@@ -537,18 +639,22 @@ test.describe('cross-renderer', () => {
 
       const mean = (xs: number[]) => xs.reduce((x, y) => x + y, 0) / xs.length;
       for (const r of RENDERERS) {
-        // FAILS IF: the effect is only present on one ray. A mean over the
-        // four keeps a single lucky ray from carrying the result.
-        expect(mean(ratios[r]), `${r}: mean occlusion ratio over ${OCCLUSION_RAYS.length} rays`)
-          .toBeGreaterThan(OCCLUSION_MEAN_RATIO);
+        // FAILS IF: the effect drifts on the whole set rather than on one ray.
+        expect(mean(ratios[r]), `${r}: mean occlusion ratio over ${OCCLUSION_RAYS.length} rays is `
+          + `${mean(ratios[r]).toFixed(2)} against the measured ${OCCLUSION_MEAN[r].toFixed(2)}`)
+          .toBeGreaterThan(OCCLUSION_MEAN[r] * (1 - OCCLUSION_TOLERANCE));
+        expect(mean(ratios[r])).toBeLessThan(OCCLUSION_MEAN[r] * (1 + OCCLUSION_TOLERANCE));
       }
-      // FAILS IF: the two renderers disagree about HOW MUCH the building
-      // occludes. The absolute contributions are not compared -- two different
-      // compositors with different step phases will not agree on those -- but
-      // the outcome must be the same size, not merely the same sign.
+      // FAILS IF: the two renderers stop occluding by the same relative
+      // amount. PINNED, not bounded: the old "within 2x" bound was satisfied
+      // MORE comfortably by an 8 m depth overshoot (1.01) than by the healthy
+      // build (1.20), so it rewarded the regression it existed to catch.
       const ra = mean(ratios.vtkjs), rb = mean(ratios.threejs);
-      expect(Math.max(ra, rb) / Math.min(ra, rb),
-        `vtk.js's mean occlusion ratio is ${ra.toFixed(2)} and Three.js's is ${rb.toFixed(2)}`).toBeLessThan(2);
+      const across = Math.max(ra, rb) / Math.min(ra, rb);
+      expect(across, `vtk.js's mean occlusion ratio is ${ra.toFixed(2)} and Three.js's is ${rb.toFixed(2)}, `
+        + `which puts them ${across.toFixed(2)}x apart against the measured ${OCCLUSION_CROSS_PAGE.toFixed(2)}x`)
+        .toBeGreaterThan(OCCLUSION_CROSS_PAGE * (1 - OCCLUSION_TOLERANCE));
+      expect(across).toBeLessThan(OCCLUSION_CROSS_PAGE * (1 + OCCLUSION_TOLERANCE));
       console.log(`occlusion ratio (volume without the building / with it), isolated against black: `
         + RENDERERS.map((r, i) => `${r} ${ratios[r].map(x => x.toFixed(2)).join('/')} (mean ${(i === 0 ? ra : rb).toFixed(2)})`).join('; '));
     });
@@ -576,7 +682,7 @@ test.describe('cross-renderer', () => {
           resizes++;
         }
         const after = await glObjectsOf(page);
-        report[r] = {before, after, resizes,
+        report[r] = {before, after, resizes, parity: await parityOf(page),
           calls: await page.evaluate(() => Object.values((window as any).__bench.controlCalls as Record<string, number>)
             .reduce((x: number, y: number) => x + y, 0)),
           heap: await page.evaluate(() => (performance as any).memory?.usedJSHeapSize ?? null)};
@@ -590,6 +696,19 @@ test.describe('cross-renderer', () => {
         // controls per cycle over 101 cycles (the warm one included).
         expect(report[r].calls, `${r}: the control cycles fired ${report[r].calls} callbacks`)
           .toBeGreaterThanOrEqual(6 * (CYCLE_BLOCKS * CYCLES_PER_BLOCK + 1));
+        // FAILS IF: a control's callback runs but never reaches the scene.
+        // controlCalls above counts CALLBACKS; these are the scene states the
+        // last cycle should have left behind, read back off each renderer's
+        // own actor, mesh and uniform. Without them a page whose opacity and
+        // streamline handlers were wired to nothing would satisfy every bound
+        // in this test. Recomputed from the same formula runCycles uses.
+        const last = CYCLE_BLOCKS * CYCLES_PER_BLOCK;
+        expect(report[r].parity.opacityScale, `${r}: the opacity control did not reach the scene`)
+          .toBeCloseTo(((last * 11) % 100) / 100, 6);
+        expect(report[r].parity.streamlinesVisible, `${r}: the streamline toggle did not reach the scene`)
+          .toBe(last % 2 === 0);
+        expect(report[r].parity.sliceRequestedZ, `${r}: the slice control did not reach the scene`)
+          .toBeCloseTo(4 + (last * 7) % 72, 6);
         // The bound is PER RENDERER, set by what that renderer was measured to
         // do. vtk.js 36.12.1 leaks one texture, one framebuffer AND one
         // renderbuffer per drawing-buffer resize and never deletes them;
@@ -641,7 +760,7 @@ test.describe('cross-renderer', () => {
   test('context loss: both stop measuring, and the two libraries tear down differently', async ({browser}) => {
     test.setTimeout(300_000);
     const after: Record<string, any> = {};
-    const interruptible: Record<string, boolean> = {};
+    const hasGpuTimer: Record<string, boolean> = {};
     // ONE page at a time, unlike every other test here, and for a measured
     // reason: forcing a real context loss on page 13 while a benchmark was in
     // flight took down the whole browser context, page 14 included, under
@@ -652,16 +771,18 @@ test.describe('cross-renderer', () => {
       const {page} = await openScientific(browser, r);
       try {
         const before = await glObjectsOf(page);
-        // Whether a run can be INTERRUPTED at all on this browser, decided by
-        // the browser and not by either renderer. createBenchmarkDriver awaits
-        // a real macrotask (setTimeout 0, inside the GPU timer's readResult)
-        // once per measured frame ONLY when a GpuTimer was supplied. Without
-        // one its whole 210-frame loop runs in an unbroken microtask chain,
-        // the queued webglcontextlost event is never delivered until the loop
-        // ends, and driver.stop() therefore cannot stop anything. Firefox
-        // exposes no EXT_disjoint_timer_query_webgl2, so this is not
-        // hypothetical -- see the report below.
-        interruptible[r] = await page.evaluate(() => {
+        // Recorded, not branched on any more. This used to decide whether a
+        // run could be interrupted at all: createBenchmarkDriver's only
+        // macrotask was the setTimeout(0) inside the GPU timer's readResult,
+        // so on a browser with no EXT_disjoint_timer_query_webgl2 the whole
+        // 210-frame loop ran in one unbroken microtask chain, the queued
+        // webglcontextlost event was starved and driver.stop() stopped
+        // nothing. MEASURED ON FIREFOX: both pages returned all 180 frames
+        // after the context was lost. src/lib/scientific-probes.ts now awaits
+        // one real macrotask per frame, outside the timing window, so the
+        // assertion below holds on BOTH browsers and this flag is only
+        // reported.
+        hasGpuTimer[r] = await page.evaluate(() => {
           const canvas = document.querySelector('#host canvas') as HTMLCanvasElement | null;
           const gl = canvas?.getContext('webgl2') as WebGL2RenderingContext | null;
           return !!gl?.getExtension('EXT_disjoint_timer_query_webgl2');
@@ -718,36 +839,20 @@ test.describe('cross-renderer', () => {
       expect(after[r].probe.measurementValid, `${r} still claims a valid measurement`).toBe(false);
       expect(after[r].failureVisible, `${r} rendered no visible failure`).toBe(true);
       expect(after[r].reloadVisible, `${r} offered no reload control`).toBe(true);
-      if (interruptible[r]) {
-        // FAILS IF: attachContextLoss stops calling the driver's stop(), so a
-        // benchmark keeps running on a dead context and reports a full
-        // 180-frame measurement that never happened.
-        expect(after[r].run.frames === undefined || after[r].run.frames < 180,
-          `${r} completed a full benchmark on a lost context: ${JSON.stringify(after[r].run)}`).toBe(true);
-      } else {
-        // NOT A RENDERER RESULT, AND NOT SKIPPED EITHER. On a browser with no
-        // EXT_disjoint_timer_query_webgl2 the shared BenchmarkDriver never
-        // yields to the event loop, so the loss event is delivered only after
-        // the run ends and the run therefore completes. Asserted as what it
-        // is, rather than hidden behind a condition: the samples exist, and
-        // the ONLY thing standing between them and being quoted as a valid
-        // measurement is measurementValid, already asserted false above.
-        // FAILS IF: this browser starts interrupting the run (then the branch
-        // above should be taken) -- and, more usefully, this is the assertion
-        // that will fail if src/lib's driver is ever fixed to yield, which is
-        // the day this branch should be deleted.
-        expect(after[r].run.frames, `${r}: with no GPU timer the driver cannot be interrupted, so the run was `
-          + 'expected to complete').toBe(180);
-        console.log(`FINDING (src/lib, not a renderer): ${r} could not be interrupted by context loss on this `
-          + 'browser. createBenchmarkDriver only awaits a macrotask when a GpuTimer is supplied, so with no '
-          + 'EXT_disjoint_timer_query_webgl2 its 210-frame loop never returns to the event loop, the queued '
-          + 'webglcontextlost event is starved, and driver.stop() stops nothing. The run returned all 180 frames '
-          + 'AFTER the context was lost. measurementValid is false, so the numbers cannot be quoted -- but '
-          + '"sampling stopped" is not true here, and src/lib/scientific-probes.ts is where that would be fixed.');
-      }
+      // FAILS IF: attachContextLoss stops calling the driver's stop(), or the
+      // driver stops yielding to the event loop -- either way a benchmark
+      // keeps running on a dead context and reports a full 180-frame
+      // measurement that never happened. UNCONDITIONAL now: it used to be
+      // branched on whether this browser exposes a GPU timer, because without
+      // one the driver could not be interrupted at all. That was a real defect
+      // in src/lib and it has been FIXED rather than documented, so firefox is
+      // now held to the same assertion as chromium.
+      expect(after[r].run.frames === undefined || after[r].run.frames < 180,
+        `${r} completed a full benchmark on a lost context: ${JSON.stringify(after[r].run)} `
+        + `(this browser ${hasGpuTimer[r] ? 'has' : 'has no'} EXT_disjoint_timer_query_webgl2)`).toBe(true);
     }
 
-    if (interruptible.vtkjs && interruptible.threejs) {
+    {
       // MEASURED RENDERER DIFFERENCE in how an in-flight benchmark ends.
       // Three.js: attachContextLoss calls driver.stop(), the loop exits at the
       // next frame boundary and the driver RESOLVES with the partial samples
@@ -859,7 +964,12 @@ test.describe('cross-renderer', () => {
       expect(a.cases).toEqual(b.cases);
       expect(a.readouts).toEqual(b.readouts);
       expect(a.slider).toEqual(b.slider);
+      // Non-vacuity: two empty lists are equal. FAILS IF: the selectors stop
+      // matching anything, which would turn all four comparisons above into
+      // assertions about nothing.
       expect(a.cases.length).toBe(3);
+      expect(a.controls.length, 'no controls matched the selector').toBeGreaterThanOrEqual(7);
+      expect(a.readouts.length, 'no readout rows matched the selector').toBeGreaterThanOrEqual(9);
 
       // FAILS IF: one page's controls stop reaching its scene. Driven through
       // the real DOM on both, and checked against each page's own published
@@ -872,9 +982,13 @@ test.describe('cross-renderer', () => {
         expect(p.sliceRequestedZ, `${r}: the slice control did not move the plane`).toBeCloseTo(24, 6);
         expect(p.caseId, `${r}: the case control did not switch the case`).toBe(a.cases[1]);
       }
-      // FAILS IF: the same control sequence leaves the two pages in different
-      // states -- the colour range is derived from the active case's own value
-      // range, so this compares what each renderer's scene is actually set to.
+      // INVARIANT, relabelled at review: activeColourRange() is a pure
+      // function of the manifest's value range and two control values, written
+      // identically in both pages, so this compares that function with itself
+      // and can only fail if one page's copy is edited. It is a useful drift
+      // guard on that copy -- both pages derive the range the same way -- and
+      // it is NOT evidence that the two renderers are in the same state. The
+      // pixel comparison in the GPU-value test is what shows that.
       expect((await parityOf(pages.vtkjs.page)).colourRange)
         .toEqual((await parityOf(pages.threejs.page)).colourRange);
     });
@@ -955,6 +1069,9 @@ function resizeSuite(dprLabel: string) {
         // would stretch the scene and leave every ray fraction in this file
         // pointing somewhere else. Both are read back off each renderer's own
         // objects.
+        // Width only, and exactly, because the css WIDTH is integral here; the
+        // height relation is asserted below with the one-pixel slack the two
+        // pages' different rounding points require.
         expect(s.drawingBufferWidth, `${r} drawing buffer does not match css * dpr after resize`)
           .toBe(Math.floor(s.cssWidth * s.devicePixelRatio));
         expect(after[r].camera.aspect, `${r} camera aspect does not match its drawing buffer`)
@@ -978,13 +1095,49 @@ function resizeSuite(dprLabel: string) {
       expect(after.vtkjs.depthTarget).toBeNull();
       expect(after.threejs.depthTarget.width).toBe(after.threejs.surface.drawingBufferWidth);
       expect(after.threejs.depthTarget.height).toBe(after.threejs.surface.drawingBufferHeight);
-      // FAILS IF: the two renderers end up with different drawing surfaces for
-      // the same viewport, which would make every later comparison apples to
-      // oranges.
-      expect(after.vtkjs.surface.drawingBufferWidth).toBe(after.threejs.surface.drawingBufferWidth);
+      // THE TWO PAGES DO NOT GET THE SAME DRAWING SURFACE, and saying so is
+      // the honest version of an assertion that used to compare only the axis
+      // that cannot differ. Measured: 1600x612 against 1600x592 at a 1600x900
+      // viewport, and 3200x1224 against 3200x1184 at DPR 2. The widths match
+      // because the host fills the viewport; the HEIGHTS differ because the
+      // two pages' headers are different lengths and reflow differently
+      // (page 13's host is 287.7 css px shorter here, page 14's 307.3).
+      //
+      // The option NOT taken: equalising the two headers so the assertion
+      // could be `toBe`. The header carries this page's findings, its
+      // correction to the briefing and its divergence ledger -- trimming
+      // evidence text so a test can use a tighter operator is the wrong trade,
+      // and it would also make the suite depend on two prose blocks staying
+      // the same length forever.
       expect(after.vtkjs.surface.devicePixelRatio).toBe(after.threejs.surface.devicePixelRatio);
+      expect(after.vtkjs.surface.drawingBufferWidth).toBe(after.threejs.surface.drawingBufferWidth);
+      // FAILS IF: the height difference is anything but the layout difference.
+      // This is the assertion the width comparison was pretending to be: the
+      // two buffers may differ, but ONLY by what the two CSS boxes differ by.
+      // A renderer that sized its buffer wrong lands here.
+      const dpr = after.vtkjs.surface.devicePixelRatio;
+      const layoutGap = (after.vtkjs.surface.cssHeight - after.threejs.surface.cssHeight) * dpr;
+      const bufferGap = after.vtkjs.surface.drawingBufferHeight - after.threejs.surface.drawingBufferHeight;
+      expect(Math.abs(bufferGap - layoutGap),
+        `the two drawing buffers differ by ${bufferGap} px in height where their css boxes differ by `
+        + `${layoutGap.toFixed(1)} px -- the gap is not explained by layout`).toBeLessThanOrEqual(2);
+      // FAILS IF: a page stops tracking its own css box. Held to one css pixel
+      // scaled by dpr, not to equality, because THE TWO PAGES ROUND
+      // DIFFERENTLY and that is measurable: page 13 floors width*dpr, page 14
+      // floors width and then multiplies. At a 1280x800 viewport the host is
+      // 492.67 css px tall, so the exact relation `buffer === css * dpr` is
+      // false on the height axis on both pages and was only ever true on the
+      // width axis because css width is integral.
+      for (const r of RENDERERS) {
+        const s2 = after[r].surface;
+        expect(Math.abs(s2.drawingBufferHeight - s2.cssHeight * s2.devicePixelRatio),
+          `${r} buffer height ${s2.drawingBufferHeight} against css ${s2.cssHeight} * dpr ${s2.devicePixelRatio}`)
+          .toBeLessThanOrEqual(s2.devicePixelRatio);
+      }
       console.log(`${dprLabel}: drawing buffer after resize `
-        + RENDERERS.map(r => `${r} ${after[r].surface.drawingBufferWidth}x${after[r].surface.drawingBufferHeight}`).join(', '));
+        + RENDERERS.map(r => `${r} ${after[r].surface.drawingBufferWidth}x${after[r].surface.drawingBufferHeight} `
+          + `(css ${after[r].surface.cssWidth.toFixed(1)}x${after[r].surface.cssHeight.toFixed(1)})`).join(', ')
+        + ' -- heights differ by header length, which is why every measurement pins PARITY_SURFACE');
     });
   });
 }
@@ -1001,10 +1154,6 @@ test.describe('cross-renderer, dpr 2', () => {
 });
 
 // ---------------------------------------------------------------------------
-
-/** SLICE_PROBES, passed into the page. Kept as a function so the constant is
- *  declared once above and serialised here. */
-function args_probes(): Array<[number, number]> { return SLICE_PROBES; }
 
 /** Sets a range input through the DOM and fires the page's own handler. */
 async function setRange(page: Page, selector: string, value: number): Promise<void> {

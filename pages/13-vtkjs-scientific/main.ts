@@ -1400,6 +1400,14 @@ function build(ui: Ui, bundle: ScientificBundle, heatValues: Float32Array): void
         caseId: active.id,
         colourRange: activeColourRange(),
         sliceRequestedZ: sliceHeightM,
+        // The two control-driven scene states that nothing else publishes.
+        // Without them a suite can prove a control's CALLBACK ran and not that
+        // it reached the scene: 100 cycles of opacity and streamline toggling
+        // would look identical whether the handlers were wired to the renderer
+        // or to nothing at all. Read live off the actor, not off the variable
+        // the handler set.
+        opacityScale,
+        streamlinesVisible: !!streamlineActor.getVisibility(),
 
         // INVARIANTS. Both pages read the same Float32Array through the same
         // probeGridNode and interpolate through the same sampleGridTrilinear,
@@ -1430,7 +1438,14 @@ function build(ui: Ui, bundle: ScientificBundle, heatValues: Float32Array): void
           drawingBufferWidth: gl ? gl.drawingBufferWidth : null,
           drawingBufferHeight: gl ? gl.drawingBufferHeight : null,
           devicePixelRatio: window.devicePixelRatio,
-          cssWidth: Math.round(rect.width), cssHeight: Math.round(rect.height),
+          // EXACT, not rounded. Rounding hid the one case that does not
+          // hold: the host is 492.67 css px tall at a 1280x800 viewport, so
+          // a rounded 493 against a 492-pixel buffer made
+          // `buffer === css * dpr` look false when it is the rounding that
+          // is false. The two pages also floor at different points (page 13
+          // floors width*dpr, page 14 floors width and then multiplies),
+          // which is a page difference worth being able to see.
+          cssWidth: rect.width, cssHeight: rect.height,
           samples: canvasSamples,
         },
         // Where the volume and the slice actually are in THIS renderer's
@@ -1453,9 +1468,12 @@ function build(ui: Ui, bundle: ScientificBundle, heatValues: Float32Array): void
           'invariants.* compare src/lib with itself. Both pages call probeGridNode and sampleGridTrilinear on the '
           + 'same Float32Array, so they are bit-identical by construction and can only fail if src/lib changes. '
           + 'They are INVARIANTS, not evidence that the two renderers agree numerically.',
-          'depthTarget is null here and non-null on page 14 because vtk.js composites its volume against opaque '
-          + 'geometry inside one render pass and owns no page-visible depth target. Page 14 needs a depth-texture '
-          + 'prepass to do the same thing. Assert the null; it is a renderer difference, not a missing field.',
+          'depthTarget is null here and non-null on page 14 because there is no PAGE-OWNED depth target on this '
+          + 'page -- NOT because vtk.js does without one. vtkOpenGLVolumeMapper renders opaque geometry to a depth '
+          + 'texture and clamps each ray against it (the //VTK::ZBuffer::Impl substitution, dists.y = min(zdepth, '
+          + 'dists.y)), which is the same mechanism page 14 writes by hand. The difference between the two pages '
+          + 'here is VENDORED versus HAND-WRITTEN, which is a maintenance-burden fact, not an architectural one. '
+          + 'Assert the null as what it is: this page owns no depth target of its own.',
           'gpuSampleFloat is null here and non-null on page 14: vtk.js 36.12.1 uploads its volume texture inside '
           + 'vtkOpenGLVolumeMapper and exposes no supported way to read a sampled float back. What this page can '
           + 'answer about its own GPU path is the rendered pixel (parity.pixelAt), which is what the suite uses on '
