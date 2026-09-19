@@ -220,13 +220,22 @@ function instrumentGlObjects(gl: WebGL2RenderingContext | WebGLRenderingContext)
   const wrap = (createName: string, deleteName: string, key: keyof GlCounts) => {
     const create = target[createName].bind(gl);
     const destroy = target[deleteName].bind(gl);
+    // Membership, not truthiness: decrementing on any truthy argument lets a
+    // double delete -- or a delete of an object created before the wrappers
+    // were installed -- drive the count below the truth, and a count that can
+    // go negative is not a measurement. This page needs the guard MORE than
+    // page 14 does, not less: it can only wrap after vtkFullScreenRenderWindow
+    // has built its context, so objects predating the wrappers genuinely exist
+    // here, which is the exact case the WeakSet covers.
+    const live = new WeakSet<object>();
     target[createName] = (...args: unknown[]) => {
       const object = create(...args);
-      if (object) counts[key]++;
+      if (object) { live.add(object as object); counts[key]++; }
       return object;
     };
     target[deleteName] = (...args: unknown[]) => {
-      if (args[0]) counts[key]--;
+      const object = args[0];
+      if (object && live.has(object as object)) { live.delete(object as object); counts[key]--; }
       return destroy(...args);
     };
   };
@@ -236,7 +245,8 @@ function instrumentGlObjects(gl: WebGL2RenderingContext | WebGLRenderingContext)
   // The fourth type, added after Task 6's review measured vtk.js leaking one
   // renderbuffer per resize as well as one texture and one framebuffer. Without
   // it the published magnitude of the leak is understated by a third. Page 14
-  // carries the identical wrap, so the two pages count the same four types.
+  // carries the same four wraps over the same WeakSet-guarded helper, so the
+  // two pages count the same four types the same way.
   wrap('createRenderbuffer', 'deleteRenderbuffer', 'renderbuffers');
   return counts;
 }

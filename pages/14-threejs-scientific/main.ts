@@ -624,14 +624,16 @@ function nodeWorld(field: GridField, i: number, j: number, k: number): [number, 
  * used is the repo's own `interpolatedTolerance` (1e-5 * max(span, 1)), which
  * is what an interpolated read is held to everywhere else in this spike. It
  * stays discriminating by a wide margin: the +0.5 negative control moves a
- * probe by half a node and lands orders of magnitude outside it. Legs A and B
- * remain exact-equality checks.
+ * probe by half a node and lands orders of magnitude outside it. Leg A is an
+ * exact-equality check; leg B is a reference-identity check, not an equality
+ * one.
  *
  * Structural limit, restated rather than rediscovered: x<->y is a genuine
  * no-op in dims and spacing on both shipped grids (32x32 and 64x64 in x/y), so
  * no declaration check can see it. Legs B and C DO catch an x<->y transposed
- * *payload*, because neither shipped field is x/y symmetric — that is strictly
- * more than page 13's index-only legs could do.
+ * *payload* — B because a reordered array is a different array than the one the
+ * texture is pinned to, C because neither shipped field is x/y symmetric. That
+ * is strictly more than page 13's index-only legs could do.
  *
  * What none of this can check: whether the shipped payload is in the order it
  * claims. That is a declaration check, and only the smoke grid ships a
@@ -1259,6 +1261,11 @@ function build(ui: Ui, bundle: ScientificBundle, heatValues: Float32Array): void
    * Sampled the same way the gap closes. A page artifact wearing a renderer
    * property's clothes is exactly what this whole page exists not to produce.
    */
+  // SAMPLES is a property of the BOUND framebuffer, so bind the default one
+  // first. Nothing has bound an FBO this early today, which makes the read
+  // correct by accident rather than by construction -- and this is the line
+  // the whole frame-time comparison now rests on.
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   const canvasSamples = gl.getParameter(gl.SAMPLES) as number;
   const opaqueTarget = new THREE.WebGLRenderTarget(1, 1, {
     depthTexture, depthBuffer: true, stencilBuffer: false, samples: canvasSamples,
@@ -1879,8 +1886,7 @@ function build(ui: Ui, bundle: ScientificBundle, heatValues: Float32Array): void
     runBenchmark,
     // Requested vs rendered slice height, page 13's shape verbatim, so a smoke
     // test has a second witness that the drawn plane is the plane the page
-    // claims. `renderedZ` is read off the mesh in the scene graph, not off the
-    // variable that set it.
+    // claims. `renderedZ` is the height fillSlice actually resampled at.
     sliceGeometry: () => ({
       requestedZ: sliceHeightM,
       // The height fillSlice actually resampled at, not the mesh's transform:
@@ -1983,8 +1989,8 @@ function reportMeasurements(
 
   for (const c of cases) {
     ui.probe(`${c.id}: grid ${c.field.dims.join('x')}, asserted before any mesh existed on three legs — the upload `
-      + 'declaration, offset arithmetic written here against the Data3DTexture upload parameters, and a GPU round trip '
-      + 'through the scene\'s own sampler GLSL at asymmetric interior nodes, plus the placement of the volume box '
+      + 'declaration, the payload invariant (the texture must be backed by the shipped array itself), and a GPU round '
+      + 'trip through the scene\'s own sampler GLSL at asymmetric interior nodes, plus the placement of the volume box '
       + 'and slice plane against the grid they claim to cover.');
   }
   ui.probe('What the three legs can and cannot do, corrected after review, because the first version of this panel '
@@ -2048,8 +2054,9 @@ function reportMeasurements(
   ui.probe('Structural limit on both pages, restated rather than rediscovered: permuting x and y in a grid DECLARATION '
     + 'is a genuine no-op on both shipped grids (32x32 and 64x64 in x/y, and the heat grid\'s x and y spacings are '
     + 'equal too), so no declaration check can see it. What this page adds over page 13 is that a transposed PAYLOAD, '
-    + 'x<->y included, is caught: legs B and C compare values at asymmetric nodes, and neither shipped field is x/y '
-    + 'symmetric. Page 13\'s legs compare offsets and could not.');
+    + 'x<->y included, is caught: leg B pins the texture to the shipped array itself, so any reorder is a different '
+    + 'array, and leg C reads values back through the GPU at asymmetric nodes on a field that is not x/y symmetric. '
+    + 'Page 13\'s legs compare offsets and could not.');
 
   ui.probe(`GLSL this page owns, measured not estimated. ${extras.glsl.perShader.length} shaders, `
     + `${extras.glsl.totalLines} non-blank lines, ${extras.glsl.compiledLines} substantive lines as compiled, `
@@ -2098,8 +2105,12 @@ function reportMeasurements(
     + 'rasterizer (p95 runs 189-212 ms).\n'
     + '  THIS PAGE (Three.js): cpu p50 153.5 / 148.3 / 151.2 ms, median of medians 151.2 (means 161.0 / 153.6 / 155.7).\n'
     + '  PAGE 13 (vtk.js):     cpu p50 152.8 / 154.2 / 150.2 ms, median of medians 152.8 (means 158.0 / 162.1 / 156.6).\n'
-    + 'ON EQUAL TERMS THE TWO RENDERERS ARE INDISTINGUISHABLE ON THIS SCENE -- about 1% apart, well inside the '
-    + 'run-to-run spread of either page. CPU and GPU agree to within 0.2% on both, which is the signature of a frame '
+    + 'ON EQUAL TERMS THE TWO RENDERERS ARE INDISTINGUISHABLE ON THIS SCENE. This page measured them about 1% '
+    + 'apart; an independent re-measurement on another machine put them 2.4% apart with a within-page spread '
+    + 'under 1.5 ms, which means the separation can EXCEED the run-to-run spread. So the honest reading is '
+    + '"a few percent apart on a software rasterizer, indistinguishable for a decision", NOT "inside the '
+    + 'noise" -- the conclusion is the same, there is no winner, but the reason is scale, not variance. '
+    + 'CPU and GPU agree to within 0.2% on both, which is the signature of a frame '
     + 'that was actually waited on rather than merely submitted.\n'
     + 'These numbers REPLACE the ones this page published before review, and the correction is the point: at one '
     + 'sample in the opaque pass this page measured p50 142.7 against page 13\'s 160.4 and would have reported a '
@@ -2142,8 +2153,10 @@ function reportMeasurements(
     + 'returns a faceIndex and knows nothing about attached arrays, so the marker lookup reads the shipped '
     + 'cellObjectIndex directly. Same array, same index space, asserted at startup.\n'
     + '7. FORCED — axis-order check shape. vtk.js supplies getOffsetIndexFromWorld as a second world-to-offset '
-    + 'implementation; Three.js supplies nothing of the kind, so the independent implementation is written here and a '
-    + 'third leg runs the scene\'s own sampler on the GPU.\n'
+    + 'implementation; Three.js supplies nothing of the kind. Writing that second implementation here was tried and '
+    + 'DELETED at review: with the declaration already pinned by exact equality it reduced to gridNodeIndex compared '
+    + 'with itself. What stands instead is the payload invariant plus a GPU round trip through the scene\'s own '
+    + 'sampler.\n'
     + '8. CHOSEN for parity — colour management off and outputColorSpace linear, so the shared five-stop ramp reaches '
     + 'the drawing buffer as the same numbers vtk.js writes. Three.js would otherwise apply an sRGB conversion page 13 '
     + 'does not, and Task 7 would be comparing colour pipelines.\n'
@@ -2155,8 +2168,10 @@ function reportMeasurements(
     + 'page reports 1. Both numbers are live DOM counts.\n'
     + '11. MEASURED — GL counters are installed one step earlier here: this page creates its own WebGL2 context (with '
     + 'vtk.js\'s own attribute set, RenderWindow.js:178-182) and instruments it before WebGLRenderer sees it, where '
-    + 'page 13 can only wrap after vtkFullScreenRenderWindow exists. Absolute baselines are not comparable between '
-    + 'the pages; growth, which is what the leak gate measures, is.\n'
+    + 'page 13 can only wrap after vtkFullScreenRenderWindow exists. That caveat was over-cautious and is '
+    + 'withdrawn: counters installed on the prototype before any page script returned EXACTLY the numbers each '
+    + 'page reports for itself, at every snapshot on both pages, so the later wrap misses nothing. Absolute '
+    + 'baselines ARE comparable between the pages, as well as growth.\n'
     + '12. NOT a divergence, and stated because it looks like one: the INTERACTIVE drawing buffer is 1280x492 on '
     + 'both pages at the suite\'s 1280x800 viewport. That is a coincidence of how two different headers happen to '
     + 'wrap, not a guarantee, and it is exactly why both pages pin the surface to 1280x720 for the benchmark rather '
@@ -2170,7 +2185,9 @@ function reportMeasurements(
     + 'equivalents only render. That is the same shape as the defect closed on page 13\'s RESIZE path in ce187bf, '
     + 'still present on its control paths and silently fixed here. It changes no number today -- measured, vtk.js '
     + 'allocates nothing on a control path, so the two pages agree -- but it is a real difference in the __bench '
-    + 'surface Task 7 joins on and it belongs in this list rather than in a commit message.\n'
+    + 'surface Task 7 joins on and it belongs in this list rather than in a commit message. NOW CLOSED: the Task 6 '
+    + 'residual added publish() to page 13\'s control handlers, so both pages refresh alike. No number moved — vtk.js '
+    + 'allocates nothing on those paths, measured before and after the change.\n'
     + '15. LIMITATION, same on both as far as this page can tell: the volume ray stops at OPAQUE depth, so the '
     + 'translucent slice does not attenuate volume behind it. Page 13 draws its slice as a translucent vtkImageSlice '
     + 'actor, which is also not in the volume mapper\'s depth input, but that has not been measured here and is not '

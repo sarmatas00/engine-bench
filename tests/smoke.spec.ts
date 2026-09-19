@@ -188,6 +188,7 @@ function scientificPageChecks(renderer: 'vtkjs' | 'threejs') {
     // timer reported 95 ms on the very same frames. Deleting the one-pixel
     // readback that forces frame completion would fail here and nowhere else.
     const resourcesBefore = (await readScientific(page)).resources;
+    const glBefore = await page.evaluate(() => (window as any).__bench.probe.glObjects as Record<string, number>);
     const bench = await page.evaluate(async () => {
       const result = await (window as any).__bench.runBenchmark();
       const mean = (a: number[]) => a.reduce((x: number, y: number) => x + y, 0) / a.length;
@@ -234,10 +235,23 @@ function scientificPageChecks(renderer: 'vtkjs' | 'threejs') {
     // land at 2 and pass.
     const MAX_GROWTH = renderer === 'vtkjs' ? RESIZES_PER_RUN : 0;
     const resourcesAfter = (await readScientific(page)).resources;
+    // Read from glObjects, not resources: ScientificProbe.resources carries the
+    // five keys src/lib declares, so renderbuffers -- the fourth GL type, and
+    // the one vtk.js was measured to leak alongside the other two -- would
+    // otherwise be published but gated on neither page, leaving a leak confined
+    // to renderbuffers free to pass. Both pages write both objects from one
+    // snapshot in the same publish(), so they cannot disagree.
+    const glAfter = await page.evaluate(() => (window as any).__bench.probe.glObjects as Record<string, number>);
     for (const key of ['textures', 'renderTargets'] as const) {
       const delta = resourcesAfter[key] - resourcesBefore[key];
       expect(delta, `${key} grew by ${delta} across 210 forced frames`).toBeGreaterThanOrEqual(0);
       expect(delta, `${key} grew by ${delta}, more than the ${MAX_GROWTH} this renderer was measured to grow by`)
+        .toBeLessThanOrEqual(MAX_GROWTH);
+    }
+    {
+      const delta = glAfter.renderbuffers - glBefore.renderbuffers;
+      expect(delta, `renderbuffers grew by ${delta} across 210 forced frames`).toBeGreaterThanOrEqual(0);
+      expect(delta, `renderbuffers grew by ${delta}, more than the ${MAX_GROWTH} this renderer was measured to grow by`)
         .toBeLessThanOrEqual(MAX_GROWTH);
     }
     // Everything the page itself owns must be exactly flat.
