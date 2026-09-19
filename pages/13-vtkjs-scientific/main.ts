@@ -199,7 +199,7 @@ function rangeOf(values: Float32Array): [number, number] {
 // ---------------------------------------------------------------------------
 // Live GPU-object counts.
 
-type GlCounts = {buffers: number; textures: number; renderTargets: number};
+type GlCounts = {buffers: number; textures: number; renderTargets: number; renderbuffers: number};
 
 /**
  * Counts the GL objects vtk.js actually creates and deletes, by wrapping the
@@ -215,7 +215,7 @@ type GlCounts = {buffers: number; textures: number; renderTargets: number};
  * and 11 framebuffers. These counts are measurements.
  */
 function instrumentGlObjects(gl: WebGL2RenderingContext | WebGLRenderingContext): GlCounts {
-  const counts: GlCounts = {buffers: 0, textures: 0, renderTargets: 0};
+  const counts: GlCounts = {buffers: 0, textures: 0, renderTargets: 0, renderbuffers: 0};
   const target = gl as unknown as Record<string, (...args: unknown[]) => unknown>;
   const wrap = (createName: string, deleteName: string, key: keyof GlCounts) => {
     const create = target[createName].bind(gl);
@@ -233,6 +233,11 @@ function instrumentGlObjects(gl: WebGL2RenderingContext | WebGLRenderingContext)
   wrap('createBuffer', 'deleteBuffer', 'buffers');
   wrap('createTexture', 'deleteTexture', 'textures');
   wrap('createFramebuffer', 'deleteFramebuffer', 'renderTargets');
+  // The fourth type, added after Task 6's review measured vtk.js leaking one
+  // renderbuffer per resize as well as one texture and one framebuffer. Without
+  // it the published magnitude of the leak is understated by a third. Page 14
+  // carries the identical wrap, so the two pages count the same four types.
+  wrap('createRenderbuffer', 'deleteRenderbuffer', 'renderbuffers');
   return counts;
 }
 
@@ -569,11 +574,19 @@ function build(ui: Ui, bundle: ScientificBundle, heatValues: Float32Array): void
     resources: {buffers: 0, textures: 0, renderTargets: 0, listeners: 0, observers: 0},
     measurementValid: true,
   };
-  let glCounts: GlCounts = {buffers: 0, textures: 0, renderTargets: 0};
+  let glCounts: GlCounts = {buffers: 0, textures: 0, renderTargets: 0, renderbuffers: 0};
   let listeners = 0;
   let observers = 0;
   const publish = () => {
-    probe.resources = {...glCounts, listeners, observers};
+    // Five keys, because that is what ScientificProbe.resources declares and
+    // src/lib is not this page's to change. The fourth GL object type
+    // (renderbuffers) is published beside it under the same shape page 14
+    // uses, so Task 7 can diff all four without special-casing either page.
+    probe.resources = {
+      buffers: glCounts.buffers, textures: glCounts.textures,
+      renderTargets: glCounts.renderTargets, listeners, observers,
+    };
+    ui.setProbe('glObjects', {...glCounts, listeners, observers});
     // Recomputed, not snapshotted once: after context loss vtk.js's teardown
     // removes the canvas, and a stale 1 here would be the page reporting a
     // canvas that no longer exists.
@@ -880,15 +893,20 @@ function build(ui: Ui, bundle: ScientificBundle, heatValues: Float32Array): void
     renderWindow.render();
   }
 
+  // Every handler ends in publish(), matching page 14. vtk.js allocates nothing
+  // on these paths today (measured), so the numbers do not move -- but a probe
+  // that goes stale on a path which CAN change what it reports is exactly the
+  // defect closed on the resize path in ce187bf, and it was still sitting on
+  // these handlers. Task 7 joins on this surface, so both pages refresh alike.
   scene = {
-    setSliceHeight(metres) { sliceHeightM = metres; applySlice(); renderWindow.render(); },
+    setSliceHeight(metres) { sliceHeightM = metres; applySlice(); renderWindow.render(); publish(); },
     setColourFraction(which, value) {
       if (which === 'low') colourLow = value; else colourHigh = value;
-      applyTransferFunctions(); renderWindow.render();
+      applyTransferFunctions(); renderWindow.render(); publish();
     },
-    setOpacity(value) { opacityScale = value; applyTransferFunctions(); renderWindow.render(); },
-    setStreamlines(visible) { streamlineActor.setVisibility(visible); renderWindow.render(); },
-    resetCamera() { applyPose(orbitV1Pose(0)); renderWindow.render(); },
+    setOpacity(value) { opacityScale = value; applyTransferFunctions(); renderWindow.render(); publish(); },
+    setStreamlines(visible) { streamlineActor.setVisibility(visible); renderWindow.render(); publish(); },
+    resetCamera() { applyPose(orbitV1Pose(0)); renderWindow.render(); publish(); },
     setCase,
   };
 
@@ -1010,14 +1028,22 @@ function build(ui: Ui, bundle: ScientificBundle, heatValues: Float32Array): void
    * the same sync point.
    */
   function recordRenderSurface(phase: 'interactive' | 'benchmark'): void {
-    ui.setProbe('renderSurface', {
+    const payload = {
       phase,
       benchmarkSize: BENCHMARK_SURFACE,
       drawingBufferWidth: gl ? gl.drawingBufferWidth : null,
       drawingBufferHeight: gl ? gl.drawingBufferHeight : null,
       devicePixelRatio: window.devicePixelRatio,
       contextAttributes: gl ? gl.getContextAttributes() : null,
-    });
+    };
+    // Written to a phase-specific key as well as the rolling one. The
+    // benchmark record used to be overwritten moments later by the 'interactive'
+    // record that runBenchmark's finally block writes on restore, so the
+    // evidence that frame times were measured at the pinned surface existed
+    // only transiently and neither Task 7 nor Task 8 could read it back. Both
+    // pages keep both records, under the same keys.
+    ui.setProbe(phase === 'benchmark' ? 'renderSurfaceBenchmark' : 'renderSurfaceInteractive', payload);
+    ui.setProbe('renderSurface', payload);
   }
 
   // --- context loss --------------------------------------------------------

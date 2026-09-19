@@ -1699,22 +1699,35 @@ function build(ui: Ui, bundle: ScientificBundle, heatValues: Float32Array): void
    * different cost at the same sync point.
    */
   function recordRenderSurface(phase: 'interactive' | 'benchmark'): void {
-    ui.setProbe('renderSurface', {
+    const payload = {
       phase,
       benchmarkSize: BENCHMARK_SURFACE,
       drawingBufferWidth: gl.drawingBufferWidth,
       drawingBufferHeight: gl.drawingBufferHeight,
       devicePixelRatio: window.devicePixelRatio,
       contextAttributes: gl.getContextAttributes(),
-      // Three.js-only, and stated because it is a real difference in what the
-      // two pages rasterise: the opaque pass goes through a render target that
-      // is NOT multisampled (a multisampled target cannot hand a depth TEXTURE
-      // to the volume pass), so city edges are aliased here and resolved on
-      // page 13. The canvas itself is multisampled on both.
+      // Three.js-only, and recorded because the two pages' frame times are
+      // comparable only while it matches the canvas. The opaque target is
+      // multisampled at the canvas's own sample count, so this page rasterises
+      // terrain, buildings and streamlines with exactly the multisampling page
+      // 13 gets from its antialias:true canvas. This comment previously said a
+      // multisampled target "cannot hand a depth TEXTURE to the volume pass",
+      // which is false for three 0.185.1 -- updateMultisampleRenderTarget
+      // blits depth into the single-sample FBO whose depth attachment is the
+      // DepthTexture, and resolveDepthBuffer defaults true. That false claim
+      // cost a 12% frame-time difference that was this page's own doing.
       opaqueTargetSamples: opaqueTarget.samples,
       volumeStepMetres: VOLUME_STEP_M,
       volumeFilter: floatLinear ? 'linear (OES_texture_float_linear)' : 'nearest (OES_texture_float_linear absent)',
-    });
+    };
+    // Written to a phase-specific key as well as the rolling one. The
+    // benchmark record used to be overwritten moments later by the 'interactive'
+    // record that runBenchmark's finally block writes on restore, so the
+    // evidence that frame times were measured at the pinned surface existed
+    // only transiently and neither Task 7 nor Task 8 could read it back. Both
+    // pages keep both records, under the same keys.
+    ui.setProbe(phase === 'benchmark' ? 'renderSurfaceBenchmark' : 'renderSurfaceInteractive', payload);
+    ui.setProbe('renderSurface', payload);
   }
 
   /**
