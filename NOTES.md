@@ -551,7 +551,7 @@ from the built chunk the ratio falls to 0.003 and the assertion fails.
 
 **Task 6 must do the same or the two pages are not comparable.**
 
-### `vtkOpenGLRenderWindow` leaks one texture and one framebuffer per resize
+### `vtkOpenGLRenderWindow` leaks one texture, one framebuffer and one renderbuffer per resize
 
 Measured with GL-object counters installed before the first render. The leak tracks
 drawing-buffer **resizes**, never frames, and never recovers:
@@ -564,9 +564,11 @@ startup               8 textures /  1 framebuffer
 +3 case switches     no change
 ~~~
 
-Confirmed independently at prototype level: exactly +1 texture and +1 framebuffer per
-resize. Page-owned allocations (buffers, listeners, observers) stay flat throughout, so
-this is vtk.js's, not ours. Task 6 needs the same instrumentation to know whether
+Confirmed independently at prototype level: exactly +1 texture, +1 framebuffer and
++1 renderbuffer per resize. The renderbuffer was missed on the first pass, because
+neither page counted that type until Task 6's review added it -- the leak's magnitude
+was understated by a third for a day. Page-owned allocations (buffers, listeners,
+observers) stay flat throughout, so this is vtk.js's, not ours. Task 6 needs the same instrumentation to know whether
 Three.js does it too; it is a maintenance-burden input for Task 8.
 
 ### A node-vs-trilinear probe cannot check axis order, at any node
@@ -605,3 +607,71 @@ wrong reason:
   over z. Cross-check on pressure.
 
 When shipped data cannot distinguish two fields, build a fixture that can.
+
+## vtk.js vs Three.js: the measured comparison (2026-09-19, spike Tasks 5 and 6)
+
+Both pages draw the same DTCC artifacts from the same bundle, through the same
+shared probe and benchmark code, at the same pinned 1280x720 drawing surface.
+
+### Frame time: indistinguishable, and the first answer was wrong
+
+Reported as p50, the robust statistic under a software rasterizer:
+
+~~~
+Three.js (page 14)  cpu p50  151.2 ms   (independent re-measure: 145.6)
+vtk.js   (page 13)  cpu p50  152.8 ms   (independent re-measure: 149.1)
+~~~
+
+**There is no frame-time winner on this scene.** A few percent apart on
+ANGLE/SwiftShader is indistinguishable for a decision.
+
+The first version of this measurement said Three.js was ~12% faster. It was
+wrong, and the reason is worth keeping: page 14's offscreen opaque target was
+single-sampled while page 13's canvas was multisampled at 4, so the two pages
+were rasterizing terrain, buildings and streamlines at different sample counts.
+The page labelled that FORCED, on the claim that a multisampled target cannot
+hand a depth *texture* to the volume pass. That claim is false for three
+0.185.1: `updateMultisampleRenderTarget` blits depth into the single-sample
+framebuffer whose depth attachment is the `DepthTexture`, and
+`resolveDepthBuffer` defaults true. Sampled the same way, the gap collapsed from
+12.4% to 2.4%.
+
+A page artifact wearing a renderer property's clothes. Caught only because the
+review re-measured instead of reading.
+
+### Resource growth: a real difference, and it favours Three.js
+
+Per drawing-buffer resize, measured with GL-object counters on both pages and
+confirmed independently at prototype level:
+
+~~~
+vtk.js 36.12.1   +1 texture, +1 framebuffer, +1 renderbuffer   per resize, never recovered
+Three.js 0.185.1  0           0              0                  flat across 8 resizes
+~~~
+
+vtk.js's counts go 8/1/1 at startup to 18/11/11 after ten resizes. Growth tracks
+resizes, never frames, never slice rebuilds, never case switches. Three.js holds
+flat at 37 buffers / 12 textures / 5 framebuffers / 2 renderbuffers from ready
+onward, across 100 control cycles, three benchmark runs and eight resizes.
+
+### Maintenance burden: ~85 distinct GLSL lines, zero of them reused
+
+Three.js has no volume renderer. The stock `three/addons/shaders/VolumeShader.js`
+supplies only maximum-intensity and isosurface modes, not transparent
+front-to-back compositing, so page 14 hand-writes the compositor and a two-pass
+opaque depth stop.
+
+9 shaders, 144 non-blank lines, 128 substantive as compiled, **85 distinct lines
+owned**. Textual overlap with the stock addon is 11 lines, every distinct one of
+which is `void main() {` or a precision qualifier, so **verbatim reuse is 0**.
+
+That zero needs its structure stated or it misleads in the other direction: ~11
+of the 85 are the shared colormap charged to this page, ~5 are verification
+scaffolding that never runs in a frame, `#include <packing>` pulls
+`perspectiveDepthToViewZ` from three's own chunk library as uncounted reuse, and
+while the compositor and depth stop are genuinely new, the slab ray/AABB
+intersection, the bounded march with a hard `MAX_STEPS`, the clim normalisation,
+the sampler-helper factoring, the half-texel centring and the terminal alpha
+discard are the addon's algorithm re-typed rather than reused.
+
+vtk.js needs none of this: `vtkVolumeMapper` is the product.
