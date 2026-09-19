@@ -508,3 +508,65 @@ Marked as unavailable rather than omitted, and never as zero.
 Task 9 applies the decision rule. Everything it needs is above; nothing needs
 re-measuring. If a number here is wrong, the way to show it is another
 measurement, not another reading.
+
+---
+---
+
+# APPENDED SECTION — VTK.wasm feasibility probe (not part of Task 8)
+
+> **Everything below this line was added by the VTK.wasm feasibility probe, a
+> separate time-boxed companion to this spike. Nothing above it was edited.**
+>
+> **It is not a third contender and it is not an input to Task 9.** The probe
+> answers one question — can current VTK.wasm load this repo's neutral artifacts
+> and draw one city-plus-scientific view in one canvas — and it does not reopen
+> the vtk.js versus Three.js comparison the rest of this document measures.
+> Neither of those paths failed, so there is nothing here to rescue.
+>
+> **These numbers do not belong in any table above.** Every frame time in this
+> document is ANGLE/SwiftShader software rasterization, as its own "what is
+> unavailable" section states. The probe ran on ANGLE Metal on an Apple M4.
+> Comparing them is a category error, not a close call.
+>
+> Full record, including the anti-coincidence tests and the negative control:
+> `spikes/vtk-wasm/README.md`. Re-runnable source: `spikes/vtk-wasm/probe.{html,ts}`.
+
+**Verdict: FEASIBLE FOR FURTHER EVALUATION.** Every one of the eleven success
+assertions passed, twice — once in the working environment and once from a clean
+install, with a bit-identical frame.
+
+Probed on 2026-09-19 with `@kitware/vtk-wasm@3.0.4` (the plan's baseline, which
+does exist on the registry; `latest` was 3.0.5) driving runtime bundle
+`vtk-wasm32-emscripten.tar.gz` sha256 `79ae16e4…c031e`, self-identifying as VTK
+`9.7.20260913`. Browser: ego lite 0.5.0.32 (Chromium), macOS 15.5 arm64.
+Elapsed: **11 min 2 s** of a 4-hour box.
+
+| Measurement | Value | How it was taken |
+|---|---|---|
+| Runtime initialization | **471.7 ms** (103.0 ms fetch over localhost + 368.7 ms gunzip/untar/compile/instantiate) | `t0` recorded *before* the first runtime byte was requested; the fetch split cross-checked against the tarball's `PerformanceResourceTiming` entry |
+| Session creation | 58.4 ms | `runtime.createStandaloneSession()` |
+| First rendered frame | **1686.6 ms** after `t0` | includes artifact fetch+verify (333.9 ms), scene construction, and a 650 ms first render (shader compile + volume texture upload) |
+| Transferred runtime bytes | **12,734,721 B** wire, **87,326,720 B** decompressed | one request; `transferSize` / `decodedBodySize`. The `.wasm` alone is 84,487,981 B. The npm package (432 KB) contains no `.wasm`. |
+| Transferred artifact bytes | 2,730,359 B across 10 requests | counted separately so the runtime figure is not inflated by the data |
+| `render()` submit time | median **1.4 ms**, p95 9.9 ms (30 camera steps) | synchronous cost of `render()` returning — **not** a frame time |
+| Presented frame interval | median **16.7 ms**, p95 33.4 ms (40 frames) | measured across `requestAnimationFrame`; vsync-locked at 60 Hz |
+| Backend that actually ran | `vtkWebAssemblyOpenGLRenderWindow`, `getRenderingBackend()` → `OpenGL2`, live context `WebGL 2.0 (OpenGL ES 3.0 Chromium)` on `ANGLE (Apple, ANGLE Metal Renderer: Apple M4)` | read off the render window's own class and the live canvas context, not off a capability string |
+| Teardown | session **released** (post-dispose calls throw `Cannot pass deleted object as a pointer of type vtkStandaloneSession*`); wasm heap **not** returned (20,185,088 B before and after); WebGL context **never** lost, even after `runtime.dispose()`; `StandaloneSession.dispose()` leaves the canvas in `specialHTMLTargets` | measured after each of `finalize()`, `session.dispose()`, `runtime.dispose()` |
+
+Artifact verification, the same contract the rest of this document is built on:
+all 10 files (`scientific-manifest.json`, `scientific.bin` and its 8 declared
+dependencies) byteLength- and SHA-256-verified through this repo's own
+`src/lib/scientific-data.ts` **before** the first VTK object existed
+(validated at 421.2 ms, first VTK object at 964.0 ms). A negative control with
+one byte of `scientific.bin` flipped was rejected —
+`sha256 mismatch -- manifest says f4ab6c11… file hashes to 78989a80…` — so the
+ordering assertion rests on a check that is load-bearing.
+
+Both halves of the scene were confirmed to draw by rendering the false case and
+diffing pixels, not by looking at a screenshot: an empty renderer gives 1
+distinct colour and 0 non-background pixels; removing the volume changes 159,010
+pixels; removing the city changes 63,796.
+
+The probe added **no dependency to this repo**: `@kitware/vtk-wasm` lived only in
+`mktemp -d` directories, and `git diff --stat` shows no change to `package.json`
+or `bun.lock`.
