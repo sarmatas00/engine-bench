@@ -15,9 +15,18 @@ bun run measure:scientific
 
 which builds the pages and drives them through `scripts/measure-scientific.ts`,
 writing the full machine-readable record — every frame time, every GL counter,
-every bundle byte, every rejection — to `.cache/scientific-measurements.json`.
+every bundle byte, every rejection — to `.cache/scientific-measurements.json`,
+**and a per-session copy to `.cache/sessions/<generatedAt>.json`**.
 The pure aggregation layer that script exposes is unit-tested in
 `tests/unit/scientific-probes.test.ts`.
+
+The per-session copy exists because the rolling file is overwritten by every
+run, and the frame-time section below is a comparison *across* sessions. Sessions
+**A and D predate the archive and have no surviving machine-readable record** —
+their rows were transcribed from the run output at the time and cannot be
+re-checked the way every other row here can. Sessions B, C, E, F and G can.
+Stated rather than quietly left as a gap, since a table whose rows differ in how
+well they can be audited should say which ones.
 
 **Every number in this document comes out of that one command**, including the
 bundle-size row, which was previously computed by an ad hoc shell command and
@@ -135,7 +144,7 @@ code, same pinned surface. Medians are across the three accepted runs per page.
 
 ## Frame time: no winner, and the sign of the gap is not stable
 
-**The gap between the two renderers changes sign between sessions.** Four
+**The gap between the two renderers changes sign between sessions.** Six
 independent sessions of the same script on the same machine, each three cold
 contexts per page, interleaved:
 
@@ -146,24 +155,38 @@ contexts per page, interleaved:
 | C *(independent reviewer, quiet machine)* | 157.5 ms (157.5 / 153.2 / 159.1) | **163.2 ms** (150.2 / 163.2 / 164.6) | 3.6% | **Three.js** |
 | D | 153.1 ms (156.0 / 153.1 / 152.9) | 150.1 ms (149.9 / 150.1 / 150.9) | 2.0% | vtk.js |
 | E *(record)* | 158.4 ms (158.4 / 159.3 / 153.8) | 151.2 ms (164.8 / 151.2 / 150.3) | 4.8% | vtk.js |
+| F *(independent reviewer, quiet machine)* | 162.7 ms (156.1 / 168.4 / 162.7) | 151.9 ms (150.3 / 161.6 / 151.9) | 7.1% | vtk.js |
+| G *(controller, after the gate fixes)* | 153.9 ms (153.5 / 153.9 / 154.1) | 149.9 ms (149.9 / 149.6 / 150.8) | 2.7% | vtk.js |
 
 **There is no frame-time winner on this scene**, and this document does not
-manufacture one in either direction. The gap runs from 2.0% to 4.8% and **its
-sign is not stable**: four sessions put vtk.js behind, one puts Three.js behind
-by more than two of those four. A margin that changes direction between sessions
-of the same script on the same machine is not a property of a renderer.
+manufacture one in either direction. The gap runs from **2.0% to 7.1%** and **its
+sign is not stable**: six sessions put vtk.js behind, one puts Three.js behind.
+A margin that changes direction between sessions of the same script on the same
+machine is not a property of a renderer.
 
 Within-condition spread — the same page, three cold contexts, minutes apart, one
-machine — is why. It measured as low as 0.5%, and as high as **9.6% for
-Three.js**, twice, independently: session C (150.2, then 163.2 and 164.6) and
-session E (164.8, then 151.2 and 150.3). **The largest within-condition spread
-measured is twice the largest cross-renderer gap measured.** Earlier in the
-spike the spread reached **18%**.
+machine — is why. Measured range: **0.4% to 9.6%**. The 9.6% appeared for
+Three.js twice, independently: session C (150.2, then 163.2 and 164.6) and
+session E (164.8, then 151.2 and 150.3). Earlier in the spike the spread reached
+**18%**.
+
+So: **the cross-renderer gap spans 2.0-7.1%, the within-condition spread spans
+0.4-9.6%, and the sign reverses in one session of seven.** The two ranges overlap
+across most of their length, which is the whole finding.
+
+An earlier draft of this section compressed that into a single ratio — "the
+largest spread measured is twice the largest gap measured". It was arithmetically
+true of the five sessions then in hand and **false by the sixth**, which pushed
+the gap to 7.1% and the ratio to 1.36x. It is recorded here because it is this
+spike's recurring defect in its purest form, committed *in the fix for a previous
+instance of itself*: a number that is right only by coincidence of when it was
+taken. Ranges move as sessions accumulate; a ratio of two extremes lurches.
 
 Read the low figures as a floor on the noise, never as its size. Any single
-session's 0.5% spread is a statement about that session's quiet, not about the
+session's 0.4% spread is a statement about that session's quiet, not about the
 renderer — and quoting one would be this spike's recurring defect in its purest
-form: a number that is right only by coincidence of when it was taken.
+form: a number that is right only by coincidence of when it was taken. That floor
+has already moved once: it was 0.5% until session G measured 0.4%.
 
 The parity suite deliberately asserts nothing about frame times for the same
 reason.
@@ -181,6 +204,11 @@ here — **not** because it carries a direction.
 | C | 144.4–145.9 ms | **139.8–148.2 ms** | **overlapping** |
 | D | 142.4–143.4 ms | 138.3–140.0 ms | separated |
 | E *(record)* | 142.5–145.3 ms | 139.1–141.2 ms | separated |
+
+Session F is absent from this table on purpose: it was run to test the frame-time
+claim above and its per-run floors were not recorded, so there is no row to
+publish. Five floor rows, six p50 rows — the difference is what was measured, not
+a selection.
 
 In session C the Three.js floor moved **8.4 ms across three cold contexts** and
 swallowed the vtk.js band whole. A separation that holds in four sessions and
@@ -248,7 +276,8 @@ an empty record would otherwise satisfy it vacuously.
 
 **Across 8 drawing-buffer resizes**, vtk.js 36.12.1 grows by **+8 textures, +8
 framebuffers and +8 renderbuffers** — one of each per resize, reproduced
-identically on all three of its runs, in all five sessions, and in both
+identically on all three of its runs, in all six sessions where growth was
+recorded (A-E and G; session F was run to test the frame-time claim only), and in both
 orderings of the sweep against the control cycles — and never recovers them. Three.js
 0.185.1 grows by **0, 0, 0**. This is a **result**, not a gate: rejecting
 vtk.js's runs for it would turn one of the spike's three findings into an

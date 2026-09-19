@@ -661,9 +661,12 @@ import {
   FPS_FAIL_BELOW,
   FPS_TARGET_MIN,
   GPU_MAX_REJECTION_RATE,
+  EXPECTED_RESOURCE_KEYS,
   judgeRun,
+  medianOf,
   percentile,
   REQUIRED_CPU_SAMPLES,
+  spreadPct,
   type RunObservation,
 } from '../../scripts/measure-scientific';
 
@@ -1118,5 +1121,50 @@ describe('measure-scientific: judgeRun (the validity gate and the run-rejection 
     }));
     expect(verdict.accepted).toBe(false);
     expect(verdict.rejections.length).toBeGreaterThanOrEqual(5);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The two functions that produce the document's headline aggregates. The
+// scoped re-review found BOTH mutable without a single test failing: making
+// medianOf return the max survived all 85 tests in this file, and under that
+// one-token change session E reads vtk.js 159.3 against Three.js 164.8 -- the
+// SIGN OF THE PUBLISHED GAP FLIPS, silently, inside the function the whole
+// C1 fix rests on. These assertions exist so that cannot happen again.
+
+describe('measure-scientific: medianOf and spreadPct (the published aggregates)', () => {
+  // Fails if medianOf returns max (3), min (1), the last element, or the
+  // unsorted middle -- an odd-length unsorted input separates all of them.
+  test('medianOf is the middle of the SORTED values, not the max or the input order', () => {
+    expect(medianOf([3, 1, 2])).toBe(2);
+    expect(medianOf([100, 1, 50])).toBe(50);
+  });
+
+  // Fails if the empty case throws, returns 0, or returns NaN. The harness
+  // relies on null to mean "no runs", which is not the same as "zero ms".
+  test('medianOf returns null for no values, never 0 or NaN', () => {
+    expect(medianOf([])).toBeNull();
+  });
+
+  // Fails if spreadPct drops the -1 (would read 110) or the *100 (0.1), which
+  // is exactly the pair of mutations that survived the re-review.
+  test('spreadPct is (max/min - 1) as a percentage', () => {
+    expect(spreadPct([100, 110])).toBeCloseTo(10, 10);
+    expect(spreadPct([150.3, 164.8])).toBeCloseTo(9.647, 3);
+    expect(spreadPct([150, 150])).toBe(0);
+  });
+
+  test('spreadPct needs two values to mean anything', () => {
+    expect(spreadPct([150])).toBeNull();
+    expect(spreadPct([])).toBeNull();
+  });
+
+  // The stability gate reads this constant. Narrowing it one key at a time
+  // survived all 175 tests, because no fixture omits exactly one non-
+  // renderbuffers counter -- so the gate could be quietly hollowed out.
+  test('EXPECTED_RESOURCE_KEYS carries all six counters both pages publish', () => {
+    expect([...EXPECTED_RESOURCE_KEYS].sort()).toEqual(
+      ['buffers', 'listeners', 'observers', 'renderTargets', 'renderbuffers', 'textures'],
+    );
   });
 });

@@ -78,6 +78,21 @@ export const EXPECTED_RESOURCE_KEYS = [
   'buffers', 'textures', 'renderTargets', 'renderbuffers', 'listeners', 'observers',
 ] as const;
 
+/**
+ * The floor the CPU p50 must clear, in milliseconds.
+ *
+ * Not a performance expectation -- 0.01 ms is 100,000 FPS, which no real frame
+ * of this scene approaches from either direction. It is a CLOCK-RESOLUTION
+ * floor. The gate used to read `p50 > 0`, which the scoped re-review defeated
+ * with 180 frames of 5e-324 ms: accepted, `minSustainedFps: Infinity`, verdict
+ * `meets-target`. `performance.now()` quantisation makes sub-nanosecond frame
+ * deltas unproducible in a browser, so that was residue rather than a live
+ * hole -- but the gate's own stated rationale ("a frame that takes no
+ * measurable time was not measured") argues for the clock's resolution, not
+ * for zero.
+ */
+export const MIN_PLAUSIBLE_FRAME_MS = 0.01;
+
 export type FpsVerdict = 'fails-interactive-mvp' | 'qualified' | 'meets-target';
 
 /**
@@ -317,8 +332,10 @@ export function judgeRun(obs: RunObservation): RunVerdict {
       // Computed here only to gate on it. The published aggregate is still
       // built once, below, and only when nothing rejected the run.
       const p50 = percentile(obs.cpuFrameTimesMs, 50);
-      if (!(p50 > 0)) {
-        rejections.push(`the CPU p50 is ${p50} ms; a frame that takes no measurable time was not measured`);
+      if (!(p50 >= MIN_PLAUSIBLE_FRAME_MS)) {
+        rejections.push(
+          `the CPU p50 is ${p50} ms, below the ${MIN_PLAUSIBLE_FRAME_MS} ms clock floor; `
+          + 'a frame that takes no measurable time was not measured');
       }
     }
   }
@@ -560,7 +577,20 @@ async function main(): Promise<void> {
   const outDir = join(repo, '.cache');
   mkdirSync(outDir, {recursive: true});
   const out = join(outDir, 'scientific-measurements.json');
-  writeFileSync(out, JSON.stringify(record, null, 2));
+  const json = JSON.stringify(record, null, 2);
+  writeFileSync(out, json);
+
+  // ALSO archived per session, under its own generatedAt. The rolling file
+  // above is overwritten by every run, which is how sessions A and D in
+  // docs/scientific-visualization-measurements.md ended up with no surviving
+  // machine-readable record: three of the five floor rows published there
+  // cannot be re-checked against anything. The frame-time section's whole
+  // argument is a comparison ACROSS sessions, so the sessions have to outlive
+  // each other for the table to be auditable by the same standard as every
+  // other row here.
+  const sessionDir = join(outDir, 'sessions');
+  mkdirSync(sessionDir, {recursive: true});
+  writeFileSync(join(sessionDir, `${record.generatedAt.replace(/[:.]/g, '-')}.json`), json);
 
   console.log('\n' + '='.repeat(78));
   for (const renderer of ['vtkjs', 'threejs'] as const) {
@@ -647,11 +677,28 @@ function bundleSizes(
       }
     }
   }
+  // The walk keys on the bundler's literal `from"./x.js"` output form. If Vite
+  // ever emits a different shape, the walk silently finds fewer files and this
+  // function publishes a smaller bundle with NO signal -- a number in the
+  // document that quietly drifts. Both pages pull at least their entry chunk
+  // plus a vendor chunk, and the entry itself must be among them, so assert
+  // both rather than trusting the regex to keep matching.
+  if (paths.length < 2) {
+    throw new Error(
+      `bundleSizes(${slug}): walked only ${paths.length} file(s) -- the chunk-graph regex `
+      + 'probably stopped matching the bundler output. Refusing to publish a bundle size.');
+  }
+  if (!paths.some(p => p.endsWith('.js'))) {
+    throw new Error(`bundleSizes(${slug}): reached no JS chunk at all; the entry was not found.`);
+  }
   return {files: paths.length, rawBytes, gzipBytes, gzipTool: 'Bun.gzipSync, default level', paths: paths.sort()};
 }
 
-/** Max/min - 1, as a percentage. Null for fewer than two values. */
-function spreadPct(values: readonly number[]): number | null {
+/** Max/min - 1, as a percentage. Null for fewer than two values.
+ *  Exported only so a test can pin it: this produces the within-condition
+ *  spread figures the frame-time section's whole argument rests on, and the
+ *  re-review found it mutable without a single test failing. */
+export function spreadPct(values: readonly number[]): number | null {
   if (values.length < 2) return null;
   return (Math.max(...values) / Math.min(...values) - 1) * 100;
 }
