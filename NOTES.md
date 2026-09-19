@@ -675,3 +675,17 @@ the sampler-helper factoring, the half-texel centring and the terminal alpha
 discard are the addon's algorithm re-typed rather than reused.
 
 vtk.js needs none of this: `vtkVolumeMapper` is the product.
+
+**But it is the same mechanism, not a different one.** The parity suite's first
+wording claimed the two renderers occlude the volume by "genuinely different
+mechanisms", and that is wrong.
+`@kitware/vtk.js/Rendering/OpenGL/VolumeMapper.js:113` substitutes
+`//VTK::ZBuffer::Impl` with a `zBufferTexture` read and
+`dists.y = min(zdepth, dists.y);` — the identical opaque-depth-texture clamp page
+14 writes by hand. Neutralising that one line drives vtk.js's occlusion ratio to
+1.00, symmetric with deleting page 14's `tFar = min(tFar, opaqueViewZ/rayViewZ)`.
+
+So the burden difference is **ownership, not capability**: both pages run a depth
+prepass and clamp the ray against it; on one it is vendored and maintained by
+Kitware, on the other it is ~85 lines this repo owns. Do not write that vtk.js
+needs no depth prepass.

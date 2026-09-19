@@ -766,7 +766,20 @@ function build(ui: Ui, bundle: ScientificBundle, heatValues: Float32Array): void
   renderer.addActor(streamlineActor);
 
   const ctf = vtkColorTransferFunction.newInstance();
+  // The opacity the top transfer-function node carries per unit of the
+  // control, so the publish path below can invert it and report what the
+  // SCENE holds rather than what the handler was told.
+  const OPACITY_TOP_FRACTION = 0.6;
   const ofun = vtkPiecewiseFunction.newInstance();
+  /** The control value recovered from the transfer function vtk.js actually
+   *  holds. Returns null before the first applyTransferFunctions(). */
+  const liveOpacityScale = (): number | null => {
+    const size = ofun.getSize();
+    if (!size) return null;
+    const node: number[] = [];
+    ofun.getNodeValue(size - 1, node);
+    return node[1] / OPACITY_TOP_FRACTION;
+  };
   const sliceOpacity = vtkPiecewiseFunction.newInstance();
   const streamlineCtf = vtkColorTransferFunction.newInstance();
   streamlineMapper.setLookupTable(streamlineCtf);
@@ -827,7 +840,7 @@ function build(ui: Ui, bundle: ScientificBundle, heatValues: Float32Array): void
     ofun.removeAllPoints();
     ofun.addPoint(lo, 0);
     ofun.addPoint(lo + 0.5 * (hi - lo), 0.05 * opacityScale);
-    ofun.addPoint(hi, 0.6 * opacityScale);
+    ofun.addPoint(hi, OPACITY_TOP_FRACTION * opacityScale);
     // The slice is translucent on purpose: an opaque plane hides the terrain
     // and buildings underneath it, and the point of this page is that one scene
     // carries both. The same opacity control drives it and the volume, so there
@@ -1404,9 +1417,23 @@ function build(ui: Ui, bundle: ScientificBundle, heatValues: Float32Array): void
         // Without them a suite can prove a control's CALLBACK ran and not that
         // it reached the scene: 100 cycles of opacity and streamline toggling
         // would look identical whether the handlers were wired to the renderer
-        // or to nothing at all. Read live off the actor, not off the variable
-        // the handler set.
-        opacityScale,
+        // or to nothing at all. Read live off the vtk object, not off the
+        // variable the handler set: publishing the bare `opacityScale` local
+        // reported what the handler was TOLD, never what the scene holds.
+        // Page 14 reads uOpacityScale.value, so both fields now have the same
+        // shape and the same power.
+        //
+        // WHAT THIS CATCHES, measured, because the obvious control does not
+        // work: freezing the scene write (`ofun.addPoint(hi, 0.6 * 0.5)`)
+        // fails the 100-cycle assertion with "Expected 0, Received 0.5". But
+        // deleting applyTransferFunctions() from setOpacity alone does NOT
+        // fail it, and that is not a hole in this read -- the same cycle also
+        // drives colour range and case, whose handlers call
+        // applyTransferFunctions() too and pick up the current opacityScale on
+        // the way past. So the assertion witnesses "the transfer function the
+        // scene holds tracks the control", not "this one handler is wired".
+        // Do not conclude from that control passing that the read is toothless.
+        opacityScale: liveOpacityScale(),
         streamlinesVisible: !!streamlineActor.getVisibility(),
 
         // INVARIANTS. Both pages read the same Float32Array through the same

@@ -259,11 +259,17 @@ test.describe('cross-renderer', () => {
         }
       }
 
-      // FAILS IF: vtk.js grows a page-visible depth target, or page 14 stops
-      // using a depth prepass. This asymmetry is a MEASURED RENDERER
-      // DIFFERENCE -- vtk.js composites its volume against opaque geometry
-      // inside one pass; Three.js has no volume renderer and needs a depth
-      // texture to do the same thing -- so the null is asserted, not skipped.
+      // FAILS IF: vtk.js grows a page-OWNED depth target, or page 14 stops
+      // using a depth prepass.
+      // This asymmetry is about OWNERSHIP, not mechanism. Both renderers clamp
+      // the volume ray against an opaque-depth texture: vtk.js does it inside
+      // vtkOpenGLVolumeMapper, which substitutes //VTK::ZBuffer::Impl with a
+      // zBufferTexture read and `dists.y = min(zdepth,dists.y)`, and page 14
+      // does the same thing by hand. So the null here means "no target THIS
+      // PAGE owns", never "no depth prepass". An earlier version of this
+      // comment said vtk.js composites in one pass and Three.js needs a depth
+      // texture "to do the same thing" -- that reading would have become a
+      // maintenance-burden conclusion in Task 9, and it is wrong.
       expect(p.vtkjs.depthTarget).toBeNull();
       expect(p.threejs.depthTarget).toMatchObject({hasDepthTexture: true});
       expect(p.threejs.depthTarget.width).toBe(p.threejs.surface.drawingBufferWidth);
@@ -506,7 +512,10 @@ test.describe('cross-renderer', () => {
         // points -- which is what would happen if one of them read the wrong
         // case's extent after a switch.
         expect(a[i].target, `${where}: the two pages probed different world points`).toEqual(b[i].target);
-        expect(a[i].cpu.value, `${where}: the shared sampler disagrees between the pages`).toBe(b[i].cpu.value);
+        // INVARIANT, not parity evidence: both sides are sampleGridTrilinear over
+        // the same Float32Array at a point the line above already asserted equal,
+        // so this can only fail if src/lib is edited. Kept because it is free.
+        expect(a[i].cpu.value, `${where}: INVARIANT -- the shared sampler disagrees between the pages`).toBe(b[i].cpu.value);
         (valuesByCase[a[i].caseId] ??= []).push(a[i].cpu.value);
         for (const [r, m] of [['vtkjs', a[i]], ['threejs', b[i]]] as const) {
           // FAILS IF: that renderer's own texture upload, its own sampler, its
@@ -707,7 +716,12 @@ test.describe('cross-renderer', () => {
           .toBeCloseTo(((last * 11) % 100) / 100, 6);
         expect(report[r].parity.streamlinesVisible, `${r}: the streamline toggle did not reach the scene`)
           .toBe(last % 2 === 0);
-        expect(report[r].parity.sliceRequestedZ, `${r}: the slice control did not reach the scene`)
+        // Weaker than the two above ON PURPOSE, and labelled so: sliceRequestedZ
+        // is the REQUESTED height on both pages, so this proves the handler ran
+        // and stored the value, not that the drawn plane moved. The rendered-z
+        // witness is sliceGeometry() in scientificPageChecks, which asserts
+        // renderedZ === requestedZ against the page's own lattice.
+        expect(report[r].parity.sliceRequestedZ, `${r}: the slice control did not store the requested height`)
           .toBeCloseTo(4 + (last * 7) % 72, 6);
         // The bound is PER RENDERER, set by what that renderer was measured to
         // do. vtk.js 36.12.1 leaks one texture, one framebuffer AND one
@@ -1118,9 +1132,13 @@ function resizeSuite(dprLabel: string) {
       const dpr = after.vtkjs.surface.devicePixelRatio;
       const layoutGap = (after.vtkjs.surface.cssHeight - after.threejs.surface.cssHeight) * dpr;
       const bufferGap = after.vtkjs.surface.drawingBufferHeight - after.threejs.surface.drawingBufferHeight;
+      // Slack scales with dpr, because what it absorbs is each page's own
+      // flooring of css*dpr and that error grows with dpr. A flat 2 px was
+      // fine at the dpr 1 and 2 measured here (0.8 px at dpr 2) and would be
+      // too tight at dpr 3.
       expect(Math.abs(bufferGap - layoutGap),
         `the two drawing buffers differ by ${bufferGap} px in height where their css boxes differ by `
-        + `${layoutGap.toFixed(1)} px -- the gap is not explained by layout`).toBeLessThanOrEqual(2);
+        + `${layoutGap.toFixed(1)} px -- the gap is not explained by layout`).toBeLessThanOrEqual(2 * dpr);
       // FAILS IF: a page stops tracking its own css box. Held to one css pixel
       // scaled by dpr, not to equality, because THE TWO PAGES ROUND
       // DIFFERENTLY and that is measurable: page 13 floors width*dpr, page 14
