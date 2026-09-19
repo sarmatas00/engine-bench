@@ -945,6 +945,14 @@ test.describe('cross-renderer', () => {
       // independently re-measured at 145.6 and 149.1. There is no winner on
       // this scene, and an assertion implying one would be the suite inventing
       // a result. The numbers are logged for Task 8 instead.
+      // SECOND p50 DEFINITION IN THIS REPO, cross-referenced so the two cannot
+      // drift apart unnoticed. This is the UPPER median (index 90 of 180);
+      // scripts/measure-scientific.ts's `percentile` is nearest-rank (index
+      // 89) and is the one the measurement document quotes. Measured delta on
+      // real runs: 0.0-0.2 ms. They are not merged into src/lib because that
+      // file is frozen for Task 8, and because this number is a console log
+      // that is explicitly NOT a measurement of record while that one is. If
+      // you change either, change the comment in the other.
       const p50 = (xs: number[]) => [...xs].sort((x, y) => x - y)[Math.floor(xs.length / 2)];
       console.log('frame time p50 at 1280x720, NOT A MEASUREMENT OF RECORD -- one run each, taken while the rest '
         + 'of this suite is running on the same machine, so the two are not even isolated from each other. NO '

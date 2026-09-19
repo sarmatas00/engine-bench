@@ -127,7 +127,18 @@ const THREE_APIS = [
   'MeshLambertMaterial', 'AmbientLight', 'DirectionalLight', 'LineSegments', 'LineBasicMaterial',
   'Data3DTexture', 'DataTexture', 'ShaderMaterial',
   'WebGLRenderTarget', 'DepthTexture', 'Raycaster', 'BoxGeometry', 'PlaneGeometry',
-  'addons/controls/OrbitControls',
+  // The addons, listed LAST and prefixed so a reader can count core and addon
+  // entries apart. `three/addons/*` is not covered by the same stability
+  // guarantee as the core package, which is the reason this list exists.
+  //
+  // VolumeShader was missing until Task 8 read this probe back and found it
+  // disagreed with the file's own imports: the page imports
+  // VolumeRenderShader1 and reads its vertexShader/fragmentShader in
+  // glslOverlap(), so it is an entry point this page uses by any reading. A
+  // burden list that undercounts the addon surface is the measurement
+  // flattering the page. No counterpart change on page 13: VTK_APIS was
+  // already exact, and vtk.js has no addon tier here.
+  'addons/controls/OrbitControls', 'addons/shaders/VolumeShader',
 ];
 
 // ---------------------------------------------------------------------------

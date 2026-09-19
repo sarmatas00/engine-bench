@@ -68,6 +68,16 @@ export const GPU_MAX_REJECTION_RATE = 0.1;
 /** The drawing buffer every frame time of record was measured at. */
 export const BENCHMARK_SURFACE = {width: 1280, height: 720} as const;
 
+/**
+ * The counters a stability record must carry. All four GL object types plus
+ * the two the pages own themselves -- `window.__bench.probe.glObjects`'s full
+ * shape, which is wider than `ScientificProbe.resources`'s five keys because
+ * that contract leaves out renderbuffers.
+ */
+export const EXPECTED_RESOURCE_KEYS = [
+  'buffers', 'textures', 'renderTargets', 'renderbuffers', 'listeners', 'observers',
+] as const;
+
 export type FpsVerdict = 'fails-interactive-mvp' | 'qualified' | 'meets-target';
 
 /**
@@ -79,6 +89,15 @@ export type FpsVerdict = 'fails-interactive-mvp' | 'qualified' | 'meets-target';
  * Copies before sorting: the caller's array is written into the JSON record
  * as the per-frame series after this runs, and an in-place sort would publish
  * a sorted "per-frame" series, which is a true number beside a false shape.
+ *
+ * A SECOND p50 EXISTS IN THIS REPO, on purpose, and the two are cross-
+ * referenced so neither drifts unnoticed: tests/scientific.spec.ts's logging
+ * helper uses `sorted[Math.floor(n/2)]`, the UPPER median (index 90 of 180)
+ * where nearest-rank takes index 89. Measured delta on real runs: 0.0-0.2 ms,
+ * and no conclusion in the document moves on it. They are deliberately NOT
+ * merged into src/lib: that file is frozen for this task, and the suite's
+ * number is a console log that is explicitly not a measurement of record,
+ * while this one is. If you change either, change the comment in the other.
  */
 export function percentile(values: readonly number[], p: number): number {
   if (values.length === 0) throw new Error('percentile: no samples');
@@ -132,8 +151,22 @@ export function aggregateCpuFrames(samples: readonly number[]): CpuAggregate {
 }
 
 export type GpuAggregate = {
+  /**
+   * Did the page publish `gpuSampleStats` at all?
+   *
+   * SEPARATE FROM `available`, and the separation was put here because its
+   * absence was measured doing real damage: with the field deleted from both
+   * built pages -- exactly how a page that never published it would look -- a
+   * run that had just returned 180 GPU samples was ACCEPTED and reported as
+   * "this browser does not expose EXT_disjoint_timer_query_webgl2". A false
+   * statement about the browser, published from a page defect, by the very
+   * check that exists to catch that page defect. `false` here is a RUN
+   * REJECTION, never an availability verdict.
+   */
+  published: boolean;
   /** Was there a GPU timer at all? False means the browser does not expose
-   *  EXT_disjoint_timer_query_webgl2 -- an absent measurement, never a zero. */
+   *  EXT_disjoint_timer_query_webgl2 -- an absent measurement, never a zero.
+   *  Only meaningful when `published` is true. */
   available: boolean;
   /** May the p50/p95 below be quoted? False whenever they are null. */
   quotable: boolean;
@@ -150,25 +183,48 @@ export type GpuAggregate = {
 
 /**
  * `samples` is BenchmarkResult.gpuFrameTimesMs (null when the page had no
- * timer) and `stats` is BenchmarkDriver.lastGpuSampleStats() as the page
- * publishes it. Both are needed: `samples` alone cannot tell an empty array
- * apart from a missing timer, which is the whole reason the pages publish the
- * stats.
+ * timer), `stats` is BenchmarkDriver.lastGpuSampleStats() as the page
+ * publishes it, and `published` is whether the page carried the key AT ALL.
+ *
+ * All three are needed, and `published` has NO DEFAULT on purpose -- a default
+ * is what would let a caller reintroduce the conflation this argument exists
+ * to remove. `samples` alone cannot tell an empty array from a missing timer;
+ * `stats === null` alone cannot tell a missing timer from a missing field.
  */
 export function aggregateGpuFrames(
   samples: readonly number[] | null,
   stats: {kept: number; rejected: number} | null,
+  published: boolean,
 ): GpuAggregate {
-  if (stats === null) {
-    return {
-      available: false, quotable: false, kept: 0, rejected: 0, rejectionRate: null,
-      p50: null, p95: null,
-      reason: 'no GPU timer: this browser does not expose EXT_disjoint_timer_query_webgl2',
-    };
+  const absent = (reason: string): GpuAggregate => ({
+    published, available: false, quotable: false, kept: 0, rejected: 0,
+    rejectionRate: null, p50: null, p95: null, reason,
+  });
+
+  if (!published) {
+    return absent(
+      'the page does not publish gpuSampleStats, so nothing here can be said about its GPU samples -- '
+      + 'this is a PAGE DEFECT, not a browser capability');
   }
+  if (stats === null) {
+    // No timer. The driver publishes gpuFrameTimesMs as null in exactly that
+    // case and in no other, so an array beside a null tally is a contradiction
+    // rather than an absence -- checked HERE, before the early return, because
+    // sitting below it is what let a deleted field through.
+    if (samples !== null) {
+      return {
+        ...absent(
+          `gpuSampleStats is null (no GPU timer) but gpuFrameTimesMs carries ${samples.length} entries; `
+          + 'the two do not describe the same run'),
+        available: true,
+      };
+    }
+    return absent('no GPU timer: this browser does not expose EXT_disjoint_timer_query_webgl2');
+  }
+
   const total = stats.kept + stats.rejected;
   const rejectionRate = total === 0 ? 1 : stats.rejected / total;
-  const base = {available: true, kept: stats.kept, rejected: stats.rejected, rejectionRate};
+  const base = {published, available: true, kept: stats.kept, rejected: stats.rejected, rejectionRate};
   const unquotable = (reason: string): GpuAggregate => ({...base, quotable: false, p50: null, p95: null, reason});
 
   // The two halves of the page's own publish() snapshot must agree. They come
@@ -208,6 +264,9 @@ export type RunObservation = {
   cpuFrameTimesMs: number[];
   gpuFrameTimesMs: number[] | null;
   gpuSampleStats: {kept: number; rejected: number} | null;
+  /** Whether `gpuSampleStats` was a key on the page's probe at all --
+   *  `'gpuSampleStats' in probe`, not `probe.gpuSampleStats !== null`. */
+  gpuSampleStatsPublished: boolean;
   /** `window.__bench.probe.renderSurfaceBenchmark` -- the phase-specific key,
    *  never the rolling `renderSurface` one, which runBenchmark's finally block
    *  overwrites with the interactive record moments after the run. */
@@ -237,9 +296,31 @@ export function judgeRun(obs: RunObservation): RunVerdict {
   // THE VALIDITY GATE (see the header): the driver already excluded the warmup
   // frames, so this is a gate on the shape of what it returned, not an
   // exclusion this script performs.
+  //
+  // COUNT IS NOT ENOUGH, measured: 180 samples of 0 ms passed the count gate
+  // and published a p50 of 0 with an INFINITE minimum sustained FPS and a
+  // "meets-target" verdict; 180 samples of -5 ms published -200 FPS; 179 good
+  // samples plus one NaN passed too. A gate that only counts accepts a run
+  // that never timed anything, which is the same defect as a check that passes
+  // for the wrong reason, one layer up. So the values are gated as well as the
+  // count.
   const n = obs.cpuFrameTimesMs.length;
   if (n !== REQUIRED_CPU_SAMPLES) {
     rejections.push(`${n} CPU samples, not the ${REQUIRED_CPU_SAMPLES} orbit-v1 records (validity gate)`);
+  } else {
+    const bad = obs.cpuFrameTimesMs.filter(t => !Number.isFinite(t)).length;
+    if (bad > 0) {
+      rejections.push(`${bad} of ${n} CPU samples are not finite numbers`);
+    } else if (obs.cpuFrameTimesMs.some(t => t < 0)) {
+      rejections.push(`a CPU sample is negative (min ${Math.min(...obs.cpuFrameTimesMs)} ms); the clock ran backwards`);
+    } else {
+      // Computed here only to gate on it. The published aggregate is still
+      // built once, below, and only when nothing rejected the run.
+      const p50 = percentile(obs.cpuFrameTimesMs, 50);
+      if (!(p50 > 0)) {
+        rejections.push(`the CPU p50 is ${p50} ms; a frame that takes no measurable time was not measured`);
+      }
+    }
   }
 
   const s = obs.renderSurfaceBenchmark;
@@ -251,17 +332,33 @@ export function judgeRun(obs: RunObservation): RunVerdict {
       + `${BENCHMARK_SURFACE.width}x${BENCHMARK_SURFACE.height}`);
   }
 
+  // THE KEYS ARE CHECKED BEFORE THE VALUES, measured: `{}` satisfied a
+  // "nothing grew" test vacuously, because Object.entries({}).filter(...) is
+  // empty. A page that stopped publishing glObjects, or a harness that read
+  // the wrong key, would then pass the leak gate by having no counters at all
+  // -- a gate passing for the absence of the thing it gates.
+  const missingKeys = EXPECTED_RESOURCE_KEYS.filter(k => typeof obs.resourceGrowth[k] !== 'number');
+  if (missingKeys.length > 0) {
+    rejections.push(`the resource-growth record is missing counters: ${missingKeys.join(', ')} `
+      + `(has ${Object.keys(obs.resourceGrowth).join(', ') || 'nothing'})`);
+  }
   const grown = Object.entries(obs.resourceGrowth).filter(([, d]) => d !== 0);
   if (grown.length > 0) {
     rejections.push(`resource counters moved over the no-resize stability cycles: `
       + grown.map(([k, d]) => `${k} ${d > 0 ? '+' : ''}${d}`).join(', '));
   }
 
-  const gpu = aggregateGpuFrames(obs.gpuFrameTimesMs, obs.gpuSampleStats);
-  // An absent timer is not a rejection -- unsupported is null, never a
-  // failure. A timer that ran and produced too little IS one: the run cannot
-  // answer the question it was asked to answer.
-  if (gpu.available && !gpu.quotable) rejections.push(`GPU samples unusable: ${gpu.reason}`);
+  const gpu = aggregateGpuFrames(obs.gpuFrameTimesMs, obs.gpuSampleStats, obs.gpuSampleStatsPublished);
+  if (!gpu.published) {
+    // A PAGE DEFECT, not a browser capability. Rejecting it is the whole
+    // reason Deviation 2 published the field on both pages in one commit.
+    rejections.push(`GPU sample stats unavailable: ${gpu.reason}`);
+  } else if (gpu.available && !gpu.quotable) {
+    // An absent timer is not a rejection -- unsupported is null, never a
+    // failure. A timer that ran and produced too little IS one: the run cannot
+    // answer the question it was asked to answer.
+    rejections.push(`GPU samples unusable: ${gpu.reason}`);
+  }
 
   return {
     accepted: rejections.length === 0,
@@ -352,7 +449,7 @@ async function main(): Promise<void> {
   // ---- code burden, counted from the page sources ------------------------
   const burden: Record<string, any> = {};
   for (const renderer of ['vtkjs', 'threejs'] as const) {
-    const src = readFileSync(join(repo, 'pages', SLUG[renderer], 'main.ts'), 'utf8');
+    const src = readFileSync(join(repo, 'pages', SLUG[renderer], 'main.ts'), 'utf8') as string;
     // Every GLSL literal on either page is tagged `/* glsl */` before its
     // template literal, so the split is a documented marker rather than a
     // guess about which lines look like shader code.
@@ -361,16 +458,32 @@ async function main(): Promise<void> {
     const glslSet = new Set(glslLines);
     const withoutGlsl = src.replace(/\/\* glsl \*\/ `([\s\S]*?)`/g, '/* glsl */ ``');
     const tsLines = withoutGlsl.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+    // A LINE COUNT IS NOT A CODE COUNT. Both pages are heavily commented --
+    // measured below, roughly a third of each -- so the comment share is
+    // published beside the total rather than left for a reader to assume away.
+    // The rule is deliberately crude and stated: a line whose trimmed form
+    // starts with //, /*, * or */. It over-counts continuation lines inside
+    // block comments only, which is what it is for.
+    const commentLines = tsLines.filter(l => /^(\/\/|\/\*|\*\/|\*)/.test(l)).length;
     burden[renderer] = {
       file: `pages/${SLUG[renderer]}/main.ts`,
       totalLines: src.split('\n').length,
       tsNonBlankLines: tsLines.length,
       tsNonBlankUniqueLines: new Set(tsLines).size,
+      tsCommentLines: commentLines,
+      tsCommentShare: commentLines / tsLines.length,
       glslBlocks: glslBlocks.length,
       glslNonBlankLines: glslLines.length,
       glslNonBlankUniqueLines: glslSet.size,
       imports: [...src.matchAll(/^import .*?from '([^']+)';/gm)].map(m => m[1])
         .concat([...src.matchAll(/^import '([^']+)';/gm)].map(m => m[1])),
+      // The dist bundle row of the document, MEASURED BY THE SCRIPT THE
+      // DOCUMENT NAMES. It was previously computed in an ad hoc shell command
+      // and pasted in, so "regenerate every number with bun run
+      // measure:scientific" was false for that one row -- and the gzip figures
+      // could not be reproduced, because a one-off had used a different zlib
+      // than the one quoted.
+      bundle: bundleSizes(SLUG[renderer], dist, p => readFileSync(p), existsSync),
     };
   }
 
@@ -467,6 +580,12 @@ async function main(): Promise<void> {
       console.log(`  growth over ${RESIZE_SWEEP} resizes: ${s.resizeGrowth.map((g: any) => JSON.stringify(g)).join(' ')}`);
       console.log(`  growth over ${STABILITY_CYCLES} no-resize cycles: `
         + `${s.stabilityGrowth.map((g: any) => JSON.stringify(g)).join(' ')}`);
+      const b = burden[renderer].bundle;
+      console.log(`  dist bundle ${b.rawBytes} B raw / ${b.gzipBytes} B gzip over ${b.files} files `
+        + `(${b.gzipTool})`);
+      console.log(`  page source ${burden[renderer].tsNonBlankUniqueLines} unique non-blank TS lines, `
+        + `${burden[renderer].tsCommentLines} of ${burden[renderer].tsNonBlankLines} non-blank are comments `
+        + `(${(burden[renderer].tsCommentShare * 100).toFixed(0)}%)`);
     }
   }
   if (rejected.length > 0) {
@@ -484,6 +603,51 @@ async function main(): Promise<void> {
     console.error(`\nNO USABLE RUN for: ${barren.join(', ')}`);
     process.exit(1);
   }
+}
+
+/**
+ * Every JS and CSS file one built page pulls in, by walking its index.html and
+ * following each chunk's static imports, with raw and gzipped totals.
+ *
+ * `Bun.gzipSync` at its default level, named because it matters: different
+ * zlib builds and levels give different byte counts for the same input (a
+ * one-off `node:zlib` run differs from this by a few bytes, and a Python zlib
+ * run by more). This is an indicative wire size for comparing the two pages
+ * against each other on one tool, not a prediction of what any given CDN emits.
+ */
+function bundleSizes(
+  slug: string, dist: string,
+  readBytes: (p: string) => Uint8Array<ArrayBuffer>,
+  exists: (p: string) => boolean,
+): {files: number; rawBytes: number; gzipBytes: number; gzipTool: string; paths: string[]} {
+  const decode = (b: Uint8Array) => new TextDecoder().decode(b);
+  const html = decode(readBytes(`${dist}/${slug}/index.html`));
+  const seen = new Set<string>();
+  const queue = [...html.matchAll(/(?:src|href)="([^"]+\.(?:js|css))"/g)].map(m => m[1]);
+  let rawBytes = 0, gzipBytes = 0;
+  const paths: string[] = [];
+  while (queue.length > 0) {
+    const url = queue.pop()!;
+    if (seen.has(url)) continue;
+    seen.add(url);
+    // The build's `base` is /engine-bench/ under `bun run build:pages` and /
+    // under `bun run build`; strip either spelling so the walk works on
+    // whichever build is on disk.
+    const file = `${dist}${url.replace('/engine-bench', '')}`;
+    if (!exists(file)) continue;
+    // Raw bytes, not a decoded string re-encoded: a minified chunk with any
+    // non-ASCII byte in it would otherwise be measured at the wrong length.
+    const buf = readBytes(file);
+    rawBytes += buf.length;
+    gzipBytes += Bun.gzipSync(buf).length;
+    paths.push(url);
+    if (file.endsWith('.js')) {
+      for (const m of decode(buf).matchAll(/from"(\.\/[^"]+\.js)"/g)) {
+        queue.push(`${url.slice(0, url.lastIndexOf('/'))}/${m[1].slice(2)}`);
+      }
+    }
+  }
+  return {files: paths.length, rawBytes, gzipBytes, gzipTool: 'Bun.gzipSync, default level', paths: paths.sort()};
 }
 
 /** Max/min - 1, as a percentage. Null for fewer than two values. */
@@ -555,7 +719,11 @@ async function measureOne(
         gpuFrameTimesMs: b.probe.scientific.benchmark?.gpuFrameTimesMs ?? null,
         cameraPath: b.probe.scientific.benchmark?.cameraPath ?? null,
         // Deviation 2's field, read from the same publish() snapshot as
-        // everything else on this object.
+        // everything else on this object. PRESENCE AND VALUE ARE READ
+        // SEPARATELY: `?? null` alone turns a page that never published the
+        // key into a claim about the browser's GPU timer, which is a false
+        // statement produced by the check meant to prevent one.
+        gpuSampleStatsPublished: 'gpuSampleStats' in b.probe,
         gpuSampleStats: b.probe.gpuSampleStats ?? null,
         renderSurfaceBenchmark: b.probe.renderSurfaceBenchmark ?? null,
         renderSurfaceInteractive: b.probe.renderSurfaceInteractive ?? null,
@@ -570,14 +738,18 @@ async function measureOne(
     // renderbuffer per drawing-buffer resize and Three.js 0.185.1 none. This
     // reproduces that number; it never rejects a run.
     //
-    // RUN BEFORE THE CONTROL CYCLES, for a measured reason. Taken after them,
-    // the FIRST resize took 61 SECONDS to reach the page's ResizeObserver on
-    // page 13 while every later one took 0.25 s: 100 cycles return in under
-    // two seconds of JavaScript time but leave ~600 renders queued in
-    // SwiftShader, and the resize waits behind the queue. That is the same
-    // property NOTES.md:534 records for gl.finish() -- work is submitted, not
-    // completed -- and it is why `waitMs` is recorded here rather than
-    // assumed small. The timeout is generous for the same reason.
+    // RUN BEFORE THE CONTROL CYCLES, for a measured reason, AND THE REASON IS
+    // NOT A RENDERER PROPERTY. Taken after the cycles, the FIRST resize takes
+    // tens of seconds to reach the page's ResizeObserver while every later one
+    // takes 0.25 s -- measured at 61 s and 50.6 s on page 13 and 49.3 s on
+    // page 14, under the identical protocol, so it is BOTH pages. 100 cycles
+    // return in under two seconds of JavaScript time but leave ~600 renders
+    // queued in SwiftShader, and the resize waits behind the queue. That is
+    // the same property NOTES.md:534 records for gl.finish() -- work is
+    // submitted, not completed -- and it is a harness/rasterizer artifact, not
+    // evidence about either library. Attributing it to one page would be the
+    // same mistake as the 12% frame-time phantom in NOTES. `waitMs` is
+    // recorded rather than assumed small, and the timeout is generous.
     const beforeResize = await glObjects(page);
     const resizeWaitMs: number[] = [];
     for (let i = 0; i < RESIZE_SWEEP; i++) {
@@ -620,6 +792,7 @@ async function measureOne(
       cpuFrameTimesMs: bench.cpuFrameTimesMs,
       gpuFrameTimesMs: bench.gpuFrameTimesMs,
       gpuSampleStats: bench.gpuSampleStats,
+      gpuSampleStatsPublished: bench.gpuSampleStatsPublished,
       renderSurfaceBenchmark: bench.renderSurfaceBenchmark,
       resourceGrowth,
     };

@@ -678,10 +678,22 @@ function goodRun(over: Partial<RunObservation> = {}): RunObservation {
     cpuFrameTimesMs: Array.from({length: REQUIRED_CPU_SAMPLES}, (_, i) => 100 + i),
     gpuFrameTimesMs: Array.from({length: REQUIRED_CPU_SAMPLES}, () => 5),
     gpuSampleStats: {kept: REQUIRED_CPU_SAMPLES, rejected: 0},
+    gpuSampleStatsPublished: true,
     renderSurfaceBenchmark: {phase: 'benchmark', drawingBufferWidth: 1280, drawingBufferHeight: 720},
-    resourceGrowth: {},
+    // ALL SIX COUNTERS, not `{}`. The empty map used to sit here and be
+    // asserted as accepted, which enshrined a vacuous gate: filtering an empty
+    // object for non-zero entries finds none, so a harness that read the wrong
+    // key or a page that stopped publishing glObjects would have passed the
+    // leak gate by having no counters to move.
+    resourceGrowth: {buffers: 0, textures: 0, renderTargets: 0, renderbuffers: 0, listeners: 0, observers: 0},
     ...over,
   };
+}
+
+/** goodRun's growth map with one counter overridden, so a test changing one
+ *  number cannot accidentally drop the other five and pass the key check. */
+function growth(over: Partial<Record<string, number>> = {}): Record<string, number> {
+  return {buffers: 0, textures: 0, renderTargets: 0, renderbuffers: 0, listeners: 0, observers: 0, ...over};
 }
 
 describe('measure-scientific: the driver contract this script is pinned to', () => {
@@ -761,16 +773,41 @@ describe('measure-scientific: aggregateCpuFrames', () => {
     expect(cpu.p50).toBe(90);
     expect(cpu.p95).toBe(171);
     expect(cpu.mean).toBeCloseTo(90.5, 9);
+    // Second guard on the same mutation as the test below: 1..180 makes
+    // 1000/p50, 1000/p95 and 1000/max three different numbers.
+    expect(cpu.minSustainedFps).toBeCloseTo(1000 / 171, 9);
   });
 
-  test('minSustainedFps is 1000/p95 -- the rate held for 95% of frames, not the best frame', () => {
-    // WHAT COULD MAKE THIS FAIL: minSustainedFps computed from p50 (it would
-    // read 20 here, not 10) or from the mean. A 50 ms floor with a 100 ms tail
-    // separates all three, which a constant array would not.
-    const cpu = aggregateCpuFrames([...Array(171).fill(50), ...Array(9).fill(100)]);
+  test('minSustainedFps is 1000/p95 -- the rate held for 95% of frames, not the typical frame', () => {
+    // WHAT COULD MAKE THIS FAIL: minSustainedFps computed from p50, from the
+    // mean, or from max.
+    //
+    // THIS FIXTURE WAS WRONG AND THE MUTATION SURVIVED IT. It used to be
+    // [171 x 50 ms, 9 x 100 ms], whose p50 AND p95 are both 50 -- so swapping
+    // p95 for p50 in the implementation changed nothing and the test that
+    // exists to prove the p95 choice passed a build that had abandoned it.
+    // Measured: with 1000/p50 substituted, the whole file still went 79 pass /
+    // 0 fail. 170/10 puts the p95 rank (index 170 of 180) inside the tail, so
+    // the three candidates are now 20 (p50), 5 (p95) and 5 (max) -- and max is
+    // separated by the next test.
+    const cpu = aggregateCpuFrames([...Array(170).fill(50), ...Array(10).fill(200)]);
     expect(cpu.p50).toBe(50);
+    expect(cpu.p95).toBe(200);
+    expect(1000 / cpu.p50).toBeCloseTo(20, 9);   // what a p50-based FPS would say
+    expect(cpu.minSustainedFps).toBeCloseTo(5, 9); // what it must actually say
+  });
+
+  test('minSustainedFps is not 1000/max either -- one stalled frame does not set the verdict', () => {
+    // WHAT COULD MAKE THIS FAIL: minSustainedFps computed from max. This is
+    // not hypothetical on this tile: a real vtk.js run in the record has a p95
+    // of 247 ms against a max of 697 ms, so the two differ by a factor of
+    // nearly three on measured data. 8 samples in the tail keeps the p95 rank
+    // (index 170) below them while max sits at 1000.
+    const cpu = aggregateCpuFrames([...Array(172).fill(50), ...Array(8).fill(1000)]);
     expect(cpu.p95).toBe(50);
+    expect(cpu.max).toBe(1000);
     expect(cpu.minSustainedFps).toBeCloseTo(20, 9);
+    expect(1000 / cpu.max).toBeCloseTo(1, 9);
   });
 
   test('a 50 ms p95 is exactly 20.0 FPS and lands on the qualified side of the boundary', () => {
@@ -803,13 +840,48 @@ describe('measure-scientific: aggregateGpuFrames (what the aggregator genuinely 
     // without EXT_disjoint_timer_query_webgl2 must produce an absent number,
     // not a 0 ms GPU frame time that would read as the fastest result in the
     // table.
-    const gpu = aggregateGpuFrames(null, null);
+    const gpu = aggregateGpuFrames(null, null, true);
     expect(gpu.available).toBe(false);
     expect(gpu.quotable).toBe(false);
     expect(gpu.p50).toBeNull();
     expect(gpu.p95).toBeNull();
     expect(gpu.kept).toBe(0);
     expect(gpu.reason).toBeTruthy();
+  });
+
+  test('A MISSING FIELD IS NOT A BROWSER VERDICT: an unpublished gpuSampleStats says so', () => {
+    // WHAT COULD MAKE THIS FAIL: `published` collapsing back into
+    // `stats === null`, or acquiring a default.
+    //
+    // MEASURED DAMAGE, which is why this test exists: with the field deleted
+    // from both BUILT pages -- exactly how a page that never published it
+    // looks -- a run that had just returned 180 GPU samples was ACCEPTED and
+    // reported as "this browser does not expose
+    // EXT_disjoint_timer_query_webgl2". A false statement about the browser,
+    // emitted by the check whose entire purpose is to catch that page defect,
+    // and the old version of this file enshrined it: aggregateGpuFrames(null,
+    // null) meant "no timer" and a caller had no way to say "the field was
+    // absent".
+    const missing = aggregateGpuFrames(null, null, false);
+    const noTimer = aggregateGpuFrames(null, null, true);
+    expect(missing.published).toBe(false);
+    expect(noTimer.published).toBe(true);
+    expect(missing.reason).not.toBe(noTimer.reason);
+    expect(missing.reason).toMatch(/does not publish/);
+    // And it must never read as a statement about the browser's capabilities.
+    expect(missing.reason).not.toMatch(/EXT_disjoint_timer_query_webgl2/);
+  });
+
+  test('a null tally beside a non-null GPU array is a contradiction, not an absence', () => {
+    // WHAT COULD MAKE THIS FAIL: the kept/array agreement check staying BELOW
+    // the `stats === null` early return, where it cannot run. The driver
+    // publishes gpuFrameTimesMs as null in exactly the no-timer case and in no
+    // other, so 180 samples beside a null tally means the two halves of the
+    // page's snapshot describe different runs.
+    const contradiction = aggregateGpuFrames(Array(180).fill(4), null, true);
+    expect(contradiction.quotable).toBe(false);
+    expect(contradiction.p50).toBeNull();
+    expect(contradiction.reason).toMatch(/do not describe the same run/);
   });
 
   test('"the timer ran and kept nothing" is a DIFFERENT verdict from "there was no timer"', () => {
@@ -819,8 +891,8 @@ describe('measure-scientific: aggregateGpuFrames (what the aggregator genuinely 
     // published a caller outside the page could not tell these two apart at
     // all. Both cases yield a null p50; only the reason and `available`
     // separate them.
-    const noTimer = aggregateGpuFrames(null, null);
-    const allDisjoint = aggregateGpuFrames([], {kept: 0, rejected: 180});
+    const noTimer = aggregateGpuFrames(null, null, true);
+    const allDisjoint = aggregateGpuFrames([], {kept: 0, rejected: 180}, true);
     expect(allDisjoint.available).toBe(true);
     expect(allDisjoint.quotable).toBe(false);
     expect(allDisjoint.rejected).toBe(180);
@@ -834,7 +906,7 @@ describe('measure-scientific: aggregateGpuFrames (what the aggregator genuinely 
     // WHAT COULD MAKE THIS FAIL: the rejected samples being zero-filled back
     // into the series (the p50 would fall) or the percentile being taken over
     // the CPU array by mistake.
-    const gpu = aggregateGpuFrames(Array.from({length: 100}, (_, i) => i + 1), {kept: 100, rejected: 0});
+    const gpu = aggregateGpuFrames(Array.from({length: 100}, (_, i) => i + 1), {kept: 100, rejected: 0}, true);
     expect(gpu.available).toBe(true);
     expect(gpu.quotable).toBe(true);
     expect(gpu.p50).toBe(50);
@@ -847,10 +919,10 @@ describe('measure-scientific: aggregateGpuFrames (what the aggregator genuinely 
     // away a run sitting exactly at the documented rate. 162/18 of 180 is
     // exactly 0.1, so this is the boundary itself and not a value near it.
     expect(GPU_MAX_REJECTION_RATE).toBe(0.1);
-    const atThreshold = aggregateGpuFrames(Array(162).fill(4), {kept: 162, rejected: 18});
+    const atThreshold = aggregateGpuFrames(Array(162).fill(4), {kept: 162, rejected: 18}, true);
     expect(atThreshold.rejectionRate).toBeCloseTo(0.1, 12);
     expect(atThreshold.quotable).toBe(true);
-    const overThreshold = aggregateGpuFrames(Array(161).fill(4), {kept: 161, rejected: 19});
+    const overThreshold = aggregateGpuFrames(Array(161).fill(4), {kept: 161, rejected: 19}, true);
     expect(overThreshold.rejectionRate).toBeGreaterThan(GPU_MAX_REJECTION_RATE);
     expect(overThreshold.quotable).toBe(false);
     expect(overThreshold.p50).toBeNull();
@@ -862,7 +934,7 @@ describe('measure-scientific: aggregateGpuFrames (what the aggregator genuinely 
     // the precise way Deviation 2 could go wrong on one page and not the
     // other. The aggregator refuses rather than quoting a p50 over samples
     // whose provenance it cannot confirm.
-    const mismatched = aggregateGpuFrames(Array(100).fill(4), {kept: 120, rejected: 60});
+    const mismatched = aggregateGpuFrames(Array(100).fill(4), {kept: 120, rejected: 60}, true);
     expect(mismatched.quotable).toBe(false);
     expect(mismatched.p50).toBeNull();
     expect(mismatched.reason).toMatch(/kept/);
@@ -895,6 +967,58 @@ describe('measure-scientific: judgeRun (the validity gate and the run-rejection 
     expect(long.rejections.join(' ')).toMatch(/181/);
   });
 
+  test('THE GATE HAS A FLOOR: 180 samples that were never timed are rejected, not published', () => {
+    // WHAT COULD MAKE THIS FAIL: the gate counting samples and nothing else.
+    // MEASURED, all four against the count-only gate: 180 samples of 0 ms was
+    // ACCEPTED and published a p50 of 0 with an INFINITE minimum sustained FPS
+    // and a "meets-target" verdict; 180 of -5 ms was accepted at -200 FPS; 179
+    // good plus one NaN was accepted; and one Infinity likewise. A run that
+    // never timed anything is not a fast run.
+    const zeros = judgeRun(goodRun({cpuFrameTimesMs: Array(180).fill(0)}));
+    expect(zeros.accepted).toBe(false);
+    expect(zeros.cpu).toBeNull();
+    expect(zeros.rejections.join(' ')).toMatch(/p50 is 0/);
+
+    const negative = judgeRun(goodRun({cpuFrameTimesMs: Array(180).fill(-5)}));
+    expect(negative.accepted).toBe(false);
+    expect(negative.rejections.join(' ')).toMatch(/negative/);
+
+    const oneNaN = judgeRun(goodRun({cpuFrameTimesMs: [...Array(179).fill(150), NaN]}));
+    expect(oneNaN.accepted).toBe(false);
+    expect(oneNaN.rejections.join(' ')).toMatch(/not finite/);
+
+    const oneInfinity = judgeRun(goodRun({cpuFrameTimesMs: [...Array(179).fill(150), Infinity]}));
+    expect(oneInfinity.accepted).toBe(false);
+    expect(oneInfinity.rejections.join(' ')).toMatch(/not finite/);
+
+    // And the floor must not reject a real run: the record's own slowest
+    // measured page sits around 150 ms a frame with one 697 ms stall.
+    const real = judgeRun(goodRun({cpuFrameTimesMs: [...Array(179).fill(150), 697]}));
+    expect(real.accepted).toBe(true);
+  });
+
+  test('THE GROWTH GATE IS NOT VACUOUS: a record with no counters in it is rejected', () => {
+    // WHAT COULD MAKE THIS FAIL: filtering an object for non-zero entries and
+    // calling an empty result "nothing grew". MEASURED: `{}` was accepted, and
+    // the old goodRun fixture used `{}` and asserted accepted -- so the gate
+    // was tested exclusively against the one input that cannot exercise it. A
+    // harness reading the wrong probe key, or a page that stopped publishing
+    // glObjects, would have passed the leak gate by having no counters at all.
+    const empty = judgeRun(goodRun({resourceGrowth: {}}));
+    expect(empty.accepted).toBe(false);
+    expect(empty.rejections.join(' ')).toMatch(/missing counters/);
+
+    // Renderbuffers in particular: they are NOT among the five keys
+    // ScientificProbe.resources declares, and they are one of the three types
+    // vtk.js was measured to leak per resize. A record that quietly dropped
+    // them would blind the very gate that watches for it.
+    const noRenderbuffers = judgeRun(goodRun({
+      resourceGrowth: {buffers: 0, textures: 0, renderTargets: 0, listeners: 0, observers: 0},
+    }));
+    expect(noRenderbuffers.accepted).toBe(false);
+    expect(noRenderbuffers.rejections.join(' ')).toMatch(/renderbuffers/);
+  });
+
   test('a short run is never aggregated on the way to being rejected', () => {
     // WHAT COULD MAKE THIS FAIL: computing the statistics first and gating
     // afterwards. A p50 over 12 frames that reaches the JSON is a number the
@@ -916,11 +1040,21 @@ describe('measure-scientific: judgeRun (the validity gate and the run-rejection 
     // gated. 1280x800 is the realistic wrong value -- it is the harness's own
     // viewport, which is what a page that never pinned the benchmark surface
     // would report -- so this is the failure that would actually happen.
-    const wrong = judgeRun(goodRun({
+    const wrongHeight = judgeRun(goodRun({
       renderSurfaceBenchmark: {phase: 'benchmark', drawingBufferWidth: 1280, drawingBufferHeight: 800},
     }));
-    expect(wrong.accepted).toBe(false);
-    expect(wrong.rejections.join(' ')).toMatch(/1280x800/);
+    expect(wrongHeight.accepted).toBe(false);
+    expect(wrongHeight.rejections.join(' ')).toMatch(/1280x800/);
+    // BOTH DIMENSIONS, and the width case was missing. Every fixture here used
+    // to carry a correct 1280 width, so deleting the width comparison from
+    // judgeRun left the file at 79 pass / 0 fail -- a surface check that could
+    // only see half the surface. 640x720 is a plausible wrong value: the right
+    // height with a canvas at half width.
+    const wrongWidth = judgeRun(goodRun({
+      renderSurfaceBenchmark: {phase: 'benchmark', drawingBufferWidth: 640, drawingBufferHeight: 720},
+    }));
+    expect(wrongWidth.accepted).toBe(false);
+    expect(wrongWidth.rejections.join(' ')).toMatch(/640x720/);
   });
 
   test('a missing record, or one from the interactive phase, is not a surface proof', () => {
@@ -940,10 +1074,10 @@ describe('measure-scientific: judgeRun (the validity gate and the run-rejection 
     // measured per-resize leak is a RESULT and is recorded separately, so
     // feeding resize growth in here would reject every vtk.js run and turn a
     // finding into an outage.
-    const grew = judgeRun(goodRun({resourceGrowth: {textures: 1}}));
+    const grew = judgeRun(goodRun({resourceGrowth: growth({textures: 1})}));
     expect(grew.accepted).toBe(false);
     expect(grew.rejections.join(' ')).toMatch(/textures/);
-    expect(judgeRun(goodRun({resourceGrowth: {textures: 0}})).accepted).toBe(true);
+    expect(judgeRun(goodRun({resourceGrowth: growth({textures: 0})})).accepted).toBe(true);
   });
 
   test('a GPU rejection rate past the threshold rejects the run; no timer at all does not', () => {
@@ -959,6 +1093,18 @@ describe('measure-scientific: judgeRun (the validity gate and the run-rejection 
     expect(noTimer.gpu.available).toBe(false);
   });
 
+  test('a page that does not publish gpuSampleStats REJECTS the run, rather than being excused', () => {
+    // WHAT COULD MAKE THIS FAIL: treating an unpublished field like an absent
+    // timer. Deviation 2 put this field on both pages in one commit precisely
+    // so that a comparison could never read one page's stats against the
+    // other's silence; if the field goes missing the run is unusable, and
+    // saying so loudly is the only thing that keeps the other half honest.
+    const unpublished = judgeRun(goodRun({gpuSampleStatsPublished: false, gpuSampleStats: null}));
+    expect(unpublished.accepted).toBe(false);
+    expect(unpublished.rejections.join(' ')).toMatch(/does not publish gpuSampleStats/);
+    expect(unpublished.cpu).toBeNull();
+  });
+
   test('every reason a run was rejected is reported, not just the first one found', () => {
     // WHAT COULD MAKE THIS FAIL: an early return. A run that is short AND at
     // the wrong surface would otherwise be reported as one problem, and the
@@ -968,7 +1114,7 @@ describe('measure-scientific: judgeRun (the validity gate and the run-rejection 
       measurementValid: false,
       cpuFrameTimesMs: Array(12).fill(150),
       renderSurfaceBenchmark: {phase: 'benchmark', drawingBufferWidth: 900, drawingBufferHeight: 198},
-      resourceGrowth: {textures: 3},
+      resourceGrowth: growth({textures: 3}),
     }));
     expect(verdict.accepted).toBe(false);
     expect(verdict.rejections.length).toBeGreaterThanOrEqual(5);

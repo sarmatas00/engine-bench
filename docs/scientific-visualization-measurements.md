@@ -15,9 +15,23 @@ bun run measure:scientific
 
 which builds the pages and drives them through `scripts/measure-scientific.ts`,
 writing the full machine-readable record — every frame time, every GL counter,
-every rejection — to `.cache/scientific-measurements.json`. The pure
-aggregation layer that script exposes is unit-tested in
+every bundle byte, every rejection — to `.cache/scientific-measurements.json`.
+The pure aggregation layer that script exposes is unit-tested in
 `tests/unit/scientific-probes.test.ts`.
+
+**Every number in this document comes out of that one command**, including the
+bundle-size row, which was previously computed by an ad hoc shell command and
+pasted in — so the sentence above used to be false for that row, and its gzip
+figures could not be reproduced because the one-off had used a different zlib
+build from the one quoted. Gzip totals are `Bun.gzipSync` at its default level,
+named because it matters: a `node:zlib` run of the same input differs by a few
+bytes and a Python `zlib` run by more. Treat them as an indicative wire size for
+comparing the two pages on one tool, not as a prediction of what a given CDN
+emits.
+
+The one exception, stated rather than hidden: the **data-copy** row is counted
+by inspection, not by the script, and every site it counts is cited by file and
+line below so the count can be disagreed with.
 
 ---
 
@@ -32,6 +46,7 @@ aggregation layer that script exposes is unit-tested in
 | Context attributes | identical on both pages: `antialias:true`, `depth:true`, `alpha:true`, `preserveDrawingBuffer:false` |
 | Camera path | `orbit-v1` — 30 unrecorded warmup frames, then 180 forced frames, one azimuth orbit |
 | Runs | 3 cold browser contexts per page, **interleaved** vtk.js, Three.js, vtk.js, Three.js, vtk.js, Three.js |
+| Sessions | five (A, B, D, E on this machine; C by an independent reviewer). **E is the record**; all five are tabulated under "Frame time". |
 | Date of record | 2026-09-19 |
 
 Three cold contexts per page are **interleaved, not sequential**. This is not
@@ -58,13 +73,30 @@ The rules, all in `judgeRun`:
 - the CPU sample array is not exactly 180 long (the **validity gate**; the
   driver already excluded the 30 warmup frames, so this gates the shape of what
   it returned rather than performing an exclusion)
-- `renderSurfaceBenchmark` is missing, is from the interactive phase, or is not
-  1280x720
-- GL or DOM object counters moved across the 100 no-resize control cycles
-- the GPU sample rejection rate exceeds 10%, or `gpuSampleStats.kept` disagrees
-  with the length of the published GPU array
+- any CPU sample is not a finite number, any is negative, or the p50 is not
+  above zero — **a count is not enough.** Measured against a count-only gate:
+  180 samples of 0 ms were accepted and published a p50 of 0 with an *infinite*
+  minimum sustained FPS and a `meets-target` verdict; 180 samples of −5 ms were
+  accepted at −200 FPS; 179 good samples plus one `NaN` were accepted. A run
+  that never timed anything is not a fast run.
+- `renderSurfaceBenchmark` is missing, is from the interactive phase, or differs
+  from 1280x720 **in either dimension**
+- GL or DOM object counters moved across the 100 no-resize control cycles, **or
+  the growth record is missing any of the six counters** — an empty record would
+  otherwise pass the leak gate by having nothing that could move
+- **the page does not publish `gpuSampleStats` at all.** This is a page defect,
+  not a browser capability, and it is reported as one: with the field stripped
+  from both built pages, all six runs are rejected and the script exits
+  non-zero. Before this was separated from "the value is null", a page missing
+  the field produced an *accepted* run captioned "this browser does not expose
+  `EXT_disjoint_timer_query_webgl2`" — a false statement about the browser,
+  emitted by the very check that exists to catch the page defect.
+- the GPU sample rejection rate exceeds 10%, `gpuSampleStats.kept` disagrees
+  with the length of the published GPU array, or a null tally arrives beside a
+  non-null GPU array
 
-**Of the six runs in the record of this document, zero were rejected.**
+**Of the six runs in the record session, zero were rejected**, and the same held
+in every other session.
 
 ---
 
@@ -77,62 +109,99 @@ code, same pinned surface. Medians are across the three accepted runs per page.
 |---|---|---|
 | **Correctness** | 23 genuinely cross-renderer assertions agree (see below) | same 23 |
 | **Browsers** | chromium + firefox green; WebKit untested | chromium + firefox green; WebKit untested |
-| **Load, navigation to `ready`** | median **112 ms** (164 / 104 / 112) | median **138 ms** (153 / 137 / 138) |
-| **CPU frame p50** | median **153.7 ms** (153.7 / 155.5 / 152.9) | median **149.9 ms** (149.9 / 150.1 / 149.3) |
-| **CPU frame p95** | median **174.7 ms** (173.4 / 247.0 / 174.7) | median **169.5 ms** (173.3 / 169.1 / 169.5) |
-| **CPU frame min** | median **144.8 ms** (144.8 / 145.0 / 144.8) | median **140.1 ms** (140.1 / 139.7 / 140.2) |
-| **CPU frame max** | 196.4 / 697.2 / 215.4 ms | 199.4 / 186.9 / 201.6 ms |
-| **GPU frame p50** | 153.5 / 155.2 / 152.6 ms | 150.1 / 150.2 / 149.4 ms |
-| **GPU frame p95** | 173.3 / 246.5 / 174.6 ms | 173.7 / 169.3 / 169.7 ms |
-| **GPU samples kept** | 180 of 180, every run | 180 of 180, every run |
-| **Minimum sustained FPS** (1000 / p95) | 5.8 / 4.0 / 5.7 — **below 20 on every run** | 5.8 / 5.9 / 5.9 — **below 20 on every run** |
+| **Load, navigation to `ready`** | median **109 ms** (192 / 108 / 109) | median **140 ms** (157 / 138 / 140) |
+| **CPU frame p50** | median **158.4 ms** (158.4 / 159.3 / 153.8) | median **151.2 ms** (164.8 / 151.2 / 150.3) |
+| **CPU frame p95** | median **188.3 ms** (312.6 / 188.3 / 181.9) | median **175.5 ms** (231.1 / 175.5 / 175.2) |
+| **CPU frame min** | median **143.9 ms** (145.3 / 142.5 / 143.9) | median **139.2 ms** (141.2 / 139.2 / 139.1) |
+| **CPU frame max** | 1286.0 / 259.7 / 213.6 ms | 419.7 / 201.3 / 211.3 ms |
+| **GPU frame p50** | 158.3 / 159.2 / 153.5 ms | 164.9 / 151.3 / 150.4 ms |
+| **GPU frame p95** | 311.9 / 188.3 / 181.5 ms | 227.3 / 175.7 / 175.2 ms |
+| **GPU samples kept** | 180 of 180, every run, tally published | 180 of 180, every run, tally published |
+| **Minimum sustained FPS** (1000 / p95) — **SwiftShader; NOT a renderer result, see below** | 3.2 / 5.3 / 5.5 — below 20 on every run | 4.3 / 5.7 / 5.7 — below 20 on every run |
 | **Page code fetched** (uncompressed; the harness serves no gzip) | 1,166,378 B of JS over 8 requests | 675,460 B of JS over 6 requests |
 | **Data fetched** | 3,251,647 B over 11 requests | **identical**: 3,251,647 B over 11 requests |
-| **`dist` bundle, on disk** | 1,168,299 B raw / **315,379 B gzip**, 9 files | 677,381 B raw / **181,230 B gzip**, 7 files |
-| **JS heap after a run** (chromium only) | 17.1 / 16.1 / 17.1 MB | 11.9 / 11.9 / 11.9 MB |
+| **`dist` bundle, on disk** (`Bun.gzipSync`, default level) | 1,168,299 B raw / **315,376 B gzip**, 9 files | 677,411 B raw / **181,229 B gzip**, 7 files |
+| **JS heap after a run** (chromium only) | 16.1 / 18.2 / 17.1 MB | 11.9 / 11.9 / 11.9 MB |
 | **Resources, 100 control cycles, no resize** | **flat** — 0 on all six counters, all runs | **flat** — 0 on all six counters, all runs |
 | **Resources, 8 drawing-buffer resizes** | **+8 textures, +8 framebuffers, +8 renderbuffers** — one each per resize, never recovered | **0, 0, 0** |
-| **Code burden, TypeScript** | 1,381 unique non-blank lines (1,659 non-blank / 1,766 total) | 2,053 unique non-blank lines (2,436 non-blank / 2,686 total) |
+| **Code burden, TypeScript** — **comments included, see below** | 1,381 unique non-blank lines (1,659 non-blank, of which **570 comments, 34%**) | 2,063 unique non-blank lines (2,447 non-blank, of which **860 comments, 35%**) |
 | **Code burden, custom GLSL** | **0 lines. 0 shaders.** | **9 shaders, 144 non-blank lines, 128 substantive as compiled, 85 distinct lines owned, 0 reused verbatim** |
 | **Data copies into renderer format** | 3 (2 mesh cell arrays, 1 streamline cell array) | 2 (1 streamline index array, 1 per-vertex colour array) |
-| **Public API entry points** | 13 public `@kitware/vtk.js/...` modules + 2 rendering profiles | 18 core classes + **2 `three/addons/*` modules** |
+| **Public API entry points** (each page's own `probe.apis`) | **13** public `@kitware/vtk.js/...` modules + 2 rendering-profile imports | **21**: 19 core classes + **2 `three/addons/*` modules** |
 | **Experimental APIs** | 0 | 0 |
 | **Private APIs** | 0 | 0 by import, but **1 internal shader-chunk dependency** and 1 undocumented renderer behaviour relied on (below) |
 
 ---
 
-## Frame time: no winner, and the spread is the reason
+## Frame time: no winner, and the sign of the gap is not stable
 
-The two medians are **153.7 ms and 149.9 ms**, a gap of **2.5%**. Within a
-single condition — the same page, three cold contexts, minutes apart, one
-machine — the p50 moved by **1.7%** (vtk.js) and **0.5%** (Three.js) in this
-session, and by **6.7%** and **0.5%** in an independent repeat of the same
-script forty minutes earlier. Earlier in the spike, within-condition spread
-reached **18%**.
+**The gap between the two renderers changes sign between sessions.** Four
+independent sessions of the same script on the same machine, each three cold
+contexts per page, interleaved:
 
-The cross-renderer gap sits inside the within-condition spread. **There is no
-frame-time winner on this scene**, and this document does not manufacture one.
+| Session | vtk.js p50 median | Three.js p50 median | Gap | Slower |
+|---|---|---|---|---|
+| A | 154.4 ms (164.5 / 154.2 / 154.4) | 151.4 ms (150.9 / 151.6 / 151.4) | 2.0% | vtk.js |
+| B | 153.7 ms (153.7 / 155.5 / 152.9) | 149.9 ms (149.9 / 150.1 / 149.3) | 2.5% | vtk.js |
+| C *(independent reviewer, quiet machine)* | 157.5 ms (157.5 / 153.2 / 159.1) | **163.2 ms** (150.2 / 163.2 / 164.6) | 3.6% | **Three.js** |
+| D | 153.1 ms (156.0 / 153.1 / 152.9) | 150.1 ms (149.9 / 150.1 / 150.9) | 2.0% | vtk.js |
+| E *(record)* | 158.4 ms (158.4 / 159.3 / 153.8) | 151.2 ms (164.8 / 151.2 / 150.3) | 4.8% | vtk.js |
+
+**There is no frame-time winner on this scene**, and this document does not
+manufacture one in either direction. The gap runs from 2.0% to 4.8% and **its
+sign is not stable**: four sessions put vtk.js behind, one puts Three.js behind
+by more than two of those four. A margin that changes direction between sessions
+of the same script on the same machine is not a property of a renderer.
+
+Within-condition spread — the same page, three cold contexts, minutes apart, one
+machine — is why. It measured as low as 0.5%, and as high as **9.6% for
+Three.js**, twice, independently: session C (150.2, then 163.2 and 164.6) and
+session E (164.8, then 151.2 and 150.3). **The largest within-condition spread
+measured is twice the largest cross-renderer gap measured.** Earlier in the
+spike the spread reached **18%**.
+
+Read the low figures as a floor on the noise, never as its size. Any single
+session's 0.5% spread is a statement about that session's quiet, not about the
+renderer — and quoting one would be this spike's recurring defect in its purest
+form: a number that is right only by coincidence of when it was taken.
+
 The parity suite deliberately asserts nothing about frame times for the same
 reason.
 
-`cpuMin` is published because it is the statistic that survives a contended
-machine: p50 moves and the floor does not. Measured here at **144.8–145.0 ms**
-(vtk.js) and **139.7–140.2 ms** (Three.js), a floor gap of 3.4% that is far
-tighter run-to-run than the p50 gap and points the same way. NOTES.md records
-`cpuMin` at 141–149 ms across twelve earlier quiet runs on both renderers;
-Three.js's floor here lands slightly **below** that recorded band (139.7 ms),
-which extends it rather than contradicting it.
+### `cpuMin` is published, and it does not settle the question either
 
-One outlier is worth naming rather than smoothing: vtk.js run 2 has a p95 of
-247.0 ms and a max of 697.2 ms against its own p50 of 155.5 ms. Its `cpuMin` is
-145.0 ms — indistinguishable from its siblings. A single stalled frame, not a
-different renderer.
+`cpuMin` is the statistic that survives a contended machine best: the p50 moves
+and the floor moves less. It is published because it is the most stable number
+here — **not** because it carries a direction.
+
+| Session | vtk.js floor | Three.js floor | Bands |
+|---|---|---|---|
+| A | 143.4–146.5 ms | 139.7–141.4 ms | separated |
+| B | 144.8–145.0 ms | 139.7–140.2 ms | separated |
+| C | 144.4–145.9 ms | **139.8–148.2 ms** | **overlapping** |
+| D | 142.4–143.4 ms | 138.3–140.0 ms | separated |
+| E *(record)* | 142.5–145.3 ms | 139.1–141.2 ms | separated |
+
+In session C the Three.js floor moved **8.4 ms across three cold contexts** and
+swallowed the vtk.js band whole. A separation that holds in four sessions and
+vanishes in the fifth is not a separation, and nothing here should be read as
+one. NOTES.md records `cpuMin` at 141–149 ms across twelve earlier quiet runs on
+both renderers; the floors measured here run as low as 138.3 ms, which extends
+that band downward rather than contradicting it.
+
+One outlier is worth naming rather than smoothing: in session B, vtk.js run 2
+had a p95 of 247.0 ms and a max of 697.2 ms against its own p50 of 155.5 ms. Its
+`cpuMin` was 145.0 ms — indistinguishable from its siblings. A single stalled
+frame, not a different renderer.
 
 ### GPU frame time is CPU frame time here, and that is expected
 
 Every run had a working `EXT_disjoint_timer_query_webgl2` and kept **180 of 180
-samples with 0 rejected**, on both pages. The GPU p50 lands within 0.3 ms of the
-CPU p50 on every run.
+samples with 0 rejected**, on both pages, and both pages published the tally, so
+that `180 of 180` is a positive statement and not an absence read as a success.
+The GPU p50 lands **under a third of a millisecond** from the CPU p50 on every
+run: 0.285 ms at worst in the record session (vtk.js run 3, 153.800 against
+153.515), 0.302 ms at worst across all sessions.
 
 That agreement is **not independent confirmation of the frame cost**. Under
 SwiftShader the "GPU" is the same CPU, and each page ends every frame with a
@@ -144,7 +213,8 @@ measurement.
 ### The FPS classification says something about the harness, not about the renderers
 
 Minimum sustained FPS — defined here as `1000 / p95`, the rate held for 95% of
-frames — is **4.0 to 5.9 on both renderers**. Against the spec's bands (at least
+frames — is **3.2 to 5.7 on both renderers** in the record session, and never
+above 5.9 in any session. Against the spec's bands (at least
 30 FPS is the target, sustained below 20 FPS fails the interactive-MVP
 requirement, between is qualified), **every run on both renderers lands in
 `fails-interactive-mvp`**.
@@ -154,9 +224,14 @@ characterises ANGLE/SwiftShader at a 1280x720 volume-rendered scene. It does not
 characterise either library on target hardware, and it does not separate them.
 No GPU-hardware measurement exists in this spike; see "What is unavailable".
 
-`1000/p95` rather than `1000/max` is a choice with a consequence: one 697 ms
-scheduler stall would otherwise drive a whole run's verdict on its own. `max` is
-published beside it so the stall stays visible.
+`1000/p95` rather than `1000/max` is a choice with a consequence, and the
+record session shows its size: vtk.js run 1 has a max of **1286.0 ms** against a
+p95 of 312.6 ms and a p50 of 158.4 ms. A max-based figure would report 0.8 FPS
+for that run. One scheduler stall is not a sustained frame rate. `max` is
+published beside it so the stall stays visible rather than being smoothed
+away — and the unit tests pin the distinction, because a fixture where p50, p95
+and max happen to coincide would let the implementation swap one for another
+undetected.
 
 ---
 
@@ -166,12 +241,15 @@ Two different measurements, kept apart on purpose.
 
 **Across 100 deterministic control cycles with no resize in them**, both
 renderers are flat: buffers, textures, render targets, renderbuffers, listeners
-and observers all moved by exactly 0, on all six runs. This is the gate — growth
-here rejects the run.
+and observers all moved by exactly 0, on all six runs of the record session and
+on every run of every session. This is the gate — growth here rejects the run,
+and the gate now also rejects a growth record that is *missing* counters, since
+an empty record would otherwise satisfy it vacuously.
 
 **Across 8 drawing-buffer resizes**, vtk.js 36.12.1 grows by **+8 textures, +8
 framebuffers and +8 renderbuffers** — one of each per resize, reproduced
-identically on all three of its runs — and never recovers them. Three.js
+identically on all three of its runs, in all five sessions, and in both
+orderings of the sweep against the control cycles — and never recovers them. Three.js
 0.185.1 grows by **0, 0, 0**. This is a **result**, not a gate: rejecting
 vtk.js's runs for it would turn one of the spike's three findings into an
 outage.
@@ -180,16 +258,25 @@ Growth tracks resizes only. It does not track frames, slice rebuilds or case
 switches — the 100-cycle result above is the evidence for that, since those
 cycles drive all three and move nothing.
 
-### A side observation the harness had to handle
+---
 
-On page 13, the **first** drawing-buffer resize after 100 control cycles took
-**61 seconds** to reach the page's `ResizeObserver`, while every later one took
-**0.25 s**. The 100 cycles return in under two seconds of JavaScript time but
-leave roughly 600 renders queued in SwiftShader; the resize waits behind the
-queue. This is the same property NOTES.md:534 records for `gl.finish()` — work
-is submitted, not completed. The script therefore runs its resize sweep before
-the control cycles and records the wait per resize. Anything that measures these
-pages by waiting on a resize needs a timeout in the minutes, not the seconds.
+## A harness property, belonging to neither renderer
+
+The **first** drawing-buffer resize after 100 control cycles takes tens of
+seconds to reach the page's `ResizeObserver`, while every later one takes
+**0.25 s**. Measured under the identical protocol on **both** pages: 61 s and
+50.6 s on page 13, **49.3 s on page 14**. The 100 cycles return in under two
+seconds of JavaScript time but leave roughly 600 renders queued in SwiftShader,
+and the resize waits behind the queue — the same property NOTES.md:534 records
+for `gl.finish()`: work is submitted, not completed.
+
+**This is a rasterizer and harness artifact, not a renderer observation**, and
+it is recorded here rather than inside the resource-growth section because
+putting a both-pages artifact inside a section that favours one of them is how
+the spike's 12% frame-time phantom happened. The script runs its resize sweep
+before the control cycles and records the wait per resize. Anything that drives
+these pages by waiting on a resize needs a timeout in the minutes, not the
+seconds.
 
 ---
 
@@ -250,6 +337,17 @@ So the burden difference is **vendored versus hand-written** — a
 maintenance-burden fact, not an architectural one. **Do not write that vtk.js
 needs no depth prepass.** Both pages run one.
 
+### The TypeScript line counts include comments, and that is a third of them
+
+Measured by the script: **570 of page 13's 1,659 non-blank lines (34%)** and
+**860 of page 14's 2,447 (35%)** are comments, by a deliberately crude and
+stated rule — a line whose trimmed form begins with `//`, `/*`, `*` or `*/`.
+
+Both pages are commented at nearly the same rate, so the comparison between them
+survives; but neither figure is a count of *code*, and a reader sizing the
+maintenance burden from the raw line count would be over-reading it by about a
+third on both sides.
+
 ### Data copies into renderer format
 
 Counted by inspection, listed so the count can be disagreed with rather than
@@ -272,12 +370,27 @@ counted as a difference.
 
 ### API stability
 
-vtk.js: 13 entry points, all public `@kitware/vtk.js/<Module>` paths, plus two
-rendering-profile side-effect imports. Nothing private, nothing experimental.
+Both counts are quoted from the pages' own runtime probes
+(`window.__bench.probe.apis`), not from a reading of the import lines, so the
+table and the running page cannot disagree.
 
-Three.js: 18 classes from the versioned package, plus **two `three/addons/*`
-modules** (`controls/OrbitControls.js`, `shaders/VolumeShader.js`). Three's
-addons are not covered by the same stability guarantee as the core package.
+vtk.js: **13** entry points, all public `@kitware/vtk.js/<Module>` paths, plus
+two rendering-profile side-effect imports. Nothing private, nothing
+experimental.
+
+Three.js: **21** entries — 19 classes from the versioned package plus **two
+`three/addons/*` modules** (`controls/OrbitControls.js`,
+`shaders/VolumeShader.js`). Three's addons are not covered by the same stability
+guarantee as the core package.
+
+`VolumeShader` was absent from that probe until this measurement read it back
+and found the list disagreed with the page's own imports: the page imports
+`VolumeRenderShader1` and reads its `vertexShader`/`fragmentShader` in
+`glslOverlap()`, so it is an entry point the page uses by any reading, and a
+burden list that omitted it was the measurement flattering the page. It has been
+added. Page 13 needed no counterpart change — `VTK_APIS` was already exact, and
+vtk.js has no addon tier here.
+
 Beyond imports, page 14 depends on two things that are internal rather than
 public API:
 
