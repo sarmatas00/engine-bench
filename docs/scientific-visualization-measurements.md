@@ -55,7 +55,7 @@ line below so the count can be disagreed with.
 | Context attributes | identical on both pages: `antialias:true`, `depth:true`, `alpha:true`, `preserveDrawingBuffer:false` |
 | Camera path | `orbit-v1` — 30 unrecorded warmup frames, then 180 forced frames, one azimuth orbit |
 | Runs | 3 cold browser contexts per page, **interleaved** vtk.js, Three.js, vtk.js, Three.js, vtk.js, Three.js |
-| Sessions | five (A, B, D, E on this machine; C by an independent reviewer). **E is the record**; all five are tabulated under "Frame time". |
+| Sessions | seven (A, B, D, E, G on this machine; C and F by an independent reviewer). **E is the record**; all seven are tabulated under "Frame time". |
 | Date of record | 2026-09-19 |
 
 Three cold contexts per page are **interleaved, not sequential**. This is not
@@ -144,7 +144,7 @@ code, same pinned surface. Medians are across the three accepted runs per page.
 
 ## Frame time: no winner, and the sign of the gap is not stable
 
-**The gap between the two renderers changes sign between sessions.** Six
+**The gap between the two renderers changes sign between sessions.** Seven
 independent sessions of the same script on the same machine, each three cold
 contexts per page, interleaved:
 
