@@ -1,0 +1,1525 @@
+{
+  "bin": "buildings.mesh.bin",
+  "vertexCount": 20726,
+  "indexCount": 113016,
+  "byteLength": 1100176,
+  "arrays": [
+    {
+      "name": "positions",
+      "type": "f32",
+      "components": 3,
+      "offset": 0,
+      "length": 62178
+    },
+    {
+      "name": "normals",
+      "type": "f32",
+      "components": 3,
+      "offset": 248712,
+      "length": 62178
+    },
+    {
+      "name": "indices",
+      "type": "u32",
+      "components": 1,
+      "offset": 497424,
+      "length": 113016
+    },
+    {
+      "name": "cell_object_index",
+      "type": "u32",
+      "components": 1,
+      "offset": 949488,
+      "length": 37672
+    }
+  ],
+  "objects": [
+    {
+      "sourceIndexes": [
+        59
+      ],
+      "dtccIds": [
+        "ba4869b6-cb48-4943-b981-b59b62d77a05"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        60
+      ],
+      "dtccIds": [
+        "011ea7d2-af28-4250-bef7-175072ad7c4b"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        129,
+        131,
+        132
+      ],
+      "dtccIds": [
+        "bbba28ff-4c11-491b-9e74-0f48b471db3b",
+        "8598c66c-47af-4ed7-b1ab-9e5fca2c9067",
+        "675e0339-778b-4c74-af37-bfb64012a673"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        1
+      ],
+      "dtccIds": [
+        "1a2d7eb7-facf-4557-a154-3bd5b16e9eb0"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        61
+      ],
+      "dtccIds": [
+        "2b3c6dc7-b411-4504-b244-a60ead525e50"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        62
+      ],
+      "dtccIds": [
+        "0374e18a-7a63-4d54-9f60-26d269649c62"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        63,
+        64,
+        69,
+        70,
+        71
+      ],
+      "dtccIds": [
+        "583f05f4-f2a8-4103-9f13-b9a17860b8a3",
+        "0080f594-f61f-4bdf-9edc-a2233c49a3c5",
+        "73800068-8c18-442f-96bd-f9898b0e85f7",
+        "a279908d-8fa6-45a0-9ed2-c61ccb85fd4d",
+        "5cd3fab0-14ff-45a6-86bb-16151d4c792b"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        128
+      ],
+      "dtccIds": [
+        "d0d3a62e-b204-48dc-b93e-1897cd1a0fa8"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        0
+      ],
+      "dtccIds": [
+        "60ce6188-9ad7-4973-a0d8-d5e0ddf51347"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        122,
+        123
+      ],
+      "dtccIds": [
+        "38e4cae1-0794-4239-9c80-6b1af76b8392",
+        "9d0532ae-5390-4472-96ea-a3f671df7944"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        65,
+        66,
+        68
+      ],
+      "dtccIds": [
+        "dba362e2-bcc0-4bcf-81a7-6140d76532c4",
+        "6b5817c7-bb34-4535-8818-44faebdb1eb6",
+        "effe54fb-394a-4c85-8d2b-24f9028721fd"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        130
+      ],
+      "dtccIds": [
+        "705e1783-f755-4d57-bd0d-b21fcae4d444"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        78
+      ],
+      "dtccIds": [
+        "cb8a752c-b5cd-4660-b8ec-03652d716057"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        67
+      ],
+      "dtccIds": [
+        "5d19fd3d-05d7-425d-8959-cb7eea7628a2"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        134
+      ],
+      "dtccIds": [
+        "c337086b-e060-4149-8dc6-4d0b94974c2b"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        72
+      ],
+      "dtccIds": [
+        "b1ffe3c7-496f-4623-8a3d-2d72df230723"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        125
+      ],
+      "dtccIds": [
+        "13ea7549-8a0d-401f-a60e-8134cbb879bc"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        124
+      ],
+      "dtccIds": [
+        "ecf31972-95dc-4e8d-ae85-820628821ea2"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        127
+      ],
+      "dtccIds": [
+        "cf6566f5-676e-4e91-9d68-b3318a60a8fc"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        73,
+        74,
+        76,
+        77,
+        79,
+        86,
+        103,
+        136,
+        137,
+        138,
+        139
+      ],
+      "dtccIds": [
+        "e3c2bb93-66af-4536-967b-5e754a3e7628",
+        "a1ac52c6-1298-4065-90bc-3f00f0286fee",
+        "a215a451-692f-4f6d-bd90-e1071e2c5dae",
+        "290a3fba-df90-4313-b8fc-f2b91e5723bc",
+        "5b275984-6eee-495f-8eda-6c5c70373c1d",
+        "08a0e008-6599-4649-9829-5d8e8fd65ef1",
+        "cceec628-acc3-4221-a0bb-67ae6304eb32",
+        "56f5f89d-2009-4a2c-a277-34f5860b98c4",
+        "b90ad3e5-e719-4a9c-97ac-45603cdd946a",
+        "a644f40e-6a5e-4121-886e-a4addea5ecbf",
+        "7415e2b6-e0df-409a-9812-af5e8e3116c0"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        75
+      ],
+      "dtccIds": [
+        "ec506275-24dc-4743-9e09-a0a668eccbe0"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        93
+      ],
+      "dtccIds": [
+        "5f57636d-1bf9-4c24-80c8-699e8564b3a6"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        92
+      ],
+      "dtccIds": [
+        "15114713-9f08-4d8e-9460-c62627c574d3"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        99,
+        100,
+        102,
+        108
+      ],
+      "dtccIds": [
+        "ffaad6d2-0f24-43c9-8a4b-009f5fc5e2fc",
+        "3e7ad4f8-32e3-4d29-9c16-fce83b0c4e4f",
+        "f7c67d63-e5c0-405d-8295-e0a9cc6cfe43",
+        "a6014e05-83f4-4630-a168-f0b30c65873b"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        51
+      ],
+      "dtccIds": [
+        "b3328436-652a-446c-b0e7-c9e53d041bbb"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        94,
+        107
+      ],
+      "dtccIds": [
+        "9b52b7bc-9f4b-4930-a1bd-8174196980bc",
+        "ff2b9c09-5a77-4c33-91d4-1df4a4f50030"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        96
+      ],
+      "dtccIds": [
+        "dd9b7358-2304-4f8a-b713-02fc0b59edff"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        140,
+        141,
+        143,
+        144,
+        145,
+        146,
+        147,
+        148,
+        149,
+        150
+      ],
+      "dtccIds": [
+        "e8711a2b-afcf-41ef-8a60-c10292459430",
+        "6cb50816-123a-4652-aabc-e7c53abad566",
+        "cec9fbe5-e66a-428b-9748-e5c09131933e",
+        "c098125a-7b92-4022-afd1-5d4d196cf2ef",
+        "6b2487de-5547-4d69-a760-8af625c3e14c",
+        "cd031869-5fc6-4186-ae90-7356773c0ab1",
+        "9be9bc74-043b-438d-b83d-a0e5c3fb1ed2",
+        "596474e9-a92c-4930-a375-fccc58b528ba",
+        "ac5daa7f-8046-4873-9499-9b64039fea15",
+        "f7159086-283c-4f78-ade2-d1a6a05cf9ba"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        41,
+        135
+      ],
+      "dtccIds": [
+        "581407be-323f-4d48-991f-2a67ed6dc03d",
+        "2c82daed-73a3-4d3b-b738-5a46cf5ef538"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        133
+      ],
+      "dtccIds": [
+        "ab08c689-8f34-48a4-873d-20a6d409722f"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        101
+      ],
+      "dtccIds": [
+        "b49ee77f-5ad8-4a49-9a31-ff6e84a59433"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        106
+      ],
+      "dtccIds": [
+        "1d69c619-45b1-4a85-a61a-df30ed2993d0"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        142
+      ],
+      "dtccIds": [
+        "03aa6132-a153-4e5b-8f76-e698b6680c99"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        84
+      ],
+      "dtccIds": [
+        "351155e1-86db-42cc-bd3c-75e99359784d"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        89,
+        105
+      ],
+      "dtccIds": [
+        "19f99334-3956-41b8-b061-82f33acf0d1b",
+        "1734b859-edf8-4d78-89ac-3acc59878f97"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        116
+      ],
+      "dtccIds": [
+        "bbf3100e-9d67-45ad-aaed-c410f8a4c14e"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        83,
+        151
+      ],
+      "dtccIds": [
+        "e217fc56-1e7d-4822-97c8-cd1197b7f95e",
+        "40502a6d-3b9b-46e4-adb4-7f41c2268dbe"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        152
+      ],
+      "dtccIds": [
+        "70d06b5a-6ccd-4f87-be3f-2956281357e6"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        153,
+        154,
+        157
+      ],
+      "dtccIds": [
+        "7b644c14-09ea-482f-acc4-08dab1b87fa3",
+        "5e4b8589-b56f-43f7-9ba8-666467c77698",
+        "6c44e0b0-448a-42fe-a040-81af491a72a4"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        155
+      ],
+      "dtccIds": [
+        "2f58ce84-4cea-45ab-b098-24d6ffa20d0c"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        45
+      ],
+      "dtccIds": [
+        "bad11282-60c0-4577-99e2-ef832afa39db"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        85
+      ],
+      "dtccIds": [
+        "fe38c5e5-0a5b-4f63-b2f9-057cd59a8e55"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        156
+      ],
+      "dtccIds": [
+        "a79411aa-e3ef-4ee4-96eb-ccb540be7458"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        158
+      ],
+      "dtccIds": [
+        "59876251-5a6e-4b37-afc5-d971e3ec8f10"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        109,
+        113
+      ],
+      "dtccIds": [
+        "a36aadd0-8223-4549-b429-ec821d864d46",
+        "189a704e-f626-4e8a-ad12-5859a72403b2"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        55
+      ],
+      "dtccIds": [
+        "6c7e1718-3523-47d3-8e5d-636515fd861f"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        159,
+        162,
+        172,
+        173
+      ],
+      "dtccIds": [
+        "571134d1-cfa8-4c69-9328-731cab83b980",
+        "b840e16c-ae11-4d45-83fd-dc55ca458eba",
+        "e34ec7ae-2ab2-4c09-9837-534bd558db29",
+        "1c3edba4-dd24-40fd-af6a-8b17db703b70"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        160
+      ],
+      "dtccIds": [
+        "74c4e02f-5846-4b94-975e-8f672d087815"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        98
+      ],
+      "dtccIds": [
+        "613b157d-0748-4bd5-829d-8f589980aa96"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        161
+      ],
+      "dtccIds": [
+        "079c61f6-f60d-4cca-a660-c7b4d111a2cf"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        163,
+        164,
+        170
+      ],
+      "dtccIds": [
+        "7c4db4f8-99cc-4057-ad8b-cae15db02dbe",
+        "b6b1d826-c37a-4fb6-8c40-505d93e23d35",
+        "fdc17c77-eea0-4946-85b0-e9fd9e2485c5"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        44
+      ],
+      "dtccIds": [
+        "9094ffa7-54ea-420d-8b24-07cc2cce5aad"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        165,
+        166,
+        171
+      ],
+      "dtccIds": [
+        "9a03feb5-1e93-4bde-8ac2-6b9f24619e0d",
+        "fd55e95f-d8f5-49bd-8b38-a0b4c9d34335",
+        "e88157c8-f4a9-4c6e-9782-4c999c940bf1"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        82,
+        87
+      ],
+      "dtccIds": [
+        "06653179-24eb-4158-87cd-77993c7a42f9",
+        "7d0d6a79-a705-4d35-8b45-e00a0180e5d0"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        48,
+        50,
+        53
+      ],
+      "dtccIds": [
+        "18093c14-6bb8-4d76-837d-e12c953abf17",
+        "13d8771d-5846-4d36-b1f1-bada00ba858b",
+        "8d356366-d733-4aba-8f25-d20173175b09"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        95
+      ],
+      "dtccIds": [
+        "ff330187-284d-48ff-a6db-10953a32aa02"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        167
+      ],
+      "dtccIds": [
+        "c55b5cb9-179b-4ba6-9b6b-d2eb71a4e751"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        49
+      ],
+      "dtccIds": [
+        "ead94fbe-5a97-4d8b-82b7-20a0a15ccf43"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        168
+      ],
+      "dtccIds": [
+        "72e1b272-a19a-46de-b367-75b8a3b1c946"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        43,
+        57
+      ],
+      "dtccIds": [
+        "ee2ddfe0-c651-46a3-aaae-d3047b5a6952",
+        "206bf1c0-f651-425d-9fe6-5edeaa6a1379"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        169
+      ],
+      "dtccIds": [
+        "fc2e8339-541b-40c6-9caa-485ecc78348e"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        52
+      ],
+      "dtccIds": [
+        "dbee4343-9a9e-4426-bce8-f1ec57aee1c5"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        90,
+        91
+      ],
+      "dtccIds": [
+        "9abf4348-1104-4323-a1d1-871c1c2a6c0f",
+        "ca4dab7c-23d9-49cb-9425-cb7ab2e61095"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        54
+      ],
+      "dtccIds": [
+        "c20a45b9-334d-4d72-895a-630e19d84f2f"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        104
+      ],
+      "dtccIds": [
+        "7014d4fa-a4e1-4228-9407-90c98c0c5752"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        174,
+        175,
+        196
+      ],
+      "dtccIds": [
+        "61fd78bb-4033-4642-834a-6a8adbc95404",
+        "57dd217f-ec2a-4f1e-8002-df0b38647476",
+        "5f70708d-881e-4687-a80f-07c92a528b83"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        47
+      ],
+      "dtccIds": [
+        "0838f628-30b6-46a8-8b0b-36c4f2bf250f"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        118
+      ],
+      "dtccIds": [
+        "ad89021d-f953-48e1-9aa4-cf16d6262b07"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        112
+      ],
+      "dtccIds": [
+        "2087e0bb-3ebe-402a-8cda-f81d8248cfb1"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        56
+      ],
+      "dtccIds": [
+        "31261fb1-9ca9-4386-b47a-c8107b0cc5e3"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        40
+      ],
+      "dtccIds": [
+        "00fa792b-f990-4abd-b91c-a0aa4562bded"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        117
+      ],
+      "dtccIds": [
+        "f92cff1e-fbd2-49ad-9374-aed29675f11d"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        58
+      ],
+      "dtccIds": [
+        "e2c99dd7-80fc-4f53-b617-fa60584e06da"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        21,
+        176,
+        185
+      ],
+      "dtccIds": [
+        "e4a64cb2-8e44-40c3-982d-a18afa231490",
+        "b02af3de-4cf8-4e9d-a9fc-92c04793b28d",
+        "962c7c9d-ad2b-4f12-9a9b-2f22d741edd1"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        177
+      ],
+      "dtccIds": [
+        "c226a926-4abe-4539-bbb4-ff4f5c2136a4"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        4,
+        13,
+        22,
+        24,
+        42,
+        186,
+        197,
+        198,
+        199,
+        200,
+        201,
+        202,
+        205,
+        207,
+        208,
+        210
+      ],
+      "dtccIds": [
+        "7572aa15-a411-4516-a695-dae829a068ba",
+        "db969898-7d89-408a-a793-b3e0b3a8b998",
+        "77df8577-f060-42c5-97bb-764c51ffa00c",
+        "4fb03e75-22ec-47ee-9646-1c843a0d4e09",
+        "e8741c33-7447-4937-958e-d0ba8a7dd4fe",
+        "a725ea6b-6583-4468-9443-bea5de47b94b",
+        "7d100af3-3c74-4818-8565-31ef3893b560",
+        "a2e31306-6c2e-4597-b064-08e57abdb613",
+        "f34e3d9d-fe9d-48ee-adf4-ec0f564b2bbd",
+        "b2815c24-b0af-4535-a1e3-c0cd2a379ab8",
+        "047eab35-7629-490a-99e9-1e0f3b28ad80",
+        "9eb1ccb8-915d-437d-bcab-cebcc449ca57",
+        "dc8754b8-1318-47bc-bf68-2eebc856125b",
+        "6ca5721a-1b3e-4fa0-aadf-6793ff4a66c8",
+        "0f784f42-1d92-4e92-8df2-6f87ebc0caf4",
+        "890e8e75-8767-44c2-adb1-cc7b5e71ce63"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        30,
+        81,
+        111,
+        114,
+        182,
+        189
+      ],
+      "dtccIds": [
+        "5e155001-d10f-4466-9e05-cc559573ffb9",
+        "3f6ae1e5-4136-4c48-8786-f694b175dabe",
+        "e2792ec2-c130-41cc-ad30-896a9fba29d3",
+        "f45b0647-c806-431b-bbef-8db389cc2c6c",
+        "f228d38c-38c0-4794-8ec7-a722daa87872",
+        "8a6021a3-97e2-4976-86ac-94398be3cce2"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        3,
+        184
+      ],
+      "dtccIds": [
+        "a0ba4b9c-9945-4f67-83d8-591451e632f7",
+        "497b68d6-dccf-472b-806c-eef6b15fb295"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        192
+      ],
+      "dtccIds": [
+        "e72e64b6-0f54-4f5b-875d-17046f7e5e4a"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        178
+      ],
+      "dtccIds": [
+        "7285798f-2abb-422e-87a4-03eff46e0f09"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        6,
+        8,
+        23,
+        25,
+        27,
+        32,
+        115
+      ],
+      "dtccIds": [
+        "138ec696-acfc-4cf7-8ca1-bb0da62e76e2",
+        "e627d013-5429-4d2a-b580-a5b742317aa3",
+        "959910e9-85e3-4a73-beec-61c3dac6b3cc",
+        "efe94a77-bac4-434f-a1ca-ec6018da49e5",
+        "03254695-0c36-4094-a1ea-905f19e9fd18",
+        "eb5fd41a-13de-44e6-8fd9-3340df2e959d",
+        "c96c0515-377a-43e8-8920-336b73b12dc8"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        26,
+        179
+      ],
+      "dtccIds": [
+        "bd92a811-cc0b-4f06-8db2-782d4dab59a1",
+        "f4683760-6eda-4482-b95b-0435f883a476"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        10,
+        180,
+        181,
+        193
+      ],
+      "dtccIds": [
+        "33a3d120-6ec8-47fc-9bd1-d7153a9cd5f6",
+        "2c3d16e6-d9c0-4e08-bf0e-e80a04f86a24",
+        "23ba1546-1811-4b0b-8361-a23cba612943",
+        "8fa2b30f-94be-4891-aff8-4e01d13b62a7"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        110
+      ],
+      "dtccIds": [
+        "4d7e9629-ba96-4d64-b1bb-df5c4d805b08"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        39
+      ],
+      "dtccIds": [
+        "08bdb158-7fbf-45a3-85c2-317aa6cd93e1"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        119
+      ],
+      "dtccIds": [
+        "f3be0b9d-56cf-4cd6-a9f8-845e7e48ed94"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        183
+      ],
+      "dtccIds": [
+        "10e8c0f4-ef06-46f5-92f7-03fab576ed4d"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        203,
+        209,
+        212,
+        213,
+        214
+      ],
+      "dtccIds": [
+        "fdbf4a1f-2508-4d85-8bdd-5230509fad90",
+        "ce5da741-1d04-4eb8-bebe-677d67e2739d",
+        "ef2c4af2-49b3-4c4a-9f92-5e57e51cb508",
+        "6019c249-055c-48c6-a2a5-86eab67b30ef",
+        "43a45e13-e39e-4a30-bdbe-b795fa44e847"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        4,
+        13,
+        22,
+        24,
+        42,
+        186,
+        197,
+        198,
+        199,
+        200,
+        201,
+        202,
+        205,
+        207,
+        208,
+        210
+      ],
+      "dtccIds": [
+        "7572aa15-a411-4516-a695-dae829a068ba",
+        "db969898-7d89-408a-a793-b3e0b3a8b998",
+        "77df8577-f060-42c5-97bb-764c51ffa00c",
+        "4fb03e75-22ec-47ee-9646-1c843a0d4e09",
+        "e8741c33-7447-4937-958e-d0ba8a7dd4fe",
+        "a725ea6b-6583-4468-9443-bea5de47b94b",
+        "7d100af3-3c74-4818-8565-31ef3893b560",
+        "a2e31306-6c2e-4597-b064-08e57abdb613",
+        "f34e3d9d-fe9d-48ee-adf4-ec0f564b2bbd",
+        "b2815c24-b0af-4535-a1e3-c0cd2a379ab8",
+        "047eab35-7629-490a-99e9-1e0f3b28ad80",
+        "9eb1ccb8-915d-437d-bcab-cebcc449ca57",
+        "dc8754b8-1318-47bc-bf68-2eebc856125b",
+        "6ca5721a-1b3e-4fa0-aadf-6793ff4a66c8",
+        "0f784f42-1d92-4e92-8df2-6f87ebc0caf4",
+        "890e8e75-8767-44c2-adb1-cc7b5e71ce63"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        191
+      ],
+      "dtccIds": [
+        "992f62db-6635-492f-b8c4-85055f4034c9"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        2,
+        11,
+        16,
+        28,
+        29,
+        35,
+        187,
+        194
+      ],
+      "dtccIds": [
+        "4c04c87e-71f0-4606-8643-966c70f5d9bf",
+        "5c696b7d-b74c-4a66-a0cf-744c2c87e1cb",
+        "1824e3f5-0974-43dd-bcfd-ba408b857f27",
+        "4919ae58-0600-40eb-a470-ad86e0885b94",
+        "846102de-5f0f-454d-bdee-0f089dd3fdec",
+        "0d492dfb-4c04-493c-8eb0-d3a022e4f34e",
+        "b1cdba56-0832-4922-9892-846c20823fb2",
+        "c7da0c15-1bd3-48df-8012-0e3d81a256ef"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        204
+      ],
+      "dtccIds": [
+        "2f6185f9-8779-4c48-ac05-663787a2d8ab"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        120,
+        121
+      ],
+      "dtccIds": [
+        "aa9aaa54-f857-453a-97d1-5b39f6818158",
+        "46b54ca7-abe3-43c6-9328-a14a32f3f794"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        206
+      ],
+      "dtccIds": [
+        "ca0af297-ef54-4f89-879e-04cd900ba9b0"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        19
+      ],
+      "dtccIds": [
+        "dc5d3ecf-9526-437c-9613-45ffed968767"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        188
+      ],
+      "dtccIds": [
+        "72367127-9354-4a52-842d-6f1dcf7ed33d"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        5,
+        17,
+        31,
+        34
+      ],
+      "dtccIds": [
+        "982cca93-b0cd-4eed-91e6-f892889a2994",
+        "bceb41ec-4b31-4570-9a09-a08a656589d6",
+        "7e59e5c4-1575-4fd0-a515-2eaef5a11c6d",
+        "b2843174-6ea4-4fe6-88da-5a5979a22667"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        12
+      ],
+      "dtccIds": [
+        "dd983a63-844b-4d38-8feb-3fa6c2681734"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        7,
+        9,
+        14,
+        15,
+        18,
+        33,
+        37
+      ],
+      "dtccIds": [
+        "bd06aa6e-585c-4933-8270-6e99470729e8",
+        "8dbe9c89-fa22-4260-a2a1-794d522e7a4d",
+        "8c6ddcba-55ea-4b24-bf2a-f0c473091f1a",
+        "70846538-333c-48ae-885f-46c054a84305",
+        "b247f705-2a99-4e8e-8bab-e56ef7946d65",
+        "161790d6-3569-4bc3-a09d-86d79ab6dcac",
+        "26668ea9-b5d0-4ddd-ae10-825c5fdbe3e9"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        20
+      ],
+      "dtccIds": [
+        "f860c8e9-4e7b-4736-9a29-a2c1e60a0256"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        211
+      ],
+      "dtccIds": [
+        "10ba53ba-10cc-487f-997b-cb2bc345c379"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        36
+      ],
+      "dtccIds": [
+        "c16c2bb4-af8d-453c-94d9-b99a3cc0427b"
+      ]
+    },
+    {
+      "sourceIndexes": [
+        38
+      ],
+      "dtccIds": [
+        "be5f4faa-74b1-48e2-bd1a-87ef9bf14ab6"
+      ]
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    },
+    {
+      "sourceIndexes": [],
+      "dtccIds": []
+    }
+  ],
+  "objectIndexSpace": "conditioned_building_region",
+  "regionMarkerCount": 103,
+  "conditionedRegionCount": 103,
+  "splitAddedMarkers": 103,
+  "sourceBuildingCount": 215,
+  "identityStability": "unstable_observed",
+  "firstLoadHash": "a844e9cc4576c5af0cc07776c037d18fcfd061d56879111a8ceaa1c015f2edd9",
+  "secondLoadHash": "da5e2fb25790f429a4568c9fd624d7f3904b58afdd4717857290cd33d8fbdfbc",
+  "auditedAt": "2026-09-17T17:32:33.838929+00:00"
+}

@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Xdmf Version="3.0" xmlns:xi="https://www.w3.org/2001/XInclude">
+  <Domain>
+
+    <!-- 1) Volume mesh -->
+    <Grid Name="mesh" GridType="Uniform">
+      <Topology TopologyType="Tetrahedron"
+                NumberOfElements="164154" NodesPerElement="4">
+        <DataItem Format="HDF" NumberType="Int" Precision="8" Dimensions="164154 4">
+          heat.h5:/Mesh/mesh/topology
+        </DataItem>
+      </Topology>
+      <Geometry GeometryType="XYZ">
+        <DataItem Format="HDF" NumberType="Float" Precision="8" Dimensions="45733 3">
+          heat.h5:/Mesh/mesh/geometry
+        </DataItem>
+      </Geometry>
+      <Attribute Name="temperature"
+                 AttributeType="Scalar"
+                 Center="Node">
+        <DataItem Format="HDF"
+                  NumberType="Float"
+                  Precision="8"
+                  Dimensions="45733">
+          heat.h5:/Mesh/mesh/fields/temperature
+        </DataItem>
+      </Attribute>
+    </Grid>
+
+    <!-- 2) Facet markers -->
+    <Grid Name="boundary_markers" GridType="Uniform">
+      <xi:include xpointer="xpointer(/Xdmf/Domain/Grid/Geometry)"/>
+
+      <Topology TopologyType="Triangle"
+                NumberOfElements="77820" NodesPerElement="3">
+        <DataItem Format="HDF" NumberType="Int" Precision="8" Dimensions="77820 3">
+          heat.h5:/MeshTags/boundary_markers/topology
+        </DataItem>
+      </Topology>
+
+      <Attribute Name="boundary_markers"
+                 AttributeType="Scalar"
+                 Center="Cell">
+        <DataItem Format="HDF"
+                  NumberType="Int"
+                  Precision="4"
+                  Dimensions="77820">
+          heat.h5:/MeshTags/boundary_markers/values
+        </DataItem>
+      </Attribute>
+    </Grid>
+
+  </Domain>
+</Xdmf>

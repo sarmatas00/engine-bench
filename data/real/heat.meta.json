@@ -1,0 +1,43 @@
+{
+  "name": "gothenburg-skansen-kronan",
+  "bounds": [
+    318369.0,
+    6398890.0,
+    318869.0,
+    6399390.0
+  ],
+  "vertices": 45733,
+  "cells": 164154,
+  "field": {
+    "name": "temperature",
+    "unit": "degC",
+    "dtype": "float64",
+    "count": 45733,
+    "min": 17.999999876920903,
+    "max": 33.40870697822927,
+    "mean": 25.928026176922955
+  },
+  "field_names": [
+    "temperature"
+  ],
+  "args": {
+    "mesh_max_mesh_size": 25.0,
+    "mesh_domain_height": 80.0,
+    "kappa": 1.0,
+    "sigma": 0.0,
+    "T_ambient": 18.0,
+    "degree": 1,
+    "wall_bc_type": "robin",
+    "wall_value": 28.0,
+    "wall_h": 1.0,
+    "roof_bc_type": "robin",
+    "roof_value": 32.0,
+    "roof_h": 1.0,
+    "ground_bc_type": "dirichlet",
+    "ground_value": 18.0,
+    "open_bc_type": "dirichlet",
+    "open_value": 18.0
+  },
+  "dtcc_core_revision": "5ca2ca410f24763591dc62c7b61f870cef13f717",
+  "solved_at": "2026-09-17T17:33:34.759580+00:00"
+}
