@@ -630,6 +630,20 @@ fully gated, 12 are gated on everything except resource stability.
 GPU sampling: 16 of the 18 runs kept 180 of 180 samples; two kept 179 of 180, a
 0.56% rejection rate against the 10% ceiling.
 
+**No raw record was kept for these 18 runs, and that is a gap.** Every
+SwiftShader session above is archived as JSON under `.cache/sessions/`, so any
+figure in those tables can be re-derived from its 3,240 underlying samples. The
+Metal pass was driven live through a browser rather than through
+`measure:scientific`, and only the per-run values transcribed into the table
+below survive. Every published Metal figure recomputes from that table — the
+medians, the gaps, the spreads and all 18 FPS values were re-derived from it
+during review — but **the underlying samples are gone**, which means the
+distinct-clock-value count in the quantisation note cannot be re-checked by
+anyone. It is stated here rather than discovered later. These are the numbers
+gate 2 consumes, so they deserve the same auditability as the rest of this
+document and do not yet have it; wiring the hardware pass through
+`measure:scientific` would close it.
+
 ## Frame time on the GPU: still no winner, and now the two clocks disagree
 
 | Session | Page | CPU p50 median | CPU p95 median | CPU min median | CPU max, per run | GPU-timer p50 median |
@@ -658,18 +672,52 @@ both are reasons to be *less* willing to read a direction, not more:
 
 - **The CPU clock and the GPU timer point in opposite directions, on the same
   runs.** The CPU p50 puts vtk.js slower in two sessions of three. The GPU timer
-  puts **Three.js** slower in **all three**, by 13.0%, 21.4% and 16.8%. On
+  puts **Three.js** slower in **all three**, by 13.1%, 21.4% and 16.8%. On
   SwiftShader the two clocks agreed to within 0.3 ms because the "GPU" was the
   same CPU; on real hardware they are two measurements of different things — the
   CPU clock times the JavaScript call that submits and waits, the GPU timer times
   the command stream — and they disagree about which page is ahead. A published
   direction would have to pick one clock and suppress the other.
 - **The measurement is near the clock's resolution.** `performance.now()` here
-  quantises to 0.1 ms: 3,240 pooled CPU samples take only 85 distinct values and
-  the smallest non-zero step between them is exactly 0.100 ms. Against a ~5.5 ms
-  p50 one quantum is about 1.8%, so the whole 3.6-11.1% gap band is **two to six
-  clock quanta**. The software pass had ~150 ms frames and no such problem; this
-  one does, and it is a property of measuring a fast frame, not of either page.
+  quantises to 0.1 ms: pooling all 3,240 CPU samples, the **distinct clock values
+  — that is, after rounding to the 0.1 ms grid — number about 85**, and the
+  smallest non-zero step between them is exactly 0.100 ms. (Stated as a grid
+  count on purpose: the raw float64 values carry sub-nanosecond jitter around
+  each grid point, so a raw distinct-value count is larger and means nothing.
+  An independent re-measurement of 720 fresh samples found every one within
+  1.9e-7 ms of a grid point.) Against a ~5.5 ms p50 one quantum is about 1.8%,
+  so the whole 3.6-11.1% gap band is **two to six clock quanta**. The software
+  pass had ~150 ms frames and no such problem; this one does, and it is a
+  property of measuring a fast frame, not of either page.
+
+#### The GPU timer passes this document's own winner test. It is still not promoted.
+
+Stated here rather than left for a reader to rediscover, because anyone who
+recomputes from the table above will find it:
+
+| clock | gap per session | within-condition spread | sign |
+|---|---|---|---|
+| CPU p50 | 8.0 / 3.6 / 11.1% | 3.4 - 17.0% | reverses in H2 |
+| **GPU timer** | **13.1 / 21.4 / 16.8%** | **2.8 - 10.9%** | **Three.js slower in all three** |
+
+The rule this spike works to is: do not declare a winner unless the
+cross-renderer gap exceeds the within-condition spread. On the CPU clock it does
+not, and no winner is declared. **On the GPU timer it does, in every session,
+with a sign that never reverses.**
+
+Three reasons it is still not promoted to a result:
+
+1. **It measures a different quantity.** The GPU timer times the command stream;
+   the CPU clock times the call that submits and waits. A page can be ahead on
+   one and behind on the other without either being wrong.
+2. **It is not what the decision rule consumes.** Gate 2 is minimum sustained
+   FPS, defined as `1000 / p95` of wall-clock frame time. Swapping in a different
+   clock to obtain a direction would be choosing the measurement by its answer.
+3. **The direction it shows favours vtk.js, which this document's conclusion
+   already recommends on other grounds.** That is exactly why it is written down
+   instead of quietly used: a suppressed result that agrees with the
+   recommendation is the one most worth exposing, and the recommendation
+   deliberately does not rest on it.
 
 ### Minimum sustained FPS on the GPU — the number the decision rule consumes
 
