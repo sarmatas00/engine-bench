@@ -75,6 +75,30 @@ Stage 2 is optional. Without it `dataset.json` has no `stages.stage2`, the six f
 (04, 07, 08, 10, 11, 12) say so on screen instead of drawing another dataset's numbers, and
 `bun run test` skips them on `?dataset=real` with that reason printed.
 
+## Scientific visualization: vtk.js against Three.js
+
+Pages **13** (vtk.js 36.12.1) and **14** (Three.js 0.185.1) draw the same scene — the real
+Gothenburg terrain and buildings, a **synthetic** smoke field as a volume, a slice plane and
+dtcc-core's streamlines, with the volume occluded by the city. Same artifacts, same bundle,
+same shared probe and benchmark code, drawing surface pinned to 1280x720 for every timed frame.
+**Neither page is a product architecture.** They are measurement rigs built to be compared with
+each other, and they carry verification scaffolding no shipping page would.
+
+- **The evidence:** `docs/scientific-visualization-measurements.md`. It chooses nothing; it
+  records what was measured, on what surface, with what spread, and what could not be measured.
+  Regenerate every number in it with `bun run measure:scientific`.
+- **The decision:** `NOTES.md`, "The decision rule, applied". Correctness rejects neither path
+  (23 genuinely cross-renderer assertions agree — not the 130 the suite contains). Sustained FPS
+  rejects neither (126.6 - 163.9 FPS on ANGLE Metal / Apple M4; the 3.2 - 5.9 figures elsewhere
+  in the evidence document are software rasterization and say nothing about either library).
+  The choice is decided on maintenance burden.
+- **There is no frame-time winner**, on either surface, and the sign of the gap is not stable.
+  Anything that reads a speed ranking out of these pages is reading noise.
+
+`spikes/vtk-wasm/` is a separate time-boxed companion probe — **FEASIBLE FOR FURTHER
+EVALUATION** — whose verdict is an input to that decision and whose numbers are not: it ran on
+different hardware from the comparison, and nothing ranked it against the two measured paths.
+
 ## Pinned versions
 
 maplibre-gl 5.24.0 (not 6.x — see NOTES.md), deck.gl/luma.gl 9.4.0, three 0.185.1,

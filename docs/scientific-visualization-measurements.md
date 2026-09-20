@@ -570,3 +570,223 @@ pixels; removing the city changes 63,796.
 The probe added **no dependency to this repo**: `@kitware/vtk-wasm` lived only in
 `mktemp -d` directories, and `git diff --stat` shows no change to `package.json`
 or `bun.lock`.
+
+---
+---
+
+# APPENDED SECTION — GPU-hardware pass (Task 9, Step 1a)
+
+> **Everything below this line was added by Task 9. Nothing above it was
+> edited.** The 572 lines above this marker are byte-identical to their state at
+> commit `352b07e`, and the check is self-contained:
+> `head -c 33923 docs/scientific-visualization-measurements.md | shasum -a 256`
+> must still print
+> `659ee99602b4f189cb45de8e0d8f48095429ef332c9cb4fbc6d6f19918b14d92`.
+>
+> **No number here is comparable with any number above.** Everything above is
+> ANGLE/SwiftShader software rasterization, as this document's own surface row
+> says. Everything below is ANGLE Metal on an Apple M4. Putting a 5.4 ms frame
+> time beside a 158.4 ms one is the category error the VTK.wasm section names,
+> which is why this pass gets its own surface row instead of a column in the
+> evidence table.
+>
+> **Why it exists.** The decision rule Task 9 applies rejects sustained FPS
+> below 20. Every FPS figure above is 3.2-5.9 and all of it is software
+> rasterization, so running that gate on those figures would reject both paths
+> on evidence about neither — the same category error as the 12% MSAA phantom,
+> one level up. The user decided on 2026-09-20 to give the gate a real input
+> rather than skip it or apply it literally. This section is that input.
+
+## The GPU measurement surface. Quote it with every number below.
+
+| | |
+|---|---|
+| Browser | **ego lite 0.5.0.32 (Chromium)**, driven through `/ego-browser`; a real window with a real GPU process, not headless |
+| Rasterizer | **ANGLE Metal — hardware.** Unmasked renderer, read off the page's own live context after the run: `ANGLE (Apple, ANGLE Metal Renderer: Apple M4, Unspecified Version)`, `WebGL 2.0 (OpenGL ES 3.0 Chromium)`, vendor `Google Inc. (Apple)` |
+| Backend, read off what ran | the unmasked renderer string above and `EXT_disjoint_timer_query_webgl2` **present and returning samples** on all 18 runs — not a capability string, and not `gl.getSupportedExtensions()` |
+| Harness viewport | 1280x800 CSS, `deviceScaleFactor` 1, pinned with `Emulation.setDeviceMetricsOverride` |
+| Benchmark drawing buffer | **1280x720, asserted per run from `probe.renderSurfaceBenchmark`, not trusted.** All 18 runs recorded `phase: "benchmark"`, 1280x720 |
+| Camera path | `orbit-v1` — the same 30 unrecorded warmup frames then 180 forced frames the software pass used |
+| Runs | 3 cold page loads per page per session, **interleaved** vtk.js, Three.js, vtk.js, Three.js, vtk.js, Three.js. A cold *page load*, not a cold browser context — the software pass used `browser.newContext()`; this pass navigates the same tab, which destroys the GL context and the JS heap but not the browser process. Stated because it is a difference. |
+| Sessions | **three: H1, H2, H3.** H3 also ran the resize sweep and the 100 control cycles, so H3 is the only session whose runs went through `judgeRun` in full |
+| Machine | one Apple M4, macOS 15.5 arm64 |
+| Date of record | 2026-09-20 |
+
+**One machine, one browser engine, one day.** Nothing below supports a claim
+about "GPUs", about "browsers", or about any hardware but this one.
+
+### Which gates each run passed
+
+H3's six runs were handed to `judgeRun` with a real `resourceGrowth` record and
+**all six were accepted, none rejected.** H1's and H2's twelve runs ran the
+benchmark half of the protocol only, so they passed the gates that half can
+answer — `status: ready`, `measurementValid`, exactly 180 finite non-negative
+CPU samples, a p50 above the clock floor, a benchmark-phase 1280x720 surface,
+`gpuSampleStats` published, and a GPU rejection rate under 10% — and **did not
+run the resource-growth stability gate**, because no control cycles were driven
+in those sessions. Said rather than left to be assumed: 6 of the 18 runs are
+fully gated, 12 are gated on everything except resource stability.
+
+GPU sampling: 16 of the 18 runs kept 180 of 180 samples; two kept 179 of 180, a
+0.56% rejection rate against the 10% ceiling.
+
+## Frame time on the GPU: still no winner, and now the two clocks disagree
+
+| Session | Page | CPU p50 median | CPU p95 median | CPU min median | CPU max, per run | GPU-timer p50 median |
+|---|---|---|---|---|---|---|
+| H1 | vtk.js | **5.40 ms** (6.00 / 5.40 / 5.40) | 7.10 (7.40 / 6.50 / 7.10) | 3.90 (4.40 / 3.90 / 3.90) | 9.20 / 8.20 / 21.20 | 5.58 (5.75 / 5.57 / 5.58) |
+| H1 | Three.js | **5.00 ms** (5.60 / 5.00 / 5.00) | 6.80 (7.20 / 6.10 / 6.80) | 3.80 (3.90 / 3.10 / 3.80) | 13.50 / 7.10 / 12.00 | 6.31 (6.84 / 6.31 / 6.17) |
+| H2 | vtk.js | **5.50 ms** (5.50 / 5.30 / 6.20) | 7.70 (7.90 / 6.40 / 7.70) | 4.20 (3.90 / 4.20 / 4.20) | 12.60 / 15.00 / 15.30 | 5.60 (5.60 / 5.56 / 5.73) |
+| H2 | Three.js | **5.70 ms** (5.30 / 5.70 / 5.70) | 7.30 (7.30 / 7.20 / 7.50) | 3.90 (3.80 / 3.90 / 3.90) | 10.10 / 8.40 / 8.60 | 6.80 (6.40 / 6.81 / 6.80) |
+| H3 | vtk.js | **6.00 ms** (6.00 / 5.90 / 6.10) | 7.50 (7.60 / 7.30 / 7.50) | 4.00 (4.00 / 4.00 / 4.00) | 8.90 / 14.70 / 13.40 | 5.73 (5.66 / 5.82 / 5.73) |
+| H3 | Three.js | **5.40 ms** (5.60 / 5.20 / 5.40) | 7.10 (7.10 / 7.30 / 7.00) | 3.80 (3.80 / 3.70 / 4.00) | 7.90 / 27.50 / 12.40 | 6.69 (6.84 / 6.69 / 6.55) |
+
+**The cross-renderer CPU p50 gap spans 3.6-11.1%, the within-condition spread
+spans 3.4-17.0%, and the sign reverses in one session of three.** H1 and H3 put
+vtk.js behind by 8.0% and 11.1%; H2 puts Three.js behind by 3.6%. Published as
+ranges, per this spike's rule, because a ratio of two extremes lurches as
+sessions accumulate.
+
+That is the same shape the software pass measured (gap 2.0-7.1%, spread
+0.4-9.6%, sign reversed in one session of seven), reached independently on a
+different rasterizer. **The answer is the same and it is not a coincidence of
+surface: there is no frame-time winner on this scene, and the sign of the gap is
+not a property of either renderer.**
+
+Two things make that conclusion stronger here than it was on SwiftShader, and
+both are reasons to be *less* willing to read a direction, not more:
+
+- **The CPU clock and the GPU timer point in opposite directions, on the same
+  runs.** The CPU p50 puts vtk.js slower in two sessions of three. The GPU timer
+  puts **Three.js** slower in **all three**, by 13.0%, 21.4% and 16.8%. On
+  SwiftShader the two clocks agreed to within 0.3 ms because the "GPU" was the
+  same CPU; on real hardware they are two measurements of different things — the
+  CPU clock times the JavaScript call that submits and waits, the GPU timer times
+  the command stream — and they disagree about which page is ahead. A published
+  direction would have to pick one clock and suppress the other.
+- **The measurement is near the clock's resolution.** `performance.now()` here
+  quantises to 0.1 ms: 3,240 pooled CPU samples take only 85 distinct values and
+  the smallest non-zero step between them is exactly 0.100 ms. Against a ~5.5 ms
+  p50 one quantum is about 1.8%, so the whole 3.6-11.1% gap band is **two to six
+  clock quanta**. The software pass had ~150 ms frames and no such problem; this
+  one does, and it is a property of measuring a fast frame, not of either page.
+
+### Minimum sustained FPS on the GPU — the number the decision rule consumes
+
+Same definition as above: `1000 / p95`, the rate held for 95% of frames, at
+1280x720, `orbit-v1`.
+
+| | vtk.js 36.12.1 | Three.js 0.185.1 |
+|---|---|---|
+| Min sustained FPS, **range over 9 runs each** | **126.6 - 156.3** | **133.3 - 163.9** |
+| Per session (3 runs each) | H1 135.1 / 153.8 / 140.8 · H2 126.6 / 156.3 / 129.9 · H3 131.6 / 137.0 / 133.3 | H1 138.9 / 163.9 / 147.1 · H2 137.0 / 138.9 / 133.3 · H3 140.8 / 137.0 / 142.9 |
+| `classifyFps` verdict | **`meets-target` on all 9 runs** | **`meets-target` on all 9 runs** |
+
+**Across all 18 runs the range is 126.6-163.9 FPS.** Published as a range rather
+than a median, because a single figure here would be exactly the number that is
+right only by coincidence of when it was taken.
+
+Against the spec's bands — at least 30 FPS is the target, sustained below 20 FPS
+fails the interactive-MVP requirement — **every run on both renderers is
+`meets-target`, by a factor of four or more.** This says nothing about which
+renderer is faster (see above); it says that on this machine, this scene at this
+surface is not near the gate in either library. It is also six times above the
+target, which is the margin that matters for reading it forward to weaker
+hardware: a GPU four times slower than an M4 would still clear 30 FPS on this
+scene.
+
+**What this row does not establish.** It is one GPU, one browser engine, one
+scene, one surface, one day. It does not predict an integrated GPU, a 4K
+surface, a larger grid, a scene with more geometry, or WebKit. It replaces the
+software FPS row as the *decision rule's input* and replaces nothing else in this
+document.
+
+## Two results from the software pass reproduce on hardware, and one artifact disappears
+
+Measured in session H3, which ran the full protocol — 8 drawing-buffer resizes
+then 100 control cycles with no resize, on each of six runs.
+
+- **Resource stability holds.** Over 100 control cycles with no resize, both
+  pages moved **0** on all six counters, on all six runs. Same as SwiftShader.
+- **The vtk.js resize growth reproduces, on hardware, for the first time.** Over
+  8 drawing-buffer resizes: vtk.js **+8 textures, +8 framebuffers, +8
+  renderbuffers**, one of each per resize, identical on all three of its runs;
+  Three.js **0, 0, 0**. This is now reproduced in seven sessions, six of them
+  software and this one hardware. It is a library property, not a rasterizer one.
+- **The tens-of-seconds first resize does not exist here.** The "harness
+  property, belonging to neither renderer" section above records a first resize
+  taking 49.3-61 s on both pages under SwiftShader while every later one took
+  0.25 s. On Metal, across **48 resizes** (8 per run, 6 runs, both pages), every
+  wait was between **0.26 s and 1.06 s** — measured with the same 250 ms polling
+  the software harness uses, so the figures are poll-granular and the true waits
+  are at or below them. Removing the software rasterizer removes the stall, which
+  is the confirmation that section's attribution was right: it was a queue drain,
+  not a renderer.
+
+## The cross-renderer suite, re-run on ANGLE Metal
+
+The 13-test cross-renderer suite (`tests/scientific.spec.ts`) was re-run against
+the real GPU using a temporary, **gitignored** Playwright config that differs
+from `playwright.config.ts`'s chromium project only in its launch flags
+(`--use-gl=angle --use-angle=metal --enable-gpu --ignore-gpu-blocklist` in place
+of the SwiftShader flags). **All 13 passed.** Notable, because the document above
+warns that the occlusion pins are a regression gate rather than a physical law
+and that `OCCLUSION_CROSS_PAGE = 1.20` "will flake first on other hardware":
+
+- Occlusion ratios on Metal: vtk.js 1.66 / 1.31 / 1.31 / 1.55 (mean 1.46),
+  Three.js 2.22 / 1.43 / 1.49 / 1.84 (mean 1.75), cross-page **1.20** against the
+  1.20 pin and its ±10% window. **Identical to the SwiftShader figures at two
+  decimal places.** The pin did not flake; the warning stands anyway, because one
+  more GPU is not "other hardware" in general.
+- GPU-sampled slice colour, 18 probes: worst channel delta **1 of 255** on both
+  renderers, the same as software.
+- Picking, driven live through `/ego-browser` on the same hardware rather than
+  through Playwright: 20 rays under `PICK_POSE`, **17 hits and 3 misses on both
+  pages**, zero disagreements on hit, cell id or marker, and a worst
+  intersection-point separation of **1.2e-11 m** against the suite's 0.05 m
+  bound.
+
+**One trap worth recording, because it is this spike's defect in its purest
+form.** The first attempt at this hardware suite run simply removed the
+SwiftShader flags, on the assumption that a flagless chromium would use the GPU.
+All 13 tests passed — and the run was still SwiftShader. It was caught by the
+suite's own frame-time line reading 157.6 / 160.0 ms when the `/ego-browser` pass
+on the same machine had just measured 5-6 ms, then confirmed by reading the
+unmasked renderer under three flag sets: flagless headless chromium reports
+`ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device ...))`, identical to the
+explicit SwiftShader flags. **A green suite is not evidence of the surface it ran
+on.** Explicit `--use-angle=metal --enable-gpu` was required, and the backend was
+read off the renderer string afterwards rather than assumed from the flags.
+
+## Live verification (Step 4), on the same hardware
+
+Both pages, driven through `/ego-browser` at the GPU surface:
+
+- **Every control exercised.** Each page exposes 8 interactive elements: the
+  `data-case` select (3 options), the `slice-z`, `range-low`, `range-high` and
+  `opacity` ranges, the `streamlines` checkbox, the `camera-reset` button and the
+  index link. Every range was driven to its minimum, maximum and midpoint, the
+  checkbox through all four transitions, every select option selected, and the
+  button clicked — 21 recorded states per page — on top of the **600 deterministic
+  control cycles per page** the H3 stability sweep drove.
+- **Console and network are clean.** 0 `console.error`, 0 `console.warn`, 0
+  `window.onerror`, 0 unhandled rejections, 0 non-2xx responses and 0 zero-byte
+  resources, on both pages, across every run of every session — collected by a
+  listener installed with `Page.addScriptToEvaluateOnNewDocument` **before** any
+  page script, and reported beside a run that reached its terminal state, so "0
+  errors" cannot mean "nothing ran".
+- **Live probe values match the record.** Page 14's `glslBurden`, read off the
+  running page on Metal, is `144` non-blank / `128` compiled / **`85` distinct** /
+  `11` textually identical to the stock addon / **`0`** reused verbatim — the
+  document's figures exactly. `probe.apis` reads **13** on page 13 and **21** on
+  page 14, matching the table. Page 13 publishes no `glslBurden` at all, which is
+  what "0 lines, 0 shaders" means in practice.
+- **One false finding, rejected by measurement.** A first picking pass dispatched
+  synthetic `MouseEvent`s for `pointerdown`, and both pages logged 15
+  `NotFoundError: Failed to execute 'setPointerCapture'`. The count was identical
+  on both pages and equal to the number of synthetic clicks, which is the
+  signature of a harness artifact rather than a page defect; re-run with real CDP
+  mouse input the same clicks produced **0 errors** and a correct identity
+  readout on both pages. Recorded rather than published, because a console error
+  found live is a finding only after it survives being attributed to the tool
+  that produced it.

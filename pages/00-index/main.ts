@@ -34,6 +34,28 @@ const sections: Record<string, string> = {
   '13-vtkjs-scientific': 'Scientific visualization — one scene carrying the city and the fields'
 };
 
+/**
+ * Notes rendered under a section heading. Page 13 and page 14 get one because they
+ * are the only pages on this index whose numbers are quoted in a decision document,
+ * and both things it says have been read the wrong way at least once during the spike:
+ * the smoke field is SYNTHETIC even though the buildings and terrain are the real
+ * Gothenburg tile, and neither page is a shape anything should be built in.
+ */
+const sectionNotes: Record<string, string> = {
+  '13-vtkjs-scientific':
+    '<b>Both pages draw the same thing: real city geometry plus a synthetic smoke field.</b> '
+    + 'The terrain and the 20,726-vertex building mesh are the real Gothenburg tile — the same '
+    + 'hash-verified artifacts every other page on this index uses. The smoke case is '
+    + '<b>synthetic</b> (<code>cases.smoke.dataCategory = "synthetic"</code> in the manifest); the heat '
+    + 'case is a real dtcc-sim solve. Neither page takes the <code>?dataset=</code> switch, because '
+    + 'they load one combined bundle rather than a synthetic/real variant. '
+    + '<b>Neither page is a product architecture.</b> They are measurement rigs, built to be compared '
+    + 'with each other: identical scene, identical artifacts, identical shared probe and benchmark '
+    + 'code, a drawing surface pinned to 1280x720 for every timed frame, and a pile of verification '
+    + 'scaffolding that no shipping page would carry. Read them as the evidence behind '
+    + '<code>docs/scientific-visualization-measurements.md</code>, not as a starting point to copy.'
+};
+
 // Three rows describe something the synthetic scene does and the real tile does not. Overridden
 // rather than reworded for both, because the difference is the finding: on the real tile z = 0 is
 // the tile floor (buried, never floating) and the solved field has no single hot spot to plume.
@@ -83,6 +105,6 @@ document.body.innerHTML = `
   ${pipelineBlock}</header>
   <main style="padding:14px;overflow:auto"><table style="border-collapse:collapse">
   <thead><tr><th align="left">Page</th><th align="left">What you should see</th><th align="left">What it decides</th></tr></thead>
-  <tbody>${rows.map(([slug, t, e, , d]) => (sections[slug] ? `<tr><td colspan="3" style="padding:14px 0 4px;font-weight:600;border-bottom:1px solid #ccc">${sections[slug]}</td></tr>` : '') + `<tr><td style="padding:4px 12px 4px 0;white-space:nowrap"><a href="${assetUrl(`${slug}/${COMBINED.has(slug) ? '' : q}`)}">${slug.slice(0, 2)} · ${t}</a></td><td style="padding:4px 12px 4px 0">${(ds === 'real' && realExpect[slug]) || e}</td><td style="padding:4px 0">${d}</td></tr>`).join('')}</tbody>
+  <tbody>${rows.map(([slug, t, e, , d]) => (sections[slug] ? `<tr><td colspan="3" style="padding:14px 0 4px;font-weight:600;border-bottom:1px solid #ccc">${sections[slug]}</td></tr>` + (sectionNotes[slug] ? `<tr><td colspan="3" style="padding:8px 0 10px"><div class="decision">${sectionNotes[slug]}</div></td></tr>` : '') : '') + `<tr><td style="padding:4px 12px 4px 0;white-space:nowrap"><a href="${assetUrl(`${slug}/${COMBINED.has(slug) ? '' : q}`)}">${slug.slice(0, 2)} · ${t}</a></td><td style="padding:4px 12px 4px 0">${(ds === 'real' && realExpect[slug]) || e}</td><td style="padding:4px 0">${d}</td></tr>`).join('')}</tbody>
   </table></main>`;
 window.__bench = {ready: true, probe: {}};

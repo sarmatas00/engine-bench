@@ -665,8 +665,9 @@ opaque depth stop.
 owned**. Textual overlap with the stock addon is 11 lines, every distinct one of
 which is `void main() {` or a precision qualifier, so **verbatim reuse is 0**.
 
-That zero needs its structure stated or it misleads in the other direction: ~11
-of the 85 are the shared colormap charged to this page, ~5 are verification
+That zero needs its structure stated or it misleads in the other direction: ~12
+of the 85 are the shared colormap charged to this page (`COLORMAP_GLSL` measures
+12 non-blank lines; this line said "~11" until Task 8 counted it), ~5 are verification
 scaffolding that never runs in a frame, `#include <packing>` pulls
 `perspectiveDepthToViewZ` from three's own chunk library as uncounted reuse, and
 while the compositor and depth stop are genuinely new, the slab ray/AABB
@@ -689,3 +690,184 @@ So the burden difference is **ownership, not capability**: both pages run a dept
 prepass and clamp the ray against it; on one it is vendored and maintained by
 Kitware, on the other it is ~85 lines this repo owns. Do not write that vtk.js
 needs no depth prepass.
+
+## The decision rule, applied (2026-09-20, spike Task 9)
+
+The rule, verbatim from the plan: **reject correctness failures, then sustained
+FPS below 20, then compare maintenance burden and presentation. Permit neither.**
+
+Run in that order, each gate naming what it consumed and on which surface. The
+full evidence is `docs/scientific-visualization-measurements.md`; this section
+applies the rule to it and adds no measurement of its own except the GPU pass
+that document's appended Task 9 section records.
+
+### Gate 1 — correctness. Rejects neither.
+
+Consumed: the **23 genuinely cross-renderer assertions** of
+`tests/scientific.spec.ts`. Not the 130 assertions the file contains. The other
+107 are excluded by name and for a reason:
+
+- **9 `src/lib` invariants.** Both pages call the same shared function, so these
+  compare `src/lib` with itself and cannot fail unless the shared library is
+  edited. **They must never be quoted as "the renderers agree".**
+- **72 single-page checks**, each of which holds on one page independently.
+- **26 page-drift guards**, which compare the two *pages'* controls and readouts,
+  not the two renderers.
+- **The camera block is also excluded.** vtk.js's `getProjectionMatrix` returns
+  an unnormalised matrix (396.5 / 1031.6 where Three.js returns 1.43 / 3.73 for
+  the same 30° vertical field of view), so only the aspect ratio is comparable
+  and that is all the suite compares.
+
+The two loads the correctness claim rests on:
+
+- **The picking sweep is the camera evidence.** 20 fixed rays at fractions of the
+  pinned 1280x720 surface under `orbit-v1`'s own pose: `vtkCellPicker` over the
+  polydata's cell data against `Raycaster.faceIndex` over the shipped
+  `cellObjectIndex`. Two independent intersection implementations, one index
+  space, nothing shared deciding the answer. Re-driven live on ANGLE Metal for
+  this task: **17 hits, 3 misses, zero disagreements on hit, cell id or marker,
+  worst intersection-point separation 1.2e-11 m against a 0.05 m bound.**
+- **The 18-point GPU loop is the numerical evidence.** 3 world points x 3 data
+  cases x 2 colour windows, each renderer's own shader read out of its own
+  texture upload and out of its own drawing buffer, compared against CPU truth.
+  Worst channel delta **1 of 255** on both renderers, on SwiftShader and again on
+  ANGLE Metal.
+
+Surface: chromium and firefox under ANGLE/SwiftShader for the suite of record;
+re-verified on chromium under ANGLE Metal (Apple M4) for this task, 13 of 13
+tests passing including the `OCCLUSION_CROSS_PAGE = 1.20` pin, which read 1.20.
+**WebKit is untested and the conclusion is qualified to chromium and firefox, not
+to "browsers".**
+
+**Neither path is rejected.** Both renderers draw the same scene, from the same
+artifacts, and agree on identity and on value.
+
+### Gate 2 — sustained FPS below 20. Rejects neither.
+
+Consumed: **the GPU-hardware pass**, `docs/scientific-visualization-measurements.md`,
+appended Task 9 section. Surface: **ANGLE Metal Renderer: Apple M4**, hardware,
+1280x720 pinned and asserted per run, `orbit-v1`, three interleaved sessions of
+three cold page loads per page.
+
+**Minimum sustained FPS (`1000 / p95`) is 126.6 - 163.9 across all 18 runs**;
+vtk.js 126.6 - 156.3 over its 9 runs, Three.js 133.3 - 163.9 over its 9.
+`classifyFps` returns **`meets-target` on all 18**. The gate rejects at 20 and
+targets 30; both paths clear the target by more than four times.
+
+**This gate did NOT consume the software numbers, and that is the whole point of
+the extra pass.** The 3.2 - 5.9 FPS figures elsewhere in that document are
+ANGLE/SwiftShader software rasterization and classify `fails-interactive-mvp` on
+every run of both renderers. Running the gate on them would have rejected both
+paths on evidence about neither — the same category error as the 12% MSAA
+phantom, one level up. The two sets of numbers are never compared; they are
+different surfaces and they live in different sections.
+
+Scope of the FPS row: one M4, one Chromium build, one scene, one surface, one
+day. It does not predict an integrated GPU, a 4K surface, a larger grid, or
+WebKit.
+
+### Gate 3 — maintenance burden and presentation. This is the gate that decides.
+
+Frame time decides nothing here, on either surface, and it is placed last
+deliberately so that ordering does not imply otherwise. **There is no frame-time
+winner and the sign of the gap is not stable.** On SwiftShader the cross-renderer
+gap spans 2.0 - 7.1% against a within-condition spread of 0.4 - 9.6%, with the
+sign reversed in one session of seven. On Metal the gap spans 3.6 - 11.1% against
+a spread of 3.4 - 17.0%, with the sign reversed in one session of three — and on
+the same runs the CPU clock and the GPU timer point in **opposite directions**,
+the CPU putting vtk.js behind in two sessions of three while the GPU timer puts
+Three.js behind in all three. Two rasterizers, ten sessions, the same answer: not
+a renderer property.
+
+What the two paths actually cost, measured:
+
+| | vtk.js 36.12.1 (page 13) | Three.js 0.185.1 (page 14) |
+|---|---|---|
+| GLSL owned | **0 lines, 0 shaders** | **~85 distinct lines**, 9 shaders, 0 reused verbatim — structure below |
+| API entry points | **13**, all public `@kitware/vtk.js/...`, plus 2 rendering-profile imports. 0 experimental, 0 private | **21**: 19 core classes plus **2 `three/addons/*` modules**, which are not under the core stability guarantee |
+| Undocumented dependencies | none found | **2**: `#include <packing>` resolving against three's internal `ShaderChunk`, and `WebGLRenderer`'s multisample depth-resolve behaviour, established by measurement rather than documentation |
+| GL objects per drawing-buffer resize | **+1 texture, +1 framebuffer, +1 renderbuffer, never recovered** — +8/+8/+8 over 8 resizes, reproduced in seven sessions including one on hardware | **0, 0, 0** |
+| GL objects over 100 no-resize control cycles | 0 on all six counters | 0 on all six counters |
+| Page code fetched | 1,166,378 B of JS over 8 requests | 675,460 B over 6 |
+| `dist` bundle | 1,168,299 B raw / 315,376 B gzip, 9 files | 677,411 B raw / 181,229 B gzip, 7 files |
+| Data fetched | 3,251,647 B over 11 requests | **identical** |
+
+**The ~85 published with its structure, because the bare zero misleads in both
+directions.** Of the 85 distinct lines: about **12** are the shared colormap
+(`COLORMAP_GLSL`), charged to this page because they compile into its fragment
+shaders even though `src/lib` owns them; about **5** are verification scaffolding
+that never runs in a frame; `#include <packing>` pulls `perspectiveDepthToViewZ`
+out of Three.js's own chunk library and **is real reuse that is not counted
+anywhere in the 85**; and the ray/AABB slab intersection, the bounded march with
+a hard `MAX_STEPS`, the clim normalisation, the sampler-helper factoring and the
+half-texel centring are the stock addon's algorithm **re-typed rather than
+reused**. The compositor and the depth stop are genuinely new. The 11 lines that
+are textually identical to the stock addon are all `void main() {` or
+`precision highp float;`, which is why verbatim reuse computes to 0.
+
+**The mechanism is the same on both pages.** Both renderers clamp the volume ray
+against an opaque-depth texture: vtk.js inside `vtkOpenGLVolumeMapper`, which
+substitutes `//VTK::ZBuffer::Impl` with a `zBufferTexture` read and
+`dists.y = min(zdepth, dists.y);`, and page 14 by hand with an offscreen target
+and a reconstructed view distance. Neutralising vtk.js's one line drives its
+occlusion ratio to 1.00, symmetric with deleting page 14's
+`tFar = min(tFar, opaqueViewZ / rayViewZ)`. **Do not write that vtk.js needs no
+depth prepass. Both pages run one.** The difference is ownership, not capability.
+
+### What the rule concludes
+
+**The rule rejects neither path.** "Permit neither" is available and this
+evidence does not reach it: gate 1 rejected nothing and gate 2 rejected nothing
+on the surface it was given.
+
+Gate 3 is a comparison, not a rejection, and it does not point one way on every
+axis. Two of its three measured axes favour vtk.js — **0 GLSL lines against ~85,
+and 13 public entry points with no addon tier against 21 entries including 2
+addons and 2 undocumented dependencies** — and both are permanent: code this repo
+would own and maintain, and API surface outside a stability guarantee. One axis
+favours Three.js, and it is a live defect rather than a code-volume figure:
+**vtk.js leaks three GL objects per drawing-buffer resize and never recovers
+them**, reproduced identically in seven sessions on two rasterizers. That leak is
+bounded and its shape is known — it tracks resizes only, never frames, never
+slice rebuilds, never case switches, which the 100-cycle control result is the
+evidence for — so its cost is set by how often a real page resizes its drawing
+buffer, and it is an upstream bug with a clean reproduction rather than a
+property of the approach.
+
+**On this evidence, for a scientific view of this shape, vtk.js is the path with
+the lower long-term cost**, and the reason is the burden axis, not speed and not
+correctness. Three.js reaches the same picture and the same numbers; it reaches
+them through a volume compositor and depth stop this repo writes and keeps
+working against `three/addons/*` and two internal behaviours, and that is the
+liability the measurement is actually about.
+
+**The scope of that sentence, stated so it is not read wider than it was
+measured.** It is one 500 m Gothenburg tile, one 32x32x32 synthetic smoke grid
+and one 64x64x32 solved heat grid, one machine, one week, chromium and firefox
+for correctness and one Apple M4 for the frame rate. It is not a claim about
+vtk.js and Three.js in general. Things that are not measured here and could move
+it: WebKit; any GPU that is not this one; a scene with substantially more
+geometry or a substantially larger grid; a production interaction model that
+resizes the drawing buffer continuously, which would raise the price of the
+vtk.js leak; and anything about either library outside this one scene.
+
+### The VTK.wasm companion
+
+**Verdict: FEASIBLE FOR FURTHER EVALUATION.** All eleven success assertions
+passed twice — once in the working environment and once from a clean install with
+a bit-identical frame — in 11 minutes of a four-hour box. Full record:
+`spikes/vtk-wasm/README.md`.
+
+**The verdict is an input to this task. Its numbers are not.** Task 9 **did not
+rank VTK.wasm against the two measured paths and could not have**: the probe ran
+on ANGLE Metal on an M4 and the comparison of record is ANGLE/SwiftShader, so
+putting its figures beside the evidence table would be a category error, not a
+close call. Two caveats travel with the verdict:
+
+- **The npm package is not the runtime.** `@kitware/vtk-wasm@3.0.4` is 432 KB of
+  loader with **no `.wasm` in it**; the 84 MB binary comes from a GitHub `dist`
+  branch whose documented default is a **moving nightly** at a version
+  (`9.7.20260913`) unrelated to the npm version. Real use means self-hosting and
+  pinning it.
+- **One engine.** Chromium only. Firefox and WebKit were not tested, exactly as
+  they are not tested for the frame times here.
