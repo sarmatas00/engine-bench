@@ -26,11 +26,15 @@ maplibre-gl pinned to 5.24.0: @deck.gl/mapbox 9.4.0 interleaved mode reads `map.
 - Page 12 (PlayCanvas 2.22.0, `field-baked.glb`): contrary to the task facts' assumption ("PlayCanvas 2.22.0 ignores glTF COLOR_0 unless the material sets diffuseVertexColor"), the mesh rendered with correct vertex colours (blue-to-red gradient with a red/yellow hot spot) straight out of `instantiateRenderEntity()` — no material patch needed. Verified directly: built and screenshotted the page once with a `meshInstance.material.diffuseVertexColor = true; material.update();` loop applied after instantiation, and once with that loop entirely removed; the two screenshots were visually identical. `pc.Application` (deprecated in favour of `AppBase`/`createGraphicsDevice` but still present in 2.22.0) initialised and rendered cleanly under Playwright/SwiftShader with zero console errors either way, so this version's `ContainerHandler`/glTF parser must already set `diffuseVertexColor` on generated materials when a primitive has `COLOR_0`. Page 12 therefore ships without any vertex-colour workaround.
 - Page 10 (Cesium `VoxelPrimitive`, 1.145.0): the volumetric renderer is real and does render our 64×64×32 float grid, but "working volumetric renderer" understates the assembly. (a) `VoxelProvider` is an interface with an instantiation-throwing constructor and no public concrete implementation for in-memory data — the only shipped one is `Cesium3DTilesVoxelProvider`, which wants a 3D Tiles tileset with `EXT_primitive_voxels`/`EXT_structural_metadata` glTF content. Feeding a plain `Float32Array` means hand-rolling an object with 17 properties (`shape, dimensions, names, types, componentTypes, minimumValues, maximumValues, globalTransform, shapeTransform, minBounds, maxBounds, paddingBefore, paddingAfter, maximumTileCount, availableLevels, requestData`, plus the optional `metadataOrder`) that Cesium reads as plain properties, and both `VoxelPrimitive` and `VoxelProvider` are marked `@experimental` — outside the deprecation policy. (b) It is expensive: the ray-march runs at roughly one frame per second at 1280×800 under Playwright's SwiftShader, enough to starve the globe's own tile refinement, so page 10 adds the primitive only after the terrain has settled. `stepSize` (1 → 8) changes nothing there; the cost is shader-bound, not step-bound. (c) The volume is drawn as a full-screen ray-march compositing front-to-back, so the briefing's mental model of "the hot core shows red" needs `depthTest = false` (the hottest air in our field is at ground level, i.e. inside the hill) and a steeper opacity ramp than the obvious one — at `alpha = t²·0.9` the ray saturates on the cool near side and the core never reaches the screen. Even at `t³·0.35` the front-to-back composite still dilutes the handful of peak voxels with everything in front of them, so at any legible opacity the core reads amber, not the red the top of the colour scale implies.
 - Real tile `gothenburg-skansen-kronan` (500 m box, EPSG:3006 [318369, 6398890, 318869, 6399390],
-  relief 53.5 m, 217 LOD0 footprints in `footprints.geojson` — what page 01 draws — and 103 connected
+  relief 53.5 m, 215 LOD0 footprints in `footprints.geojson` (217 before the post-#85 upgrade) — what page 01 draws — and 103 connected
   components in the drawn LOD1 surface mesh, i.e. 103 welded building groups, which is what pages
-  02/03/05/06/09 draw), pages 01/02/03. (An earlier draft of this entry said "215 buildings"; that was
-  a stale Stage 1 count from before the Task 3b regeneration and never a measured figure. Re-measured
-  on the shipped data in Task 8: 217 and 103.) Page 01's `fill-extrusion` drapes
+  02/03/05/06/09 draw), pages 01/02/03. (This entry has been wrong in both directions. An early draft said
+  "215 buildings" as a stale Stage 1 count that was never measured; Task 8 re-measured the
+  then-shipped data and corrected it to 217 and 103. The post-#85 regeneration on THIS branch then
+  took the shipped tile to **215 footprints** -- see "Native drift: two buildings disappear" below --
+  so 217 went stale again and the whole-branch review caught it. Measured at HEAD:
+  `footprints.geojson` has **215** features and `buildings.mesh.json.sourceBuildingCount` is **215**.
+  The 103 connected components are unchanged. Treat 217 as the pre-upgrade count only.) Page 01's `fill-extrusion` drapes
   correctly on real data: every footprint stands where the DEM puts it, and toggling Terrain moves
   the whole city with the ground. Pages 02 and 03 draw the same buildings re-based to z = 0 and
   produce the *same* buried silhouette as each other, so the mechanism (MapLibre never drapes a
@@ -625,6 +629,14 @@ vtk.js   (page 13)  cpu p50  152.8 ms   (independent re-measure: 149.1)
 **There is no frame-time winner on this scene.** A few percent apart on
 ANGLE/SwiftShader is indistinguishable for a decision.
 
+> **These two figures are a single Task 6 session under an earlier protocol, and
+> they are superseded.** No session in the seven-session table in
+> `docs/scientific-visualization-measurements.md` contains a vtk.js 152.8, and
+> the ~1.05% gap implied here sits *outside* the 2.0-7.1% range measured across
+> those seven. Quote the range, not this pair. The conclusion is unchanged --
+> both say no winner -- but a single session's figures are exactly what this
+> spike's own rule says to publish as a range or not at all.
+
 The first version of this measurement said Three.js was ~12% faster. It was
 wrong, and the reason is worth keeping: page 14's offscreen opaque target was
 single-sampled while page 13's canvas was multisampled at 4, so the two pages
@@ -704,8 +716,11 @@ that document's appended Task 9 section records.
 ### Gate 1 — correctness. Rejects neither.
 
 Consumed: the **23 genuinely cross-renderer assertions** of
-`tests/scientific.spec.ts`. Not the 130 assertions the file contains. The other
-107 are excluded by name and for a reason:
+`tests/scientific.spec.ts`. Not the 127 assertions the file contains (the
+whole-branch review counted them; this said 130 and it was never 130). The
+other ~104 are excluded by name and for a reason -- the three class counts
+below were hand-tallied against the wrong total and sum 3 high, which changes
+nothing about what they exclude:
 
 - **9 `src/lib` invariants.** Both pages call the same shared function, so these
   compare `src/lib` with itself and cannot fail unless the shared library is

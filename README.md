@@ -86,9 +86,11 @@ each other, and they carry verification scaffolding no shipping page would.
 
 - **The evidence:** `docs/scientific-visualization-measurements.md`. It chooses nothing; it
   records what was measured, on what surface, with what spread, and what could not be measured.
-  Regenerate every number in it with `bun run measure:scientific`.
+  `bun run measure:scientific` regenerates the **software-rasterizer** sections. It does not
+  regenerate the GPU-hardware pass (driven live through a browser; its raw samples were not
+  kept) or the VTK.wasm probe, and the document says so in both places.
 - **The decision:** `NOTES.md`, "The decision rule, applied". Correctness rejects neither path
-  (23 genuinely cross-renderer assertions agree — not the 130 the suite contains). Sustained FPS
+  (23 genuinely cross-renderer assertions agree — not the 127 the suite contains). Sustained FPS
   rejects neither (126.6 - 163.9 FPS on ANGLE Metal / Apple M4; the 3.2 - 5.9 figures elsewhere
   in the evidence document are software rasterization and say nothing about either library).
   The choice is decided on maintenance burden.
