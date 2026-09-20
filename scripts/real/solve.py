@@ -16,6 +16,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))   # /work, mounted beside solve.py
 import benchio
+import core_compat
 
 OUT = Path("/out")
 
@@ -37,6 +38,10 @@ def main():
     meta = json.loads((OUT / "dataset.json").read_text())
     bounds = [float(v) for v in meta["bounds"]]
     print(f"solve: {meta['name']} {bounds}", flush=True)
+
+    core_compat.patch_terrain_raster_classification()
+    print('solve: patched build_terrain_raster for the R6 classification dtype regression',
+          flush=True)
 
     from dtcc_sim.datasets import UrbanHeatSimulationDataset
     from dtcc_core.io import save_volume_mesh

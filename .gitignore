@@ -7,3 +7,6 @@ playwright-report
 .venv
 __pycache__/
 .cache
+
+# PR Lens writes its previews here. They are rebuilt on demand.
+.pr-lens/

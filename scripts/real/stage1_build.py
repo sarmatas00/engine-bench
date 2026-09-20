@@ -21,6 +21,7 @@ from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import benchio
+import core_compat
 
 REPO = Path(__file__).resolve().parents[2]
 OUT = REPO / "public" / "data" / "real"
@@ -150,9 +151,16 @@ def split_surface_mesh(mesh):
     return ~buildings, buildings
 
 
-def submesh(mesh, face_mask, origin, z0) -> dict:
-    """Compact the masked faces into a standalone mesh in the local frame."""
-    faces = np.asarray(mesh.faces)[np.asarray(face_mask)]
+def submesh(mesh, face_mask, origin, z0, face_values=None) -> dict:
+    """Compact the masked faces into a standalone mesh in the local frame.
+
+    face_values: one value per face of the *source* mesh. The very same mask that
+    selects the faces selects these, and nothing downstream reorders either, so
+    output triangle k keeps the value of the source face it came from. That
+    correspondence is the whole basis for attributing a triangle to an object.
+    """
+    face_mask = np.asarray(face_mask)
+    faces = np.asarray(mesh.faces)[face_mask]
     used = np.unique(faces)
     remap = np.full(len(mesh.vertices), -1, dtype=np.int64)
     remap[used] = np.arange(len(used))
@@ -172,7 +180,15 @@ def submesh(mesh, face_mask, origin, z0) -> dict:
     lengths = np.linalg.norm(normals, axis=1)
     lengths[lengths == 0] = 1.0
     normals /= lengths[:, None]
-    return {"positions": positions, "normals": normals, "indices": indices}
+
+    out = {"positions": positions, "normals": normals, "indices": indices}
+    if face_values is not None:
+        values = np.asarray(face_values).reshape(-1)
+        if values.size != len(mesh.faces):
+            raise ValueError(f"face_values has {values.size} values "
+                             f"for {len(mesh.faces)} source faces")
+        out["face_values"] = values[face_mask]
+    return out
 
 
 def flatten_buildings(sub) -> dict:
@@ -206,6 +222,75 @@ def flatten_buildings(sub) -> dict:
     return {"positions": positions, "normals": sub["normals"], "indices": indices}
 
 
+def building_height(building):
+    """The height dtcc-core itself would use for a building, or None.
+
+    At dtcc-core 4c8d621 (post-#85) `Building.height` became an alias for
+    `measured_height`, which is only set when the *source data* carried a
+    measurement. The height this pipeline computes from the point cloud
+    (`compute_building_heights`) is stored as `estimated_height`, so on a
+    downloaded tile `building.height` is None and the previous
+    `float(building.height)` raises a TypeError.
+
+    Core resolves the pair itself in builder/model_conversion.py, and this
+    follows that rule exactly rather than inventing a second one: the estimate
+    wins when present, the measurement is the fallback. That is also the value
+    the surface mesh beside these footprints was extruded from.
+    """
+    height = (building.measured_height if building.estimated_height is None
+              else building.estimated_height)
+    return None if height is None else float(height)
+
+
+def building_objects(marker_sources, buildings, marker_count) -> list:
+    """`objects[marker]` -> every source building that marker actually stands for.
+
+    `marker_sources` is the **marker** -> city.buildings map from
+    `core_compat.marker_source_map`, not Core's `source_map` (which is keyed by
+    conditioned region, one index space further up). Confusing the two is the
+    whole hazard this module exists to avoid.
+
+    A surface face marker does not index `city.buildings`. It indexes the
+    conditioned region handed to the mesher, reached through merging
+    (`merge_buildings=True`), `min_building_area` filtering, clipping,
+    renormalization, and a split pass that can append markers of its own.
+    Ledger ruling R5 (user decision, 2026-09-17) settles the contract: publish
+    the fan-out honestly.
+
+    A merged region legitimately has several source buildings, so `sourceIndexes`
+    and `dtccIds` are lists. A marker at or past `len(marker_sources)` came from
+    `_split_ground_mesh_building_components` and has no conditioned region behind
+    it, so it gets an empty entry -- which says "no source building", where
+    inventing an ID would say something false.
+    """
+    if len(marker_sources) > marker_count:
+        # Never truncate. If the reproduction yields more markers than the mesh
+        # carries, our marker space has drifted from Core's and every id below
+        # is suspect -- the silent mislabeling R5 exists to prevent.
+        raise RuntimeError(
+            f"reproduced {len(marker_sources)} region markers but the mesh carries "
+            f"only {marker_count}; the face-marker reproduction has drifted from "
+            f"dtcc-core and no building identity can be trusted until it is re-read")
+    objects = []
+    for marker in range(marker_count):
+        sources = list(marker_sources[marker]) if marker < len(marker_sources) else []
+        for index in sources:
+            if not 0 <= index < len(buildings):
+                raise ValueError(
+                    f"marker {marker} names source building {index}, "
+                    f"but the city has {len(buildings)} buildings")
+        objects.append({
+            "sourceIndexes": [int(index) for index in sources],
+            "dtccIds": [str(buildings[index].id) for index in sources],
+        })
+    return objects
+
+
+def identity_mapping(city) -> dict:
+    """One observed source-index -> DTCC-id mapping, for the two-load audit."""
+    return {index: str(building.id) for index, building in enumerate(city.buildings)}
+
+
 def footprints_geojson(city, crs) -> dict:
     """LOD0 footprints in lon/lat with a `height` property, for page 01."""
     from pyproj import Transformer
@@ -218,18 +303,25 @@ def footprints_geojson(city, crs) -> dict:
         polygon = footprint.to_polygon(simplify=0.0)
         if polygon.is_empty:
             continue
+        height = building_height(building)
+        if height is None:
+            # Spec section 9: fail loudly. Page 01 extrudes by this value, and there is
+            # no honest substitute for a height the source never supplied.
+            raise RuntimeError(
+                f"building {building.id} has neither an estimated_height nor a "
+                f"measured_height; page 01 extrudes footprints by this value"
+            )
         ring = list(polygon.exterior.coords)
         lons, lats = tf.transform([c[0] for c in ring], [c[1] for c in ring])
         features.append({
             "type": "Feature",
-            "properties": {"height": float(building.height)},
+            "properties": {"height": height},
             "geometry": {"type": "Polygon", "coordinates": [[[lon, lat] for lon, lat in zip(lons, lats)]]},
         })
     return {"type": "FeatureCollection", "features": features}
 
 
 def build_stage1(out_dir=OUT, bounds_path=BOUNDS_PATH) -> dict:
-    from dtcc_core.datasets._city_mesh_common import prepare_city_from_bounds
     from dtcc_core.model import Bounds
 
     spec = json.loads(Path(bounds_path).read_text())
@@ -237,12 +329,15 @@ def build_stage1(out_dir=OUT, bounds_path=BOUNDS_PATH) -> dict:
     name, crs = spec["name"], spec["crs"]
     print(f"stage1: {name} {bounds} {crs}", flush=True)
 
-    try:
-        city = prepare_city_from_bounds(
+    def load_city():
+        # `prepare_city` is Core's prepare_city_from_bounds with the R6
+        # classification cast folded in; see that function for why.
+        return core_compat.prepare_city(
             Bounds(xmin=bounds[0], ymin=bounds[1], xmax=bounds[2], ymax=bounds[3]),
-            raster_cell_size=RASTER_CELL_SIZE, raster_radius=RASTER_RADIUS,
-            remove_outliers=True, outlier_threshold=3.0,
-        )
+            raster_cell_size=RASTER_CELL_SIZE, raster_radius=RASTER_RADIUS)
+
+    try:
+        city = load_city()
     except Exception as exc:  # spec section 9: fail loudly, never fall back to synthetic
         raise RuntimeError(
             f"stage1 could not build the city for {name} bbox {bounds} ({crs}). "
@@ -252,7 +347,7 @@ def build_stage1(out_dir=OUT, bounds_path=BOUNDS_PATH) -> dict:
         ) from exc
     raster = city.terrain.raster
     if raster is None:
-        raise RuntimeError("prepare_city_from_bounds returned a city with no terrain raster")
+        raise RuntimeError("prepare_city returned a city with no terrain raster")
 
     meta = write_terrain_artifacts(out_dir, raster, bounds=bounds, name=name, crs=crs)
     print(f"stage1: relief {meta['relief']['relief']:.1f} m "
@@ -262,6 +357,16 @@ def build_stage1(out_dir=OUT, bounds_path=BOUNDS_PATH) -> dict:
               f"the fallback box {spec['fallback']['bounds']} ({spec['fallback']['name']}) and "
               f"record why in NOTES.md.", flush=True)
 
+    # Two-load identity audit (brief step 4). DTCC object ids are only ever
+    # *observed* to be stable, never guaranteed: Object.id defaults to a fresh
+    # uuid4 and _building_from_fiona overwrites it from the source `id` property
+    # only when the tile carries one. So we load the same bounds twice and
+    # report what we saw, rather than asserting traceability we did not measure.
+    print("stage1: second load for the identity audit...", flush=True)
+    audit = benchio.audit_identity_stability(identity_mapping(city),
+                                             identity_mapping(load_city()))
+    print(f"stage1: identity {audit['identityStability']}", flush=True)
+
     from dtcc_core.datasets.city_surface_mesh import CitySurfaceMeshDataset
 
     print(f"stage1: {len(city.buildings)} buildings", flush=True)
@@ -270,22 +375,64 @@ def build_stage1(out_dir=OUT, bounds_path=BOUNDS_PATH) -> dict:
     print(f"stage1: surface mesh {len(surface.vertices)} vertices, {len(surface.faces)} faces", flush=True)
 
     ground_mask, building_mask = split_surface_mesh(surface)
+    markers = np.asarray(surface.markers).reshape(-1)
     origin, z0 = meta["origin"], meta["z0"]
     ground = submesh(surface, ground_mask, origin, z0)
-    buildings = submesh(surface, building_mask, origin, z0)
+    buildings = submesh(surface, building_mask, origin, z0, face_values=markers)
     flat = flatten_buildings(buildings)
 
+    # R5: the marker is a conditioned-region index, so the object table is
+    # indexed by marker and fans out to the source buildings behind it.
+    marker_sources, conditioned_count = core_compat.marker_source_map(city, MAX_MESH_SIZE)
+    marker_count = int(markers.max()) + 1 if (markers >= 0).any() else 0
+    objects = building_objects(marker_sources, city.buildings, marker_count)
+    # len(marker_sources), not conditioned_count, is the boundary between real
+    # regions and split-added markers: the clip and renormalization stages sit
+    # between the two and are not guaranteed to be identity (review finding 3).
+    split_added = marker_count - len(marker_sources)
+    print(f"stage1: {len(city.buildings)} buildings -> {conditioned_count} conditioned regions "
+          f"-> {len(marker_sources)} region markers; {marker_count} markers in the mesh "
+          f"({split_added} split-added, no conditioned region behind them)", flush=True)
+
     out_dir = Path(out_dir)
-    for name, sub in [("ground", ground), ("buildings", buildings), ("buildings-flat", flat)]:
-        info = benchio.write_mesh_pair(out_dir, name, positions=sub["positions"],
-                                       normals=sub["normals"], indices=sub["indices"])
-        print(f"stage1: {name}.mesh {info['vertexCount']} vertices, "
+    written = {}
+    for mesh_name, sub in [("ground", ground), ("buildings", buildings), ("buildings-flat", flat)]:
+        # Identity rides on the buildings mesh only. Terrain has no objects, and
+        # flatten_buildings regroups by connected component rather than by
+        # marker, so its triangles no longer answer to the marker index.
+        cell_extra = metadata = None
+        if mesh_name == "buildings":
+            cell_extra = {"cell_object_index": (sub["face_values"], "u32", 1)}
+            metadata = {
+                "objects": objects,
+                "objectIndexSpace": "conditioned_building_region",
+                # regionMarkerCount is the contract boundary: markers below it
+                # have a conditioned region behind them, markers at or above it
+                # were appended by the mesher's split pass and carry no source
+                # building. conditionedRegionCount is the pre-clip count and is
+                # provenance only -- the two coincide only when the clip and
+                # renormalization stages are identity, which is not guaranteed.
+                "regionMarkerCount": int(len(marker_sources)),
+                "conditionedRegionCount": int(conditioned_count),
+                "splitAddedMarkers": int(split_added),
+                "sourceBuildingCount": len(city.buildings),
+                **audit,
+            }
+        info = benchio.write_mesh_pair(out_dir, mesh_name, positions=sub["positions"],
+                                       normals=sub["normals"], indices=sub["indices"],
+                                       cell_extra=cell_extra, metadata=metadata)
+        written[mesh_name] = info
+        print(f"stage1: {mesh_name}.mesh {info['vertexCount']} vertices, "
               f"{info['indexCount'] // 3} triangles", flush=True)
+
+    attributed = sum(1 for entry in objects if entry["dtccIds"])
+    print(f"stage1: {attributed}/{marker_count} markers carry at least one DTCC id", flush=True)
 
     fc = footprints_geojson(city, crs)
     (out_dir / "footprints.geojson").write_text(json.dumps(fc) + "\n")
     print(f"stage1: {len(fc['features'])} footprints", flush=True)
-    return {"meta": meta, "city": city, "surface": surface}
+    return {"meta": meta, "city": city, "surface": surface,
+            "objects": objects, "audit": audit, "meshes": written}
 
 
 if __name__ == "__main__":

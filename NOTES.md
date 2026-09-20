@@ -11,7 +11,7 @@ maplibre-gl pinned to 5.24.0: @deck.gl/mapbox 9.4.0 interleaved mode reads `map.
 
 ## Findings
 
-- dtcc-core#85 round trip on `gothenburg-skansen-kronan` (`save_volume_mesh` in the dtcc-sim container -> `load_volume_mesh` natively): **no loss**. vertices 50729 -> 50729, cells 182331 -> 182331, field `temperature` -> `temperature`, dtype float64 -> float64, max |dT| 0.0. Full record in `public/data/real/dataset.json` under `stage2.roundtrip`.
+- dtcc-core#85 round trip on `gothenburg-skansen-kronan` (`save_volume_mesh` in the dtcc-sim container -> `load_volume_mesh` natively): **no loss**. vertices 45733 -> 45733, cells 164154 -> 164154, field `temperature` -> `temperature`, dtype float64 -> float64, max |dT| 0.0. Full record in `public/data/real/dataset.json` under `stage2.roundtrip`.
 - The container's solve and Stage 1's raster disagree on the tile's terrain minimum by 0.12 m — measured while verifying the frame, not a defect to fix. `heat.xdmf`'s volume mesh (loaded natively with `load_volume_mesh`) has z in `[1.2397061261541102, 81.2397061261541]`, a domain height of exactly `mesh_domain_height` = 80.0 m above *its own* terrain floor of 1.2397 m. `public/data/real/dataset.json`'s `z0` — Stage 1's raster minimum, the value everything in this bench treats as the tile's local zero — is 1.1191982915663998 m. The two floors differ by 0.1205 m: the container solved its mesh against a terrain sample that was not bit-for-bit the same minimum Stage 1 recorded from the raster. Harmless against 53.45 m of relief (0.2% of it), but it is exactly the class of cross-revision fact this file exists to hold, so it is recorded here rather than left to be rediscovered.
 - **Superseded by the Task 11 entry below (measured on the shipped renders): the prediction in this
   bullet that pages 07/08/10/11 "will *look* like a dramatic temperature swing across the surface"
@@ -26,11 +26,15 @@ maplibre-gl pinned to 5.24.0: @deck.gl/mapbox 9.4.0 interleaved mode reads `map.
 - Page 12 (PlayCanvas 2.22.0, `field-baked.glb`): contrary to the task facts' assumption ("PlayCanvas 2.22.0 ignores glTF COLOR_0 unless the material sets diffuseVertexColor"), the mesh rendered with correct vertex colours (blue-to-red gradient with a red/yellow hot spot) straight out of `instantiateRenderEntity()` — no material patch needed. Verified directly: built and screenshotted the page once with a `meshInstance.material.diffuseVertexColor = true; material.update();` loop applied after instantiation, and once with that loop entirely removed; the two screenshots were visually identical. `pc.Application` (deprecated in favour of `AppBase`/`createGraphicsDevice` but still present in 2.22.0) initialised and rendered cleanly under Playwright/SwiftShader with zero console errors either way, so this version's `ContainerHandler`/glTF parser must already set `diffuseVertexColor` on generated materials when a primitive has `COLOR_0`. Page 12 therefore ships without any vertex-colour workaround.
 - Page 10 (Cesium `VoxelPrimitive`, 1.145.0): the volumetric renderer is real and does render our 64×64×32 float grid, but "working volumetric renderer" understates the assembly. (a) `VoxelProvider` is an interface with an instantiation-throwing constructor and no public concrete implementation for in-memory data — the only shipped one is `Cesium3DTilesVoxelProvider`, which wants a 3D Tiles tileset with `EXT_primitive_voxels`/`EXT_structural_metadata` glTF content. Feeding a plain `Float32Array` means hand-rolling an object with 17 properties (`shape, dimensions, names, types, componentTypes, minimumValues, maximumValues, globalTransform, shapeTransform, minBounds, maxBounds, paddingBefore, paddingAfter, maximumTileCount, availableLevels, requestData`, plus the optional `metadataOrder`) that Cesium reads as plain properties, and both `VoxelPrimitive` and `VoxelProvider` are marked `@experimental` — outside the deprecation policy. (b) It is expensive: the ray-march runs at roughly one frame per second at 1280×800 under Playwright's SwiftShader, enough to starve the globe's own tile refinement, so page 10 adds the primitive only after the terrain has settled. `stepSize` (1 → 8) changes nothing there; the cost is shader-bound, not step-bound. (c) The volume is drawn as a full-screen ray-march compositing front-to-back, so the briefing's mental model of "the hot core shows red" needs `depthTest = false` (the hottest air in our field is at ground level, i.e. inside the hill) and a steeper opacity ramp than the obvious one — at `alpha = t²·0.9` the ray saturates on the cool near side and the core never reaches the screen. Even at `t³·0.35` the front-to-back composite still dilutes the handful of peak voxels with everything in front of them, so at any legible opacity the core reads amber, not the red the top of the colour scale implies.
 - Real tile `gothenburg-skansen-kronan` (500 m box, EPSG:3006 [318369, 6398890, 318869, 6399390],
-  relief 53.5 m, 217 LOD0 footprints in `footprints.geojson` — what page 01 draws — and 103 connected
+  relief 53.5 m, 215 LOD0 footprints in `footprints.geojson` (217 before the post-#85 upgrade) — what page 01 draws — and 103 connected
   components in the drawn LOD1 surface mesh, i.e. 103 welded building groups, which is what pages
-  02/03/05/06/09 draw), pages 01/02/03. (An earlier draft of this entry said "215 buildings"; that was
-  a stale Stage 1 count from before the Task 3b regeneration and never a measured figure. Re-measured
-  on the shipped data in Task 8: 217 and 103.) Page 01's `fill-extrusion` drapes
+  02/03/05/06/09 draw), pages 01/02/03. (This entry has been wrong in both directions. An early draft said
+  "215 buildings" as a stale Stage 1 count that was never measured; Task 8 re-measured the
+  then-shipped data and corrected it to 217 and 103. The post-#85 regeneration on THIS branch then
+  took the shipped tile to **215 footprints** -- see "Native drift: two buildings disappear" below --
+  so 217 went stale again and the whole-branch review caught it. Measured at HEAD:
+  `footprints.geojson` has **215** features and `buildings.mesh.json.sourceBuildingCount` is **215**.
+  The 103 connected components are unchanged. Treat 217 as the pre-upgrade count only.) Page 01's `fill-extrusion` drapes
   correctly on real data: every footprint stands where the DEM puts it, and toggling Terrain moves
   the whole city with the ground. Pages 02 and 03 draw the same buildings re-based to z = 0 and
   produce the *same* buried silhouette as each other, so the mechanism (MapLibre never drapes a
@@ -390,3 +394,495 @@ maplibre-gl pinned to 5.24.0: @deck.gl/mapbox 9.4.0 interleaved mode reads `map.
   a broad haze, not a sharp plume). The other nine rows are true on both datasets and were left
   alone. Pages 04 and 12 were checked and need no dataset branch: their `expect:` text describes
   what both renders do, and both were confirmed against the real screenshots.
+
+## Post-#85 Core upgrade: measured drift (2026-09-17, spike Task 1)
+
+Regenerated on native Core `4c8d621` (was `5cf56fa`) and container Core `5ca2ca4`
+(was `9774162`), same tile, same bounds, same solver arguments. The posted
+dtcc-twin#1 and dtcc-core#85 comments quote the pre-upgrade numbers, so this is
+what changed and what did not.
+
+**Correction.** An earlier version of this section said "no drift at all on the
+native side". That was wrong: the footprint count moved. It is recorded below.
+
+### Native geometry: unchanged
+
+Byte-identical after regeneration, not merely equal in count: `terrain.tif`,
+`basemap.png`, `terrain-rgb.png`, `ground.mesh.bin` and `buildings-flat.mesh.bin`.
+Unchanged to full precision: `bounds`, `origin`, `extent`, `anchor_lonlat`,
+`z0 = 1.1191982915663998`, `relief.zmin/zmax/relief`, `cell_size`. Mesh counts
+unchanged: `ground` 6288 vertices / 8920 triangles, `buildings` 20726 / 37672,
+`buildings-flat` 20726 / 37672.
+
+`buildings.mesh.bin` grew from 949,488 to 1,100,176 bytes, which is exactly the new
+`cell_object_index` array (37,672 triangles x 4 bytes = 150,688) and nothing else.
+
+### Native drift: two buildings disappear (217 -> 215)
+
+`footprints.geojson` went from **217 to 215 features**. The 215 survivors have
+byte-identical geometry and identical heights; no footprint was added or moved.
+
+Measured cause, not inferred. `download_footprints` still returns **217**, and all
+217 survive `extract_roof_points` and `compute_building_heights`. The two are
+dropped by `City.add_buildings(remove_outside_terrain=True)`:
+
+```
+download_footprints            : 217
+after extract_roof_points      : 217
+after compute_building_heights : 217
+add_buildings(remove=False)    : 217
+add_buildings(remove=True)     : 215
+```
+
+Both are the two buildings the builder logs `has no roof points. using min height`
+for (areas 11.57 m2 and 13.68 m2, `estimated_height` 2.5, `measured_height` None).
+With no lidar returns they carry an **empty** `POINT_CLOUD` geometry, whose bounds
+are zeros, and `Object.bounds` folds those zeros into the aggregate:
+
+```
+terrain bounds  : x[318369.0, 318869.0]  y[6398890.0, 6399390.0]
+building bounds : x[0.00, 318460.55]     y[0.00, 6399125.05]      <- dragged to the origin
+its LOD0 bounds : x[318456.42, 318460.55] y[6399120.86, 6399125.05]
+```
+
+`contains_bounds` then fails for a footprint sitting ~90 m inside the tile edge, and
+the building is removed as "outside the terrain". `contains_bounds` defaults to
+`ignore_z=True`, so this is not a z issue.
+
+The exact line is now pinned. `City.add_buildings` is unchanged between `5cf56fa` and
+`4c8d621`; `Object.calculate_bounds` was rewritten, and the new version skips empty
+geometries for `Surface`, `MultiSurface` and `Solid` but **not** for `PointCloud`. An
+empty point cloud therefore falls through to a forced `calculate_bounds()` and is
+unioned in as a zero box. The intent is already in the code; `PointCloud` is missing
+from the list. Reported as a draft: `docs/upstream/dtcc-core-empty-pointcloud-bounds.md`.
+
+**It does not move any geometry.** Both buildings contribute no mesh faces either
+way, which is why every mesh count above is unchanged. Nothing was worked around:
+suppressing the symptom would hide a Core behavior change.
+
+### Container drift: the volume mesh and the field
+
+| metric | pre-upgrade (9774162) | post-upgrade (5ca2ca4) | change |
+| --- | --- | --- | --- |
+| volume vertices | 50729 | 45733 | -4996 (-9.85%) |
+| volume cells | 182331 | 164154 | -18177 (-9.97%) |
+| solve field max | 32.95301610756346 | 33.40870697822927 | **+0.4557 degC** |
+| solve field mean | 26.11123898229059 | 25.928026176922955 | -0.1832 degC |
+| solve field min | 17.999999852416245 | 17.999999876920903 | +2.45e-08 |
+| sampled grid max | 32.49213547378579 | 32.264330029565414 | -0.2278 degC |
+| ground-sampled tmax | 18.746469572546268 | 18.7647502942796 | +0.0183 degC |
+| ground-sampled tmin | 17.99999987228115 | 17.99999989500044 | +2.27e-08 |
+
+The solve maximum moving **+0.46 degC** is the largest scientific number in this
+change and the one to quote if anyone asks what the upgrade cost. The minima are
+pinned by the Dirichlet ground and open boundaries at 18.0 and do not move.
+
+**Why this is the container Core upgrade and not our R6 workaround.** The
+classification cast is provably selection-neutral: on 200k synthetic points,
+`classification == 2` selects the same 66,870 points before and after, and the values
+round-trip exactly. Independently, the native terrain raster, built from the same
+point cloud with that same cast applied, is byte-identical to pre-upgrade. The only
+thing that changed on the volume side is container Core itself.
+
+**The dtcc-core#85 round-trip claim still holds** on the upgraded stack: vertices and
+cells agree before and after, `field_present` true, float64 both ways,
+`max_abs_delta` 0.0, `lossless` true.
+
+### Regeneration is bit-deterministic
+
+Two independent end-to-end runs on the upgraded stack (stage 1, stage 2 in the
+container, sampling, `generate:real`) produced **byte-identical** `heat.h5`,
+`heat.pre.f64`, `field.grid.f32`, `field.mesh.bin`, `buildings.mesh.bin`,
+`ground.mesh.bin`, `terrain.tif` and `footprints.geojson`. The only differences were
+the `solved_at` and `stages.*` timestamps. The emulated FEM solve is reproducible run
+to run, so any future artifact difference is a real change, not solver noise.
+
+### Identity
+
+**Verdict: `unstable_observed`.** Loading the same bounds twice produces different
+DTCC building UUIDs, so the footprint tiles carry no `id` property and `Object.id`
+falls back to a fresh `uuid4()` per load. Renderer picking must continue on
+`sourceIndex`, and both pages must report canonical traceability as failed. Measured,
+not assumed: both mapping hashes are in `buildings.mesh.json`.
+
+**Coverage is partial, and visibly so.** 215 source buildings condition to 103
+regions; the mesh carries 206 markers, because
+`_split_ground_mesh_building_components` appends one marker per split component and
+never reports the parent it split from. So 103 markers carry DTCC ids (30,958
+triangles) and 103 do not (6,714 triangles, 17.8% of the building geometry). Those
+103 are recorded as empty `objects` entries, which says "no conditioned region behind
+this marker" rather than guessing one. Their parent region is recoverable only by
+geometry, which has not been done and is not implied anywhere in the artifact.
+
+The contract boundary published in `buildings.mesh.json` is **`regionMarkerCount`**
+(103), not `conditionedRegionCount`. The two are equal on this tile but they are
+different quantities: `conditionedRegionCount` is the count before the raster clip and
+the coverage renormalization, and those stages are not guaranteed to be identity.
+Readers must use `regionMarkerCount`.
+
+### Workarounds to remove
+
+`core_compat.py` section 1 (`integer_classification`, `prepare_city`,
+`patch_terrain_raster_classification`) works around an upstream regression that stops
+both Core and dtcc-sim from building the tile at all. Delete the section as a unit
+when the upstream fix lands. Draft: `docs/upstream/dtcc-core-classification-dtype.md`.
+Section 2 is not a workaround and stays.
+
+**Both drafts were posted on 2026-09-18** as `sarmatas00`, after a duplicate search
+turned up nothing upstream: `dtcc-core#110` (the classification dtype regression) and
+`dtcc-core#111` (`add_buildings(remove_outside_terrain=True)` deleting buildings with no
+roof points). The headers in `docs/upstream/` carry the issue links.
+
+## vtk.js 36.12.1: three measured findings (2026-09-18, spike Task 5)
+
+### `gl.finish()` does not force a completed frame under ANGLE/SwiftShader
+
+The first working benchmark on page 13 reported a CPU mean of **0.45 ms** while
+`EXT_disjoint_timer_query_webgl2` reported **95 ms** over the same 180 frames. A 200x
+overstatement of frame rate, on the page whose entire job is measuring frame rate, and
+it passed every check the task brief specified.
+
+`gl.finish()` returns without waiting under Chrome's ANGLE/SwiftShader command buffer.
+The fix is a 1x1 `gl.readPixels` at the end of each frame, which is a real pipeline
+sync: `FRAMEBUFFER_BINDING` and `READ_FRAMEBUFFER_BINDING` are both null after
+`render()`, so it blocks on the default framebuffer. CPU and GPU then agree, with CPU
+sitting marginally above GPU (44.71 vs 44.47 ms) -- the signature of a completed frame
+plus submission.
+
+Deleting that one line leaves every gate green, so the smoke suite now asserts
+`cpuMean > 0.5 * gpuMean`. Verified to catch the regression: with `readPixels` stripped
+from the built chunk the ratio falls to 0.003 and the assertion fails.
+
+**Task 6 must do the same or the two pages are not comparable.**
+
+### `vtkOpenGLRenderWindow` leaks one texture, one framebuffer and one renderbuffer per resize
+
+Measured with GL-object counters installed before the first render. The leak tracks
+drawing-buffer **resizes**, never frames, and never recovers:
+
+~~~
+startup               8 textures /  1 framebuffer
++6 viewport resizes  14          /  7
++3 benchmark runs    20          / 13     (two setSize calls each)
++8 slice rebuilds    no change
++3 case switches     no change
+~~~
+
+Confirmed independently at prototype level: exactly +1 texture, +1 framebuffer and
++1 renderbuffer per resize. The renderbuffer was missed on the first pass, because
+neither page counted that type until Task 6's review added it -- the leak's magnitude
+was understated by a third for a day. Page-owned allocations (buffers, listeners,
+observers) stay flat throughout, so this is vtk.js's, not ours. Task 6 needs the same instrumentation to know whether
+Three.js does it too; it is a maintenance-burden input for Task 8.
+
+### A node-vs-trilinear probe cannot check axis order, at any node
+
+Worth recording because the first fix for it was the same mistake one level down.
+`sampleGridTrilinear` calls `probeGridNode` internally with the same `dims`, so both
+sides of such a comparison route through one `gridNodeIndex`. A transposition moves
+both identically. At an exact node the trilinear path collapses to a single
+`probeGridNode` call, and on the heat grid's irrational spacing the residual 1e-15 of
+float noise is present on the **correct** payload -- so an exact-equality assert fails
+on correct data and passes on reversed garbage.
+
+Checking axis order needs a genuinely independent second implementation. Page 13 uses
+`vtkImageData.getOffsetIndexFromWorld`, whose matrix-inverse path catches four classes
+a componentwise dims/origin/spacing comparison cannot see at all: a permuted or flipped
+`direction` matrix, a wrong `numberOfComponents`, a wrongly bound scalar array, and a
+shifted extent.
+
+Known structural limit, stated rather than papered over: swapping x and y via
+dims/spacing is a genuine no-op on both shipped grids (32x32 and 64x64 in x/y), so it is
+undetectable by construction. Swapping x and y via `direction` is caught.
+
+### The shipped tile cannot discriminate several things it appears to
+
+Recorded together because each one has already produced a check that passed for the
+wrong reason:
+
+- `regionMarkerCount` and `conditionedRegionCount` are **both 103**, so a test comparing
+  the wrong one still passes.
+- The smoke grid is **32x32x32**, a cube, so a transposed index is invisible on it. The
+  heat grid (64x64x32) discriminates z but not x/y.
+- `nz` is **32 on both grids**, so a K-index slider works on both by coincidence. Page 13
+  drives the slice by world height in metres instead.
+- `smoke.speed` and `smoke.velocity` are **bit-identically z-invariant** (max deviation
+  0.0; pressure 12.02, heat 14.26), so any z-axis cross-check run on speed has zero power
+  over z. Cross-check on pressure.
+
+When shipped data cannot distinguish two fields, build a fixture that can.
+
+## vtk.js vs Three.js: the measured comparison (2026-09-19, spike Tasks 5 and 6)
+
+Both pages draw the same DTCC artifacts from the same bundle, through the same
+shared probe and benchmark code, at the same pinned 1280x720 drawing surface.
+
+### Frame time: indistinguishable, and the first answer was wrong
+
+Reported as p50, the robust statistic under a software rasterizer:
+
+~~~
+Three.js (page 14)  cpu p50  151.2 ms   (independent re-measure: 145.6)
+vtk.js   (page 13)  cpu p50  152.8 ms   (independent re-measure: 149.1)
+~~~
+
+**There is no frame-time winner on this scene.** A few percent apart on
+ANGLE/SwiftShader is indistinguishable for a decision.
+
+> **These two figures are a single Task 6 session under an earlier protocol, and
+> they are superseded.** No session in the seven-session table in
+> `docs/scientific-visualization-measurements.md` contains a vtk.js 152.8, and
+> the ~1.05% gap implied here sits *outside* the 2.0-7.1% range measured across
+> those seven. Quote the range, not this pair. The conclusion is unchanged --
+> both say no winner -- but a single session's figures are exactly what this
+> spike's own rule says to publish as a range or not at all.
+
+The first version of this measurement said Three.js was ~12% faster. It was
+wrong, and the reason is worth keeping: page 14's offscreen opaque target was
+single-sampled while page 13's canvas was multisampled at 4, so the two pages
+were rasterizing terrain, buildings and streamlines at different sample counts.
+The page labelled that FORCED, on the claim that a multisampled target cannot
+hand a depth *texture* to the volume pass. That claim is false for three
+0.185.1: `updateMultisampleRenderTarget` blits depth into the single-sample
+framebuffer whose depth attachment is the `DepthTexture`, and
+`resolveDepthBuffer` defaults true. Sampled the same way, the gap collapsed from
+12.4% to 2.4%.
+
+A page artifact wearing a renderer property's clothes. Caught only because the
+review re-measured instead of reading.
+
+### Resource growth: a real difference, and it favours Three.js
+
+Per drawing-buffer resize, measured with GL-object counters on both pages and
+confirmed independently at prototype level:
+
+~~~
+vtk.js 36.12.1   +1 texture, +1 framebuffer, +1 renderbuffer   per resize, never recovered
+Three.js 0.185.1  0           0              0                  flat across 8 resizes
+~~~
+
+vtk.js's counts go 8/1/1 at startup to 18/11/11 after ten resizes. Growth tracks
+resizes, never frames, never slice rebuilds, never case switches. Three.js holds
+flat at 37 buffers / 12 textures / 5 framebuffers / 2 renderbuffers from ready
+onward, across 100 control cycles, three benchmark runs and eight resizes.
+
+### Maintenance burden: ~85 distinct GLSL lines, zero of them reused
+
+Three.js has no volume renderer. The stock `three/addons/shaders/VolumeShader.js`
+supplies only maximum-intensity and isosurface modes, not transparent
+front-to-back compositing, so page 14 hand-writes the compositor and a two-pass
+opaque depth stop.
+
+9 shaders, 144 non-blank lines, 128 substantive as compiled, **85 distinct lines
+owned**. Textual overlap with the stock addon is 11 lines, every distinct one of
+which is `void main() {` or a precision qualifier, so **verbatim reuse is 0**.
+
+That zero needs its structure stated or it misleads in the other direction: ~12
+of the 85 are the shared colormap charged to this page (`COLORMAP_GLSL` measures
+12 non-blank lines; this line said "~11" until Task 8 counted it), ~5 are verification
+scaffolding that never runs in a frame, `#include <packing>` pulls
+`perspectiveDepthToViewZ` from three's own chunk library as uncounted reuse, and
+while the compositor and depth stop are genuinely new, the slab ray/AABB
+intersection, the bounded march with a hard `MAX_STEPS`, the clim normalisation,
+the sampler-helper factoring, the half-texel centring and the terminal alpha
+discard are the addon's algorithm re-typed rather than reused.
+
+vtk.js needs none of this: `vtkVolumeMapper` is the product.
+
+**But it is the same mechanism, not a different one.** The parity suite's first
+wording claimed the two renderers occlude the volume by "genuinely different
+mechanisms", and that is wrong.
+`@kitware/vtk.js/Rendering/OpenGL/VolumeMapper.js:113` substitutes
+`//VTK::ZBuffer::Impl` with a `zBufferTexture` read and
+`dists.y = min(zdepth, dists.y);` — the identical opaque-depth-texture clamp page
+14 writes by hand. Neutralising that one line drives vtk.js's occlusion ratio to
+1.00, symmetric with deleting page 14's `tFar = min(tFar, opaqueViewZ/rayViewZ)`.
+
+So the burden difference is **ownership, not capability**: both pages run a depth
+prepass and clamp the ray against it; on one it is vendored and maintained by
+Kitware, on the other it is ~85 lines this repo owns. Do not write that vtk.js
+needs no depth prepass.
+
+## The decision rule, applied (2026-09-20, spike Task 9)
+
+The rule, verbatim from the plan: **reject correctness failures, then sustained
+FPS below 20, then compare maintenance burden and presentation. Permit neither.**
+
+Run in that order, each gate naming what it consumed and on which surface. The
+full evidence is `docs/scientific-visualization-measurements.md`; this section
+applies the rule to it and adds no measurement of its own except the GPU pass
+that document's appended Task 9 section records.
+
+### Gate 1 — correctness. Rejects neither.
+
+Consumed: the **23 genuinely cross-renderer assertions** of
+`tests/scientific.spec.ts`. Not the 127 assertions the file contains (the
+whole-branch review counted them; this said 130 and it was never 130). The
+other ~104 are excluded by name and for a reason -- the three class counts
+below were hand-tallied against the wrong total and sum 3 high, which changes
+nothing about what they exclude:
+
+- **9 `src/lib` invariants.** Both pages call the same shared function, so these
+  compare `src/lib` with itself and cannot fail unless the shared library is
+  edited. **They must never be quoted as "the renderers agree".**
+- **72 single-page checks**, each of which holds on one page independently.
+- **26 page-drift guards**, which compare the two *pages'* controls and readouts,
+  not the two renderers.
+- **The camera block is also excluded.** vtk.js's `getProjectionMatrix` returns
+  an unnormalised matrix (396.5 / 1031.6 where Three.js returns 1.43 / 3.73 for
+  the same 30° vertical field of view), so only the aspect ratio is comparable
+  and that is all the suite compares.
+
+The two loads the correctness claim rests on:
+
+- **The picking sweep is the camera evidence.** 20 fixed rays at fractions of the
+  pinned 1280x720 surface under `orbit-v1`'s own pose: `vtkCellPicker` over the
+  polydata's cell data against `Raycaster.faceIndex` over the shipped
+  `cellObjectIndex`. Two independent intersection implementations, one index
+  space, nothing shared deciding the answer. Re-driven live on ANGLE Metal for
+  this task: **17 hits, 3 misses, zero disagreements on hit, cell id or marker,
+  worst intersection-point separation 1.2e-11 m against a 0.05 m bound.**
+- **The 18-point GPU loop is the numerical evidence.** 3 world points x 3 data
+  cases x 2 colour windows, each renderer's own shader read out of its own
+  texture upload and out of its own drawing buffer, compared against CPU truth.
+  Worst channel delta **1 of 255** on both renderers, on SwiftShader and again on
+  ANGLE Metal.
+
+Surface: chromium and firefox under ANGLE/SwiftShader for the suite of record;
+re-verified on chromium under ANGLE Metal (Apple M4) for this task, 13 of 13
+tests passing including the `OCCLUSION_CROSS_PAGE = 1.20` pin, which read 1.20.
+**WebKit is untested and the conclusion is qualified to chromium and firefox, not
+to "browsers".**
+
+**Neither path is rejected.** Both renderers draw the same scene, from the same
+artifacts, and agree on identity and on value.
+
+### Gate 2 — sustained FPS below 20. Rejects neither.
+
+Consumed: **the GPU-hardware pass**, `docs/scientific-visualization-measurements.md`,
+appended Task 9 section. Surface: **ANGLE Metal Renderer: Apple M4**, hardware,
+1280x720 pinned and asserted per run, `orbit-v1`, three interleaved sessions of
+three cold page loads per page.
+
+**Minimum sustained FPS (`1000 / p95`) is 126.6 - 163.9 across all 18 runs**;
+vtk.js 126.6 - 156.3 over its 9 runs, Three.js 133.3 - 163.9 over its 9.
+`classifyFps` returns **`meets-target` on all 18**. The gate rejects at 20 and
+targets 30; both paths clear the target by more than four times.
+
+**This gate did NOT consume the software numbers, and that is the whole point of
+the extra pass.** The 3.2 - 5.9 FPS figures elsewhere in that document are
+ANGLE/SwiftShader software rasterization and classify `fails-interactive-mvp` on
+every run of both renderers. Running the gate on them would have rejected both
+paths on evidence about neither — the same category error as the 12% MSAA
+phantom, one level up. The two sets of numbers are never compared; they are
+different surfaces and they live in different sections.
+
+Scope of the FPS row: one M4, one Chromium build, one scene, one surface, one
+day. It does not predict an integrated GPU, a 4K surface, a larger grid, or
+WebKit.
+
+### Gate 3 — maintenance burden and presentation. This is the gate that decides.
+
+Frame time decides nothing here, on either surface, and it is placed last
+deliberately so that ordering does not imply otherwise. **There is no frame-time
+winner and the sign of the gap is not stable.** On SwiftShader the cross-renderer
+gap spans 2.0 - 7.1% against a within-condition spread of 0.4 - 9.6%, with the
+sign reversed in one session of seven. On Metal the gap spans 3.6 - 11.1% against
+a spread of 3.4 - 17.0%, with the sign reversed in one session of three — and on
+the same runs the CPU clock and the GPU timer point in **opposite directions**,
+the CPU putting vtk.js behind in two sessions of three while the GPU timer puts
+Three.js behind in all three. Two rasterizers, ten sessions, the same answer: not
+a renderer property.
+
+What the two paths actually cost, measured:
+
+| | vtk.js 36.12.1 (page 13) | Three.js 0.185.1 (page 14) |
+|---|---|---|
+| GLSL owned | **0 lines, 0 shaders** | **~85 distinct lines**, 9 shaders, 0 reused verbatim — structure below |
+| API entry points | **13**, all public `@kitware/vtk.js/...`, plus 2 rendering-profile imports. 0 experimental, 0 private | **21**: 19 core classes plus **2 `three/addons/*` modules**, which are not under the core stability guarantee |
+| Undocumented dependencies | none found | **2**: `#include <packing>` resolving against three's internal `ShaderChunk`, and `WebGLRenderer`'s multisample depth-resolve behaviour, established by measurement rather than documentation |
+| GL objects per drawing-buffer resize | **+1 texture, +1 framebuffer, +1 renderbuffer, never recovered** — +8/+8/+8 over 8 resizes, reproduced in seven sessions including one on hardware | **0, 0, 0** |
+| GL objects over 100 no-resize control cycles | 0 on all six counters | 0 on all six counters |
+| Page code fetched | 1,166,378 B of JS over 8 requests | 675,460 B over 6 |
+| `dist` bundle | 1,168,299 B raw / 315,376 B gzip, 9 files | 677,411 B raw / 181,229 B gzip, 7 files |
+| Data fetched | 3,251,647 B over 11 requests | **identical** |
+
+**The ~85 published with its structure, because the bare zero misleads in both
+directions.** Of the 85 distinct lines: about **12** are the shared colormap
+(`COLORMAP_GLSL`), charged to this page because they compile into its fragment
+shaders even though `src/lib` owns them; about **5** are verification scaffolding
+that never runs in a frame; `#include <packing>` pulls `perspectiveDepthToViewZ`
+out of Three.js's own chunk library and **is real reuse that is not counted
+anywhere in the 85**; and the ray/AABB slab intersection, the bounded march with
+a hard `MAX_STEPS`, the clim normalisation, the sampler-helper factoring and the
+half-texel centring are the stock addon's algorithm **re-typed rather than
+reused**. The compositor and the depth stop are genuinely new. The 11 lines that
+are textually identical to the stock addon are all `void main() {` or
+`precision highp float;`, which is why verbatim reuse computes to 0.
+
+**The mechanism is the same on both pages.** Both renderers clamp the volume ray
+against an opaque-depth texture: vtk.js inside `vtkOpenGLVolumeMapper`, which
+substitutes `//VTK::ZBuffer::Impl` with a `zBufferTexture` read and
+`dists.y = min(zdepth, dists.y);`, and page 14 by hand with an offscreen target
+and a reconstructed view distance. Neutralising vtk.js's one line drives its
+occlusion ratio to 1.00, symmetric with deleting page 14's
+`tFar = min(tFar, opaqueViewZ / rayViewZ)`. **Do not write that vtk.js needs no
+depth prepass. Both pages run one.** The difference is ownership, not capability.
+
+### What the rule concludes
+
+**The rule rejects neither path.** "Permit neither" is available and this
+evidence does not reach it: gate 1 rejected nothing and gate 2 rejected nothing
+on the surface it was given.
+
+Gate 3 is a comparison, not a rejection, and it does not point one way on every
+axis. Two of its three measured axes favour vtk.js — **0 GLSL lines against ~85,
+and 13 public entry points with no addon tier against 21 entries including 2
+addons and 2 undocumented dependencies** — and both are permanent: code this repo
+would own and maintain, and API surface outside a stability guarantee. One axis
+favours Three.js, and it is a live defect rather than a code-volume figure:
+**vtk.js leaks three GL objects per drawing-buffer resize and never recovers
+them**, reproduced identically in seven sessions on two rasterizers. That leak is
+bounded and its shape is known — it tracks resizes only, never frames, never
+slice rebuilds, never case switches, which the 100-cycle control result is the
+evidence for — so its cost is set by how often a real page resizes its drawing
+buffer, and it is an upstream bug with a clean reproduction rather than a
+property of the approach.
+
+**On this evidence, for a scientific view of this shape, vtk.js is the path with
+the lower long-term cost**, and the reason is the burden axis, not speed and not
+correctness. Three.js reaches the same picture and the same numbers; it reaches
+them through a volume compositor and depth stop this repo writes and keeps
+working against `three/addons/*` and two internal behaviours, and that is the
+liability the measurement is actually about.
+
+**The scope of that sentence, stated so it is not read wider than it was
+measured.** It is one 500 m Gothenburg tile, one 32x32x32 synthetic smoke grid
+and one 64x64x32 solved heat grid, one machine, one week, chromium and firefox
+for correctness and one Apple M4 for the frame rate. It is not a claim about
+vtk.js and Three.js in general. Things that are not measured here and could move
+it: WebKit; any GPU that is not this one; a scene with substantially more
+geometry or a substantially larger grid; a production interaction model that
+resizes the drawing buffer continuously, which would raise the price of the
+vtk.js leak; and anything about either library outside this one scene.
+
+### The VTK.wasm companion
+
+**Verdict: FEASIBLE FOR FURTHER EVALUATION.** All eleven success assertions
+passed twice — once in the working environment and once from a clean install with
+a bit-identical frame — in 11 minutes of a four-hour box. Full record:
+`spikes/vtk-wasm/README.md`.
+
+**The verdict is an input to this task. Its numbers are not.** Task 9 **did not
+rank VTK.wasm against the two measured paths and could not have**: the probe ran
+on ANGLE Metal on an M4 and the comparison of record is ANGLE/SwiftShader, so
+putting its figures beside the evidence table would be a category error, not a
+close call. Two caveats travel with the verdict:
+
+- **The npm package is not the runtime.** `@kitware/vtk-wasm@3.0.4` is 432 KB of
+  loader with **no `.wasm` in it**; the 84 MB binary comes from a GitHub `dist`
+  branch whose documented default is a **moving nightly** at a version
+  (`9.7.20260913`) unrelated to the npm version. Real use means self-hosting and
+  pinning it.
+- **One engine.** Chromium only. Firefox and WebKit were not tested, exactly as
+  they are not tested for the frame times here.

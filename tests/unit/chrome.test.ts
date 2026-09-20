@@ -1,10 +1,12 @@
-import {describe, expect, test} from 'bun:test';
+import {describe, expect, test, mock} from 'bun:test';
+import type {Control} from '../../src/lib/chrome';
+import type {ScientificProbe} from '../../src/lib/scientific-probes';
 
 // chrome.ts installs `window.__bench` at module scope, so it needs a `window` to exist before it
 // is imported at all. Shim it and import dynamically: a static import would be hoisted above the
 // assignment. Nothing here touches the DOM beyond that.
 (globalThis as any).window ??= globalThis;
-const {readout} = await import('../../src/lib/chrome');
+const {readout, formatReadout, controlHandler, setScientificProbe} = await import('../../src/lib/chrome');
 
 describe('readout (slider value printing)', () => {
   test('is an exact no-op on the synthetic scene\'s whole numbers', () => {
@@ -56,5 +58,98 @@ describe('readout (slider value printing)', () => {
     expect(readout('n/a')).toBe('n/a');
     expect(readout(NaN)).toBe('NaN');
     expect(readout(Infinity)).toBe('Infinity');
+  });
+});
+
+describe('formatReadout (textContent-only safe readouts)', () => {
+  test('numbers go through readout()\'s two-decimal trim', () => {
+    expect(formatReadout('speed', 17.99999987228115)).toBe('speed: 18');
+    expect(formatReadout('speed', 18.5)).toBe('speed: 18.5');
+  });
+
+  test('strings print verbatim -- textContent semantics, never HTML-escaped or parsed', () => {
+    // If this ever routed through innerHTML the "<" would need escaping to
+    // survive; asserting it comes back untouched is the contract that
+    // setReadout must assign through textContent, not innerHTML.
+    expect(formatReadout('marker', '<img onerror=alert(1)>')).toBe('marker: <img onerror=alert(1)>');
+    expect(formatReadout('identity', 'run-local id (regenerated per session -- not a stable database key)'))
+      .toBe('identity: run-local id (regenerated per session -- not a stable database key)');
+    expect(formatReadout('unit', 'm/s')).toBe('unit: m/s');
+  });
+
+  test('an empty string readout is not silently dropped -- the label still shows', () => {
+    expect(formatReadout('note', '')).toBe('note: ');
+  });
+});
+
+describe('controlHandler (one callback per control, DOM-free)', () => {
+  test('button: invokes onClick with no arguments, exactly once per call', () => {
+    const onClick = mock(() => {});
+    const c: Control = {kind: 'button', id: 'run', label: 'Run benchmark', onClick};
+    const handler = controlHandler(c);
+    handler();
+    expect(onClick).toHaveBeenCalledTimes(1);
+    expect(onClick).toHaveBeenCalledWith();
+  });
+
+  test('toggle: converts the raw checked value to boolean before calling onChange', () => {
+    const onChange = mock((_v: boolean) => {});
+    const c: Control = {kind: 'toggle', id: 't', label: 'T', value: false, onChange};
+    controlHandler(c)(true);
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onChange).toHaveBeenCalledWith(true);
+  });
+
+  test('range: converts the raw string input value to a number before calling onChange', () => {
+    const onChange = mock((_v: number) => {});
+    const c: Control = {kind: 'range', id: 'r', label: 'R', min: 0, max: 10, step: 1, value: 0, onChange};
+    controlHandler(c)('7.5');
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onChange).toHaveBeenCalledWith(7.5);
+  });
+
+  test('select: converts the raw value to a string before calling onChange', () => {
+    const onChange = mock((_v: string) => {});
+    const c: Control = {kind: 'select', id: 's', label: 'S', options: ['a', 'b'], value: 'a', onChange};
+    controlHandler(c)('b');
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onChange).toHaveBeenCalledWith('b');
+  });
+
+  test('each control kind reaches only its own callback -- no cross-firing', () => {
+    const onClick = mock(() => {});
+    const onChange = mock((_v: boolean) => {});
+    const button: Control = {kind: 'button', id: 'b', label: 'B', onClick};
+    const toggle: Control = {kind: 'toggle', id: 't', label: 'T', value: false, onChange};
+    controlHandler(button)();
+    expect(onClick).toHaveBeenCalledTimes(1);
+    expect(onChange).not.toHaveBeenCalled();
+    controlHandler(toggle)(true);
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onClick).toHaveBeenCalledTimes(1); // unchanged
+  });
+});
+
+describe('setScientificProbe (the typed publish seam)', () => {
+  function fixtureProbe(): ScientificProbe {
+    return {
+      renderer: 'threejs', status: 'ready', canvasCount: 1, field: true,
+      provenance: {smoke: 'synthetic', heat: 'simulation'},
+      resources: {buffers: 0, textures: 0, renderTargets: 0, listeners: 0, observers: 0},
+      measurementValid: true,
+    };
+  }
+
+  test('writes the probe onto window.__bench.probe.scientific verbatim', () => {
+    const probe = fixtureProbe();
+    setScientificProbe(probe);
+    expect((window as any).__bench.probe.scientific).toBe(probe);
+  });
+
+  test('a later call replaces the previous probe rather than merging into it', () => {
+    setScientificProbe(fixtureProbe());
+    const second: ScientificProbe = {...fixtureProbe(), renderer: 'vtkjs', canvasCount: 2};
+    setScientificProbe(second);
+    expect((window as any).__bench.probe.scientific).toEqual(second);
   });
 });
