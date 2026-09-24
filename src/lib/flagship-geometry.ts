@@ -134,6 +134,13 @@ export type GeometryProbe = {
    *  manifest that disagreed with its own bytes is visible rather than quoted. */
   counts: {buildingParts: number; vertices: number; triangles: number; objectTable: number};
   camera: FlagshipOrbit;
+  /**
+   * Whether the page can be orbited with the mouse. Published because the two
+   * pages did NOT agree: vtk.js's FullScreenRenderWindow installs an interactor
+   * of its own, so page 15 was interactive from the first commit while page 16
+   * had no controls at all, and nothing in the probe said so.
+   */
+  interactive: boolean;
   /** Published so the two pages' cameras can be compared, not assumed equal. */
   lens: {fovDeg: number; aspect: number; surface: [number, number]};
   volumeField: null;

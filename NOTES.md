@@ -936,11 +936,20 @@ Apple M4.
 
 ~~~
                     vtk.js (15)      Three.js (16)   disjoint?  gap vs widest spread
-cpu p50          4.80 - 6.20 ms    2.30 - 2.50 ms      yes       2.30 vs 1.40
-cpu p95          5.80 - 6.80 ms    2.90 - 3.60 ms      yes       2.20 vs 1.00
-gpu p50          2.97 - 3.63 ms    0.90 - 1.02 ms      yes       1.95 vs 0.66
-min FPS (1000/p95)    147 - 172        278 - 345       yes         --
+cpu p50          5.40 - 5.60 ms    2.70 - 2.80 ms      yes       2.60 vs 0.20
+cpu p95          6.60 - 7.10 ms    3.40 - 3.50 ms      yes       3.10 vs 0.50
+gpu p50          3.30 - 3.88 ms    0.98 - 1.14 ms      yes       2.16 vs 0.58
+min FPS (1000/p95)    141 - 152        286 - 294       yes         --
 ~~~
+
+> **These numbers are the second measurement, and they supersede the first.**
+> The pages originally shipped with no mouse controls on page 16, and the first
+> table (`vtk.js 4.80-6.20`, `Three.js 2.30-2.50`) was taken then. Adding
+> OrbitControls moved Three.js's p50 from 2.30-2.50 to 2.70-2.80 -- outside the
+> old range, so the old figures are not reproducible against the shipped pages
+> and are replaced rather than kept beside these. Both ranges are now tighter,
+> every metric is still disjoint, and the sign still never reverses; the
+> conclusion is unchanged and rests on a wider margin than before.
 
 **Unlike the volume comparison, this one has a winner.** The ranges do not
 overlap, the gap exceeds the within-condition spread on every metric, and the
@@ -990,6 +999,20 @@ nothing about the vtk.js resize leak -- these pages never resize.
   aim at a projected building centroid instead and record expected against
   picked; a mismatch is occlusion, verified by distance (1985.5 m against
   2001.4 m), not assumed.
+- **`vtkInteractor.disable()` stops vtk.js rendering, it does not merely stop
+  the mouse.** Reached for to keep a drag from moving the camera mid-run. The
+  run then completed all 180 frames, reported `measurementValid: true`, and drew
+  nothing: cpu p50 fell from 5.5 ms to 0.3 ms with **zero** GPU samples kept.
+  That reads as a 15x speedup, not as a broken run, and only a side-by-side
+  against the same page without the call exposed it. Both pages now take the
+  camera away from the pointer without touching rendering -- page 15 by dropping
+  the interactor STYLE, page 16 by `controls.enabled = false`.
+- **The two pages did not agree on whether they were interactive, and nothing
+  said so.** vtk.js's `FullScreenRenderWindow` installs an interactor by
+  default, so page 15 orbited from its first commit while page 16 had no
+  controls at all. Measured by screenshot hash before and after a drag: page 15
+  changed, page 16 was byte-identical. The probe now publishes `interactive`,
+  and page 16 carries OrbitControls like page 14 does.
 - **Neither renderer's default FOV may be inherited.** vtk.js defaults to 30,
   Three.js to 50. Taking each default would have the two pages drawing different
   amounts of city at the same camera position, and the difference would read as

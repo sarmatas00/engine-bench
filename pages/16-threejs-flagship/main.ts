@@ -11,6 +11,7 @@
  * city. The only comparison it supports is against page 15.
  */
 import * as THREE from 'three';
+import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
 import {mountChrome} from '@lib/chrome';
 import {
   ORBIT_FLAGSHIP_V1, createGpuTimer, flagshipPose, instrumentGlObjects,
@@ -78,16 +79,32 @@ async function main(): Promise<void> {
     FLAGSHIP_FOV_DEG, SURFACE.width / SURFACE.height, 1, orbit.radius * 6);
   camera.up.set(0, 0, 1);                          // the artifacts are z-up
 
+  // Orbit with the mouse, the same addon page 14 uses. Damping off: a damped
+  // camera keeps moving after the pointer stops, which would let a drag still
+  // be settling when a benchmark run starts.
+  const controls = new OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = false;
+  let listeners = 0;
+
+  /** Draw the current camera. Used by the controls on every change, and by
+   *  renderFrame once it has placed the camera. */
+  const renderScene = () => {
+    renderer.render(scene, camera);
+    frameSync();
+  };
+
+  controls.addEventListener('change', renderScene);
+  listeners += 1;
+
   const renderFrame = (pose: CameraPose & {eye?: [number, number, number]}) => {
     // `eye` is handed over by flagshipPose on purpose; recomputing the trig
     // here is how a page gets the handedness wrong and the renderer gets blamed.
     const eye = pose.eye!;
     camera.position.set(eye[0], eye[1], eye[2]);
-    camera.lookAt(pose.target[0], pose.target[1], pose.target[2]);
+    controls.target.set(pose.target[0], pose.target[1], pose.target[2]);
+    camera.lookAt(controls.target);
     camera.updateMatrixWorld();
-    renderer.render(scene, camera);
-    // Makes the wall clock measure a frame, not command submission.
-    frameSync();
+    renderScene();
   };
 
   const probe: GeometryProbe = {
@@ -108,8 +125,9 @@ async function main(): Promise<void> {
     volumeField: null,
     resources: {
       buffers: counts.buffers, textures: counts.textures,
-      renderTargets: counts.renderTargets, listeners: 0, observers: 0,
+      renderTargets: counts.renderTargets, listeners, observers: 0,
     },
+    interactive: true,
     measurementValid: true,
   };
 
@@ -130,7 +148,7 @@ async function main(): Promise<void> {
   attachContextLoss(renderer.domElement, {
     probe,
     stopBenchmark: () => driver.stop(),
-    disposeGpuResources: () => { geometry.dispose(); renderer.dispose(); },
+    disposeGpuResources: () => { controls.dispose(); geometry.dispose(); renderer.dispose(); },
     onLost: () => {
       publish();
       ui.fail('WebGL context lost. Frame times from this run are not a measurement.');
@@ -140,7 +158,7 @@ async function main(): Promise<void> {
   function publish(): void {
     probe.resources = {
       buffers: counts.buffers, textures: counts.textures,
-      renderTargets: counts.renderTargets, listeners: 0, observers: 0,
+      renderTargets: counts.renderTargets, listeners, observers: 0,
     };
     ui.setProbe('flagship', probe);
   }
@@ -185,11 +203,20 @@ async function main(): Promise<void> {
 
   (window as unknown as {__bench: {runBenchmark: () => Promise<unknown>}}).__bench.runBenchmark =
     async () => {
-      const result = await driver.runBenchmark();
-      probe.benchmark = result;
-      probe.measurementValid = result.cpuFrameTimesMs.length === ORBIT_FLAGSHIP_V1.forcedFrames;
-      publish();
-      return result;
+      // A drag mid-run would move the camera the driver is placing, so the
+      // frame times would describe a scene nobody chose. Off for the duration,
+      // then back to the start pose so the page is usable again.
+      controls.enabled = false;
+      try {
+        const result = await driver.runBenchmark();
+        probe.benchmark = result;
+        probe.measurementValid = result.cpuFrameTimesMs.length === ORBIT_FLAGSHIP_V1.forcedFrames;
+        publish();
+        return result;
+      } finally {
+        controls.enabled = true;
+        renderFrame(flagshipPose(0, orbit));
+      }
     };
 
   publish();
