@@ -140,6 +140,7 @@ async function main(): Promise<void> {
       objectTable: json.objectTable.length,
     },
     camera: orbit,
+    interactive: true,
     lens: {fovDeg: renderer.getActiveCamera().getViewAngle(),
            aspect: SURFACE[0] / SURFACE[1], surface: [SURFACE[0], SURFACE[1]]},
     volumeField: null,
@@ -216,11 +217,28 @@ async function main(): Promise<void> {
 
   (window as unknown as {__bench: {runBenchmark: () => Promise<unknown>}}).__bench.runBenchmark =
     async () => {
-      const result = await driver.runBenchmark();
-      probe.benchmark = result;
-      probe.measurementValid = result.cpuFrameTimesMs.length === ORBIT_FLAGSHIP_V1.forcedFrames;
-      publish();
-      return result;
+      // Same reason as page 16: vtk.js's own interactor would otherwise let a
+      // drag move the camera the driver is placing.
+      //
+      // NOT interactor.disable(). MEASURED: that stops vtk.js rendering
+      // altogether, and the run then completes 180 frames, reports
+      // measurementValid true, and draws NOTHING -- cpu p50 falls from 5.5 ms
+      // to 0.3 ms with zero GPU samples, which reads as a 15x speedup rather
+      // than as a broken run. Dropping the interactor STYLE takes the camera
+      // away from the mouse and leaves rendering alone.
+      const interactor = renderWindow.getInteractor();
+      const style = interactor?.getInteractorStyle();
+      interactor?.setInteractorStyle(null);
+      try {
+        const result = await driver.runBenchmark();
+        probe.benchmark = result;
+        probe.measurementValid = result.cpuFrameTimesMs.length === ORBIT_FLAGSHIP_V1.forcedFrames;
+        publish();
+        return result;
+      } finally {
+        if (style) interactor?.setInteractorStyle(style);
+        renderFrame(flagshipPose(0, orbit));
+      }
     };
 
   publish();
