@@ -1,0 +1,50 @@
+{
+  "name": "delft-flagship",
+  "crs": "EPSG:7415",
+  "bounds": [
+    83570.44462499999,
+    445800.43925,
+    85570.000125,
+    447799.99475
+  ],
+  "origin": [
+    84570.222375,
+    446800.217
+  ],
+  "extent": 999.7777500000084,
+  "anchor_lonlat": [
+    4.361465941218029,
+    52.005099274331116
+  ],
+  "bounds_lonlat": [
+    4.3471159486290745,
+    51.99598654155701,
+    4.375821768609612,
+    52.01421025979094
+  ],
+  "z0": -12.65049923706055,
+  "relief": {
+    "zmin": -12.65049923706055,
+    "zmax": 94.92550076293946,
+    "relief": 107.57600000000002
+  },
+  "axis": "geometry",
+  "volume_field": null,
+  "volume_field_reason": "flagship carries no usable volume grid: the 256 MiB native format cannot hold a 2 km city and a high-resolution VolumeGrid at once",
+  "source": {
+    "file": "flagship.dtcc",
+    "sha256": "02139d401940f4833ff1d0df8647b7f1b4f6297efd277858b661fefe2e9cb214",
+    "note": "hash recorded here because upstream removed source checksums in dtcc-core 9b4e9b9"
+  },
+  "counts": {
+    "buildingParts": 10356,
+    "objectsInTable": 10356,
+    "vertices": 1163146,
+    "triangles": 694354,
+    "skippedSurfaces": 68,
+    "skippedSurfacesReason": "degenerate in the source: fewer than 3 distinct vertices, zero area, no triangle exists to draw (verified for every skipped surface)"
+  },
+  "stages": {
+    "extract": "2026-09-24T11:19:40.644555+00:00"
+  }
+}

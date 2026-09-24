@@ -1,0 +1,18 @@
+{
+  "axis": "geometry",
+  "dataset": "dataset.json",
+  "files": {
+    "buildings.mesh.json": {
+      "byteLength": 414924,
+      "sha256": "66b1bb737322eea1740818837b731e060b480aaef78000faec821e54e9caeda7"
+    },
+    "buildings.mesh.bin": {
+      "byteLength": 39025168,
+      "sha256": "241935bba150d1abffbb33c8f53e8fd024846c80e74b416dae8b47cc43e4e49f"
+    },
+    "dataset.json": {
+      "byteLength": 1381,
+      "sha256": "3027af1dc3b2748d2aec5856de7fe239ee85af2bae0681a048b2127a1f769fde"
+    }
+  }
+}

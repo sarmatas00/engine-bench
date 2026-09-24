@@ -385,9 +385,43 @@ export type GpuTimer = {
   readResult(): Promise<GpuSample | null>;
 };
 
+/**
+ * A named camera path: how many frames, and the pose at each index.
+ *
+ * Extracted so a second scene can be driven by the SAME loop rather than a
+ * copy of it. The yield placement, the disjoint-sample rejection and the
+ * warmup exclusion are the parts that decide whether two runs are comparable
+ * at all; a divergent second copy of them would produce numbers that look
+ * like the originals and are not. Existing callers pass nothing and get
+ * ORBIT_V1_PATH, so their results keep the literal `'orbit-v1'` type.
+ */
+export type CameraPath<Name extends string = string, Frames extends number = number> = {
+  cameraPath: Name;
+  warmupFrames: number;
+  forcedFrames: Frames;
+  pose: (frameIndex: number) => PlacedCameraPose;
+};
+
+/** What runBenchmark returns. `BenchmarkResult` stays the orbit-v1 shape the
+ *  scientific probe declares; this is the same object with its two identifying
+ *  fields carried through as literals so a second path keeps its own. */
+export type DriverResult<Name extends string, Frames extends number> = {
+  cpuFrameTimesMs: number[];
+  gpuFrameTimesMs: number[] | null;
+  cameraPath: Name;
+  forcedFrames: Frames;
+};
+
+export const ORBIT_V1_PATH: CameraPath<'orbit-v1', 180> = {
+  cameraPath: ORBIT_V1.cameraPath,
+  warmupFrames: ORBIT_V1.warmupFrames,
+  forcedFrames: ORBIT_V1.forcedFrames,
+  pose: orbitV1Pose,
+};
+
 export type RenderFrame = (pose: CameraPose) => void | Promise<void>;
 
-export type BenchmarkDriverOptions = {
+export type BenchmarkDriverOptions<Name extends string = 'orbit-v1', Frames extends number = 180> = {
   /** Forces one completed render of `pose`. Must not return until the frame
    * is actually rendered -- this is the only place a frame is produced;
    * nothing here schedules or waits on requestAnimationFrame, so an idle
@@ -396,9 +430,11 @@ export type BenchmarkDriverOptions = {
   gpuTimer?: GpuTimer;
   /** Injectable clock, for deterministic tests. Defaults to performance.now. */
   now?: () => number;
+  /** Defaults to ORBIT_V1_PATH, so every existing caller is unchanged. */
+  path?: CameraPath<Name, Frames>;
 };
 
-export type BenchmarkDriver = {
+export type BenchmarkDriver<Name extends string = 'orbit-v1', Frames extends number = 180> = {
   /**
    * Runs orbit-v1 start to finish: 30 unrecorded warmup frames, then 180
    * measured frames, each timed on the CPU wall clock via `now`. Always
@@ -412,7 +448,7 @@ export type BenchmarkDriver = {
    * measurement. Throws only for a genuine re-entrancy error (see below) or
    * if `renderFrame`/`gpuTimer` itself throws.
    */
-  runBenchmark(): Promise<BenchmarkResult>;
+  runBenchmark(): Promise<DriverResult<Name, Frames>>;
   /** Aborts a run in progress. Safe to call at any time, including when
    * nothing is running -- this is what attachContextLoss calls on context
    * loss. */
@@ -457,13 +493,17 @@ export type BenchmarkDriver = {
  */
 const yieldToEventLoop = () => new Promise<void>(resolve => setTimeout(resolve, 0));
 
-export function createBenchmarkDriver(opts: BenchmarkDriverOptions): BenchmarkDriver {
+export function createBenchmarkDriver<Name extends string = 'orbit-v1', Frames extends number = 180>(
+  opts: BenchmarkDriverOptions<Name, Frames>,
+): BenchmarkDriver<Name, Frames> {
   const now = opts.now ?? (() => performance.now());
   let stopped = false;
   let running = false;
   let gpuStats: {kept: number; rejected: number} | null = null;
 
-  async function runBenchmark(): Promise<BenchmarkResult> {
+  const path = (opts.path ?? ORBIT_V1_PATH) as CameraPath<Name, Frames>;
+
+  async function runBenchmark(): Promise<DriverResult<Name, Frames>> {
     if (running) throw new Error('BenchmarkDriver.runBenchmark: a run is already in progress');
     running = true;
     stopped = false;
@@ -471,18 +511,18 @@ export function createBenchmarkDriver(opts: BenchmarkDriverOptions): BenchmarkDr
     gpuStats = gpuAvailable ? {kept: 0, rejected: 0} : null;
 
     try {
-      const total = ORBIT_V1.warmupFrames + ORBIT_V1.forcedFrames;
+      const total = path.warmupFrames + path.forcedFrames;
 
-      for (let f = 0; f < ORBIT_V1.warmupFrames && !stopped; f++) {
-        await opts.renderFrame(orbitV1Pose(f));
+      for (let f = 0; f < path.warmupFrames && !stopped; f++) {
+        await opts.renderFrame(path.pose(f));
         await yieldToEventLoop();
       }
 
       const cpuFrameTimesMs: number[] = [];
       const gpuFrameTimesMs: number[] = [];
 
-      for (let f = ORBIT_V1.warmupFrames; f < total && !stopped; f++) {
-        const pose = orbitV1Pose(f);
+      for (let f = path.warmupFrames; f < total && !stopped; f++) {
+        const pose = path.pose(f);
         opts.gpuTimer?.beginFrame();
         const t0 = now();
         await opts.renderFrame(pose);
@@ -506,8 +546,8 @@ export function createBenchmarkDriver(opts: BenchmarkDriverOptions): BenchmarkDr
       return {
         cpuFrameTimesMs,
         gpuFrameTimesMs: gpuAvailable ? gpuFrameTimesMs : null,
-        cameraPath: ORBIT_V1.cameraPath,
-        forcedFrames: ORBIT_V1.forcedFrames,
+        cameraPath: path.cameraPath,
+        forcedFrames: path.forcedFrames,
       };
     } finally {
       running = false;
