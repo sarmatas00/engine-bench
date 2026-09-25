@@ -60,6 +60,7 @@ const ui = mountChrome({
   controls: [{kind: 'button', id: 'run-benchmark', label: 'Run benchmark (210 frames)',
               onClick: () => { void benchmarkHandler(); }}],
   findings: [
+    'The redraws/sec readout is NOT comparable with the other page. MEASURED over ten identical drags: vtk.js issued 43 draw calls, Three.js issued 10. vtk.js animates continuously while its interactor is dragging; Three.js redraws once per controls event. Both are correct behaviour and the rates are not the same quantity. Use the Run benchmark button to compare the two pages \u2014 it drives both through the identical 210-frame camera path.',
     'flagship carries no usable volume grid: the 256 MiB native format cannot hold a 2 km city and a '
     + 'high-resolution VolumeGrid at once. The largest that fits is 100x100x28, FEWER z layers than the '
     + '32 the spike already measured, so nothing here may be quoted as a volume result.',
@@ -117,7 +118,7 @@ async function main(): Promise<void> {
     if (benchmarking) return;
     fps.tick();
     const value = fps.fps();
-    if (value !== null) ui.setReadout('fps while interacting', value.toFixed(0));
+    if (value !== null) ui.setReadout('redraws/sec', value.toFixed(0));
   }
 
   /**

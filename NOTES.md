@@ -1036,8 +1036,18 @@ produced it. The GPU figure always carries its kept-sample count, because this
 repo drops disjoint samples and a p50 over a handful of survivors is not a p50
 over a run.
 
-The `fps while interacting` readout is a different measurement and is labelled
-as one. It counts real draws, not `requestAnimationFrame` ticks, so it goes
+**The two pages do not redraw on the same trigger, so their live rates are not
+each other's rival.** Measured over ten identical drags: vtk.js issued **43**
+draw calls, Three.js **10**. vtk.js animates continuously while its interactor
+is dragging; Three.js redraws once per controls event. Both are correct, and one
+is not "smoother" than the other for it -- vtk.js is simply drawing more frames
+for the same input. The on-page readout is therefore labelled `redraws/sec`, and
+both pages say in their findings that it must not be compared across pages. The
+Run benchmark button is what compares them: it drives both through the identical
+210-frame camera path.
+
+The `redraws/sec` readout is a different measurement from the benchmark and is
+labelled as one. It counts real draws, not `requestAnimationFrame` ticks, so it goes
 quiet when nothing is being drawn rather than reporting the refresh rate. It is
 **suppressed during a run and reset at both ends**: the driver awaits a real
 macrotask between frames, so wall-clock intervals inside a run are its pacing
