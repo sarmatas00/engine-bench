@@ -95,7 +95,33 @@ async function main(): Promise<void> {
   const gpuTimer = gl ? createGpuTimer(gl) : null;
   const frameSync = makeFrameSync(gl);
 
-  apiRenderWindow.setSize(SURFACE[0], SURFACE[1]);
+  /**
+   * Size the drawing buffer to what is on screen, at device pixels.
+   *
+   * Before this the buffer was pinned to 1280x720 for the page's whole life and
+   * stretched across ~1913 CSS pixels -- the blur the team saw. The measurement
+   * still runs at 1280x720; runBenchmark pins it and stands the observer down.
+   *
+   * Each setSize costs vtk.js two GL objects it never returns (NOTES.md, the
+   * resize leak). That is vtk.js's, not this page's, and `resources` reports it
+   * rather than hiding it behind a surface that never changes.
+   */
+  function applySurface(width: number, height: number): void {
+    apiRenderWindow.setSize(Math.max(1, width), Math.max(1, height));
+    renderer.resetCameraClippingRange();
+    renderWindow.render();
+  }
+
+  const resizeObserver = new ResizeObserver(() => {
+    const rect = ui.canvasHost.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    if (rect.width > 0 && rect.height > 0) {
+      applySurface(Math.floor(rect.width * dpr), Math.floor(rect.height * dpr));
+      publish();
+    }
+  });
+  resizeObserver.observe(ui.canvasHost);
+  const observers = 1;
   // Set explicitly even though it equals vtk.js's own default, so page 16 is
   // matched against a stated value rather than against a library default.
   renderer.getActiveCamera().setViewAngle(FLAGSHIP_FOV_DEG);
@@ -142,7 +168,8 @@ async function main(): Promise<void> {
     camera: orbit,
     interactive: true,
     lens: {fovDeg: renderer.getActiveCamera().getViewAngle(),
-           aspect: SURFACE[0] / SURFACE[1], surface: [SURFACE[0], SURFACE[1]]},
+           aspect: (gl ? gl.drawingBufferWidth / gl.drawingBufferHeight : 1),
+           surface: gl ? [gl.drawingBufferWidth, gl.drawingBufferHeight] : [0, 0]},
     volumeField: null,
     resources: {
       buffers: counts.buffers, textures: counts.textures,
@@ -152,9 +179,13 @@ async function main(): Promise<void> {
   };
 
   function publish(): void {
+    // Live, same reason as page 16.
+    probe.lens = {fovDeg: renderer.getActiveCamera().getViewAngle(),
+                  aspect: gl ? gl.drawingBufferWidth / gl.drawingBufferHeight : 1,
+                  surface: gl ? [gl.drawingBufferWidth, gl.drawingBufferHeight] : [0, 0]};
     probe.resources = {
       buffers: counts.buffers, textures: counts.textures,
-      renderTargets: counts.renderTargets, listeners: 0, observers: 0,
+      renderTargets: counts.renderTargets, listeners: 0, observers,
     };
     ui.setProbe('flagship', probe);
   }
@@ -173,7 +204,7 @@ async function main(): Promise<void> {
   attachContextLoss(canvas, {
     probe,
     stopBenchmark: () => driver.stop(),
-    disposeGpuResources: () => { mapper.delete(); actor.delete(); polyData.delete(); },
+    disposeGpuResources: () => { resizeObserver.disconnect(); mapper.delete(); actor.delete(); polyData.delete(); },
     onLost: () => {
       publish();
       ui.fail('WebGL context lost. Frame times from this run are not a measurement.');
@@ -190,12 +221,17 @@ async function main(): Promise<void> {
   // Normalized display and vtk.js pixel display share a bottom-left origin, so
   // the y scale below needs no flip -- unlike page 13's parityPickAt, which
   // takes v from the TOP and therefore does flip.
+  // The LIVE surface, not the SURFACE constant. The drawing buffer now follows
+  // the element, so multiplying normalized display coordinates by 1280x720
+  // aimed the picker at the wrong pixel: page 15 resolved triangle 2203 where
+  // page 16 resolved 658873, the first time the two ever disagreed.
+  const [pickW, pickH] = apiRenderWindow.getSize() as [number, number];
   const display = renderer.worldToNormalizedDisplay(
-    centroid[0], centroid[1], centroid[2], SURFACE[0] / SURFACE[1],
+    centroid[0], centroid[1], centroid[2], pickW / pickH,
   ) as number[];
   const picker = vtkCellPicker.newInstance();
   picker.setPickFromList(false);
-  picker.pick([display[0] * SURFACE[0], display[1] * SURFACE[1], 0], renderer);
+  picker.pick([display[0] * pickW, display[1] * pickH, 0], renderer);
   const cellId = picker.getCellId();
   if (cellId >= 0 && cellId < mesh.indices.length / 3) {
     probe.selectedObject = objectForTriangle(bundle, cellId);
@@ -229,6 +265,9 @@ async function main(): Promise<void> {
       const interactor = renderWindow.getInteractor();
       const style = interactor?.getInteractorStyle();
       interactor?.setInteractorStyle(null);
+      const restore = apiRenderWindow.getSize() as [number, number];
+      resizeObserver.unobserve(ui.canvasHost);
+      applySurface(SURFACE[0], SURFACE[1]);
       try {
         const result = await driver.runBenchmark();
         probe.benchmark = result;
@@ -236,6 +275,8 @@ async function main(): Promise<void> {
         publish();
         return result;
       } finally {
+        applySurface(restore[0], restore[1]);
+        resizeObserver.observe(ui.canvasHost);
         if (style) interactor?.setInteractorStyle(style);
         renderFrame(flagshipPose(0, orbit));
       }

@@ -936,46 +936,54 @@ Apple M4.
 
 ~~~
                     vtk.js (15)      Three.js (16)   disjoint?  gap vs widest spread
-cpu p50          5.40 - 5.60 ms    2.70 - 2.80 ms      yes       2.60 vs 0.20
-cpu p95          6.60 - 7.10 ms    3.40 - 3.50 ms      yes       3.10 vs 0.50
-gpu p50          3.30 - 3.88 ms    0.98 - 1.14 ms      yes       2.16 vs 0.58
-min FPS (1000/p95)    141 - 152        286 - 294       yes         --
+cpu p50          4.90 - 5.40 ms    2.80 - 3.30 ms      yes       1.60 vs 0.50
+cpu p95          6.50 - 6.70 ms    3.80 - 4.10 ms      yes       2.40 vs 0.30
+gpu p50          3.32 - 3.82 ms    1.35 - 1.72 ms      yes       1.60 vs 0.50
+min FPS (1000/p95)    149 - 154        244 - 263       yes         --
 ~~~
 
-> **These numbers are the second measurement, and they supersede the first.**
-> The pages originally shipped with no mouse controls on page 16, and the first
-> table (`vtk.js 4.80-6.20`, `Three.js 2.30-2.50`) was taken then. Adding
-> OrbitControls moved Three.js's p50 from 2.30-2.50 to 2.70-2.80 -- outside the
-> old range, so the old figures are not reproducible against the shipped pages
-> and are replaced rather than kept beside these. Both ranges are now tighter,
-> every metric is still disjoint, and the sign still never reverses; the
-> conclusion is unchanged and rests on a wider margin than before.
+**Three.js is faster on this scene.** The ranges do not overlap, the gap exceeds
+the within-condition spread on every metric, and the sign does not reverse in
+any of the six runs on either clock. That is the test the volume comparison
+failed. Ranges, never a ratio. Both clear the 30 FPS target by 5-8x.
 
-**Unlike the volume comparison, this one has a winner.** The ranges do not
-overlap, the gap exceeds the within-condition spread on every metric, and the
-sign does not reverse in any of the six runs on either clock. Both clear the
-30 FPS target by 5-11x.
+> **This table has been measured three times and only the third is valid.** The
+> first two were not renderer comparisons.
+>
+> ~~~
+> 1st  no controls, AA MISMATCHED    vtk 4.80-6.20   three 2.30-2.50
+> 2nd  controls, AA still mismatched vtk 5.40-5.60   three 2.70-2.80
+> 3rd  AA matched, surface matched   vtk 4.90-5.40   three 2.80-3.30   <- this one
+> ~~~
+>
+> **The confound: the two pages were not antialiasing the same.** vtk.js's
+> `get3DContext` does not pass `antialias`, so it took the WebGL default of
+> true; page 16 asked for `antialias: false`. Measured on the shipped pages:
+> `SAMPLES` 4 against `SAMPLES` 0. vtk.js was resolving 4x MSAA at every
+> one-pixel readback and Three.js was resolving nothing, so vtk.js was carrying
+> strictly more work in a comparison published as a renderer difference.
+> **Pages 13 and 14 already carry a comment warning about exactly this**, and it
+> was not read before these pages were written. The team spotted it by eye
+> before any check did: "the anti-aliasing looks better to me on the VTK
+> version".
+>
+> The conclusion survived the correction -- still disjoint, still no sign
+> reversal -- but on a narrower margin (gap 1.60 against a 0.50 spread, where
+> the mismatched table read 2.60 against 0.20).
 
-Published as ranges. **No ratio** -- the spike's own rule, earned when a bolded
-"2x" was true of five sessions and false by the sixth.
+### Surface: the pages were rendering 1280x720 into 1913 CSS pixels
 
-Four things travel with those numbers:
+Both pages pinned the drawing buffer to the benchmark surface for their whole
+life, and the browser stretched it across the element. That is the blur the team
+reported ("the meshes look terrible"). Both now size the buffer to the element
+at device pixels and pin 1280x720 only for the duration of a run, as pages 13
+and 14 do. Each vtk.js `setSize` costs two GL objects it never returns, which is
+the resize leak and is reported rather than hidden.
 
-- **The frame times include a 1-pixel `readPixels`** and are an upper bound. It
-  is there because without it the CPU clock measures GL command *submission*:
-  0.2-0.4 ms for 694k triangles, i.e. 2500-5000 FPS, which is not a rendering
-  rate. **`gl.finish()` was tried first and changed nothing** -- chromium/ANGLE
-  does not honour it. The readback costs the same on both pages, so the
-  comparison stands. See `makeFrameSync`.
-- **vtk.js run 1 had a cpu p95 of 53.7 ms** against 5.8-6.8 in runs 2-6: a
-  cold-start cost the 30 warmup frames did not absorb. Excluded from the p95
-  range above, reported rather than dropped, and the reason six runs were taken
-  instead of three.
-- **The GPU timer corroborates direction only.** 77-88% of samples were
-  rejected, against this repo's own 10% quotability gate
-  (`GPU_MAX_REJECTION_RATE`). It agrees on sign; its magnitude is not quotable.
-- **Not comparable to pages 13 and 14.** Different scene, city, camera radius,
-  and now a different sync method as well.
+One defect came straight out of that change: page 15's picker converted
+normalized display coordinates with the 1280x720 constant instead of the live
+surface, and resolved triangle **2203** where page 16 resolved **658873** -- the
+first time the two ever disagreed. Fixed to read the live render-window size.
 
 ### Correctness: the two renderers agree exactly
 
