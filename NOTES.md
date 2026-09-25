@@ -1021,6 +1021,29 @@ all twelve runs. Resource counts were flat across every 210-frame run: vtk.js 2
 buffers, Three.js 3, zero textures and render targets on both. That says
 nothing about the vtk.js resize leak -- these pages never resize.
 
+### Reading a number off someone else's machine
+
+Every published range here is one Apple M4 on ANGLE Metal. A contradicting
+report from another machine ("three.js performs much slower for me") is not
+evidence against these numbers and these numbers are not evidence against it --
+the spike's own scope note lists *any other GPU* as unmeasured, and that is
+still true.
+
+Both pages therefore carry a **Run benchmark** button that prints `cpu p50`,
+`cpu p95`, `min FPS` and `gpu p50` beside the live `UNMASKED_RENDERER_WEBGL`
+string, so a number from any machine arrives attributable to the surface that
+produced it. The GPU figure always carries its kept-sample count, because this
+repo drops disjoint samples and a p50 over a handful of survivors is not a p50
+over a run.
+
+The `fps while interacting` readout is a different measurement and is labelled
+as one. It counts real draws, not `requestAnimationFrame` ticks, so it goes
+quiet when nothing is being drawn rather than reporting the refresh rate. It is
+**suppressed during a run and reset at both ends**: the driver awaits a real
+macrotask between frames, so wall-clock intervals inside a run are its pacing
+and not the cost of drawing -- measured at 76 FPS on a page whose frames take
+3.3 ms, which would read as four times slower than the truth.
+
 ### Three traps on this axis
 
 - **orbit-v1's literals do not transfer.** `radius 500, target [0,0,40]` was

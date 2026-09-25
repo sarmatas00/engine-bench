@@ -365,3 +365,63 @@ export function makeFrameSync(gl: WebGL2RenderingContext | null): () => void {
   const pixel = new Uint8Array(4);
   return () => { gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel); };
 }
+
+/**
+ * A rolling frames-per-second reading over the frames a page actually drew.
+ *
+ * NOT a render loop. Both flagship pages draw on demand -- on a control change
+ * and inside a benchmark run -- so a meter that spun requestAnimationFrame
+ * would report the browser's refresh rate whether or not the scene was being
+ * drawn, which is the opposite of what anyone asking for an FPS counter wants.
+ * This measures the interval between real draws and goes quiet when nothing is
+ * being drawn.
+ */
+export function createFpsMeter(window_ = 30): {
+  tick(): void; fps(): number | null; idle(): boolean; reset(): void;
+} {
+  const intervals: number[] = [];
+  let last = 0;
+  return {
+    tick() {
+      const now = performance.now();
+      if (last) {
+        const dt = now - last;
+        // A gap this long means the page was idle, not slow; starting a fresh
+        // window stops one pause from dragging the reading down for 30 frames.
+        if (dt > 500) intervals.length = 0;
+        else { intervals.push(dt); if (intervals.length > window_) intervals.shift(); }
+      }
+      last = now;
+    },
+    fps() {
+      if (intervals.length < 5) return null;
+      const mean = intervals.reduce((a, b) => a + b, 0) / intervals.length;
+      return mean > 0 ? 1000 / mean : null;
+    },
+    idle() { return performance.now() - last > 500; },
+    /** Drop the window. Called around a benchmark run so intervals measured
+     *  before it cannot be averaged together with ones measured after. */
+    reset() { intervals.length = 0; last = 0; },
+  };
+}
+
+/** p-th percentile of a sample, nearest-rank. */
+export function percentile(values: readonly number[], p: number): number {
+  const sorted = [...values].sort((a, b) => a - b);
+  return sorted[Math.min(sorted.length - 1, Math.max(0, Math.floor(p * (sorted.length - 1))))];
+}
+
+/**
+ * The GPU actually behind the context, from the live driver string.
+ *
+ * Published because a frame time means nothing without it. The spike's own
+ * lesson: a "hardware" run that had silently fallen back to SwiftShader passed
+ * 13/13 while measuring the wrong surface entirely. Anyone comparing a number
+ * from their machine against the published ranges needs this beside it.
+ */
+export function describeGpu(gl: WebGL2RenderingContext | null): string {
+  if (!gl) return 'no WebGL2 context';
+  const ext = gl.getExtension('WEBGL_debug_renderer_info') as {UNMASKED_RENDERER_WEBGL: number} | null;
+  if (!ext) return 'renderer string unavailable';
+  return String(gl.getParameter(ext.UNMASKED_RENDERER_WEBGL));
+}
