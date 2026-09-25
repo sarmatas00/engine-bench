@@ -21,6 +21,17 @@ import {
 } from '@lib/flagship-geometry';
 import {attachContextLoss, createBenchmarkDriver, type CameraPose} from '@lib/scientific-probes';
 
+/**
+ * Colour management OFF, module scope, before any Color is constructed.
+ *
+ * With it on, Three.js applies an sRGB conversion on output that vtk.js does
+ * not, and the two pages stop being comparable by eye: the dark background and
+ * the building grey both come out washed, which reads as "a grey filter on top"
+ * -- which is exactly how the team described it. Page 14 carries the same pair
+ * of settings for the same reason.
+ */
+THREE.ColorManagement.enabled = false;
+
 const SURFACE = {width: 1280, height: 720} as const;
 
 const ui = mountChrome({
@@ -73,7 +84,11 @@ async function main(): Promise<void> {
   const counts = instrumentGlObjects(gl);
 
   const renderer = new THREE.WebGLRenderer({canvas, context: gl});
-  renderer.setClearColor(new THREE.Color(0.067, 0.086, 0.11), 1);
+  // The other half of the pair: linear out, so what the shader writes is what
+  // reaches the drawing buffer, as it does on page 15.
+  renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
+  // The same linear triple page 15 hands vtk.js as its background.
+  renderer.setClearColor(new THREE.Color().setRGB(0.067, 0.086, 0.11), 1);
   const gpuTimer = createGpuTimer(gl);
   const frameSync = makeFrameSync(gl);
 
@@ -83,16 +98,39 @@ async function main(): Promise<void> {
   geometry.setIndex(new THREE.BufferAttribute(mesh.indices, 1));
 
   const scene = new THREE.Scene();
-  scene.add(new THREE.Mesh(geometry, new THREE.MeshLambertMaterial({color: 0xb8c4cf})));
-  scene.add(new THREE.AmbientLight(0xffffff, 0.55));
-  const sun = new THREE.DirectionalLight(0xffffff, 1.1);
-  sun.position.set(1, -1, 2);
-  scene.add(sun);
+  // setRGB, not a hex literal: page 15 gives vtk.js the linear triple
+  // (0.72, 0.77, 0.81), and a hex would be read as sRGB and land somewhere else.
+  const material = new THREE.MeshLambertMaterial();
+  material.color.setRGB(0.72, 0.77, 0.81);
+  scene.add(new THREE.Mesh(geometry, material));
+
 
   // 30, not Three.js's default 50 and not an arbitrary 45: it must equal page 15's.
   const camera = new THREE.PerspectiveCamera(
     FLAGSHIP_FOV_DEG, SURFACE.width / SURFACE.height, 1, orbit.radius * 6);
   camera.up.set(0, 0, 1);                          // the artifacts are z-up
+  // A HEADLIGHT, because that is what page 15 gets.
+  //
+  // vtk.js's Renderer auto-creates one light when a page adds none:
+  // setLightTypeToHeadLight(), intensity 1, directional, sitting at the camera
+  // (Renderer.js createLight). An ambient term plus a fixed directional light
+  // -- what this page had -- lights the city from somewhere else entirely and
+  // makes the two pages look like different scenes rather than two renderers
+  // drawing one.
+  // Intensity is NOT vtk.js's 1. Three.js changed its light scaling in r155, so
+  // the same number is a much darker scene here -- measured: at intensity 1 the
+  // city was nearly black under linear output. Page 14 lands on 1.6/2.2 for the
+  // same reason. These are calibrated against page 15 by eye, and that is what
+  // they are: a brightness match, not a claim of identical light models.
+  const headlight = new THREE.DirectionalLight(0xffffff, 3.0);
+  headlight.position.set(0, 0, 0);
+  headlight.target.position.set(0, 0, -1);
+  camera.add(headlight);
+  camera.add(headlight.target);
+  scene.add(camera);   // the light rides the camera, so it stays a headlight
+  // vtk.js's default actor property carries an ambient term of its own; without
+  // a little here the faces pointing away from the camera go pure black.
+  scene.add(new THREE.AmbientLight(0xffffff, 0.9));
 
   // Orbit with the mouse, the same addon page 14 uses. Damping off: a damped
   // camera keeps moving after the pointer stops, which would let a drag still
@@ -191,7 +229,7 @@ async function main(): Promise<void> {
   attachContextLoss(renderer.domElement, {
     probe,
     stopBenchmark: () => driver.stop(),
-    disposeGpuResources: () => { resizeObserver.disconnect(); controls.dispose(); geometry.dispose(); renderer.dispose(); },
+    disposeGpuResources: () => { resizeObserver.disconnect(); controls.dispose(); material.dispose(); geometry.dispose(); renderer.dispose(); },
     onLost: () => {
       publish();
       ui.fail('WebGL context lost. Frame times from this run are not a measurement.');

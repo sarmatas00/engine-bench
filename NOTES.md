@@ -936,11 +936,15 @@ Apple M4.
 
 ~~~
                     vtk.js (15)      Three.js (16)   disjoint?  gap vs widest spread
-cpu p50          4.90 - 5.40 ms    2.80 - 3.30 ms      yes       1.60 vs 0.50
-cpu p95          6.50 - 6.70 ms    3.80 - 4.10 ms      yes       2.40 vs 0.30
-gpu p50          3.32 - 3.82 ms    1.35 - 1.72 ms      yes       1.60 vs 0.50
-min FPS (1000/p95)    149 - 154        244 - 263       yes         --
+cpu p50          4.70 - 5.40 ms    2.60 - 3.30 ms      yes       1.40 vs 0.70
+gpu p50          2.87 - 3.82 ms    1.27 - 1.72 ms      yes       1.15 vs 0.95
 ~~~
+
+Nine runs per renderer across two sessions, and the ranges are the **union of
+all of them** rather than one session's. Taking a single session gives a tighter
+table (4.90-5.40 against 2.80-3.30) and would be picking the flattering half of
+what was measured; session-to-session drift of a few tenths is real here and
+belongs in the published spread.
 
 **Three.js is faster on this scene.** The ranges do not overlap, the gap exceeds
 the within-condition spread on every metric, and the sign does not reverse in
@@ -951,9 +955,10 @@ failed. Ranges, never a ratio. Both clear the 30 FPS target by 5-8x.
 > first two were not renderer comparisons.
 >
 > ~~~
-> 1st  no controls, AA MISMATCHED    vtk 4.80-6.20   three 2.30-2.50
-> 2nd  controls, AA still mismatched vtk 5.40-5.60   three 2.70-2.80
-> 3rd  AA matched, surface matched   vtk 4.90-5.40   three 2.80-3.30   <- this one
+> 1st  no controls, AA MISMATCHED     vtk 4.80-6.20   three 2.30-2.50
+> 2nd  controls, AA still mismatched  vtk 5.40-5.60   three 2.70-2.80
+> 3rd  AA + surface matched           vtk 4.90-5.40   three 2.80-3.30
+> 4th  + colour and lighting matched  vtk 4.70-5.40   three 2.60-3.30   <- this one
 > ~~~
 >
 > **The confound: the two pages were not antialiasing the same.** vtk.js's
@@ -970,6 +975,28 @@ failed. Ranges, never a ratio. Both clear the 30 FPS target by 5-8x.
 > The conclusion survived the correction -- still disjoint, still no sign
 > reversal -- but on a narrower margin (gap 1.60 against a 0.50 spread, where
 > the mismatched table read 2.60 against 0.20).
+
+### Colour: Three.js was encoding sRGB where vtk.js was not
+
+Three.js applies an sRGB conversion on output that vtk.js does not, so the dark
+background and the building grey both arrived washed out -- reported from the
+outside as "a grey filter on top of it". **Pages 13 and 14 already carry the fix
+and the reason**: `THREE.ColorManagement.enabled = false` plus
+`outputColorSpace = LinearSRGBColorSpace`, so "the shared ramp reaches the
+drawing buffer as the same numbers vtk.js writes". Page 16 now carries both, and
+takes its clear colour and material colour through `setRGB` with the same linear
+triples page 15 hands vtk.js, rather than hex literals that would be read as
+sRGB.
+
+Lighting was the other half. vtk.js's Renderer auto-creates a **headlight** when
+a page adds no light of its own (`createLight`: `setLightTypeToHeadLight()`,
+intensity 1, at the camera). Page 16 had an ambient term plus a fixed
+directional light, which lit the city from somewhere else entirely. It now
+carries a headlight that rides the camera. **Its intensity is not vtk.js's 1**:
+Three.js changed light scaling in r155, and at intensity 1 under linear output
+the city was nearly black -- measured, and the same reason page 14 sits at
+1.6/2.2. The value is calibrated against page 15 by eye and is a brightness
+match, not a claim of identical light models.
 
 ### Surface: the pages were rendering 1280x720 into 1913 CSS pixels
 
