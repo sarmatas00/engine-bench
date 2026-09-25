@@ -51,13 +51,29 @@ async function main(): Promise<void> {
   }
   const {mesh, json, dataset, orbit} = bundle;
 
-  const renderer = new THREE.WebGLRenderer({antialias: false, powerPreference: 'high-performance'});
-  renderer.setPixelRatio(1);                       // the surface of record is device pixels
-  renderer.setSize(SURFACE.width, SURFACE.height, false);
-  ui.canvasHost.appendChild(renderer.domElement);
-
-  const gl = renderer.getContext() as WebGL2RenderingContext;
+  // The context is created here, not by WebGLRenderer, for two reasons page 14
+  // already had to learn: the counters can be installed before Three.js
+  // allocates its first object, and the attributes are the ones vtk.js's own
+  // get3DContext asks for (RenderWindow.js:178-182) rather than Three.js's.
+  //
+  // `antialias` is LEFT UNSET, so this page gets the browser default of true,
+  // exactly as vtk.js does. MEASURED before this was fixed: page 15 reported
+  // SAMPLES 4 and page 16 SAMPLES 0, so vtk.js was resolving 4x MSAA at every
+  // one-pixel readback and Three.js was resolving nothing. That is not a
+  // renderer comparison, and it is what the first published frame times
+  // measured.
+  const canvas = document.createElement('canvas');
+  canvas.style.cssText = 'position:absolute;inset:0;width:100%;height:100%';
+  ui.canvasHost.prepend(canvas);
+  const rawGl = canvas.getContext('webgl2', {
+    preserveDrawingBuffer: false, depth: true, alpha: true, powerPreference: 'high-performance',
+  }) as WebGL2RenderingContext | null;
+  if (!rawGl) { ui.fail('no WebGL2 context'); return; }
+  const gl: WebGL2RenderingContext = rawGl;
   const counts = instrumentGlObjects(gl);
+
+  const renderer = new THREE.WebGLRenderer({canvas, context: gl});
+  renderer.setClearColor(new THREE.Color(0.067, 0.086, 0.11), 1);
   const gpuTimer = createGpuTimer(gl);
   const frameSync = makeFrameSync(gl);
 
@@ -67,7 +83,6 @@ async function main(): Promise<void> {
   geometry.setIndex(new THREE.BufferAttribute(mesh.indices, 1));
 
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x11161c);
   scene.add(new THREE.Mesh(geometry, new THREE.MeshLambertMaterial({color: 0xb8c4cf})));
   scene.add(new THREE.AmbientLight(0xffffff, 0.55));
   const sun = new THREE.DirectionalLight(0xffffff, 1.1);
@@ -82,7 +97,7 @@ async function main(): Promise<void> {
   // Orbit with the mouse, the same addon page 14 uses. Damping off: a damped
   // camera keeps moving after the pointer stops, which would let a drag still
   // be settling when a benchmark run starts.
-  const controls = new OrbitControls(camera, renderer.domElement);
+  const controls = new OrbitControls(camera, canvas);
   controls.enableDamping = false;
   let listeners = 0;
 
@@ -95,6 +110,33 @@ async function main(): Promise<void> {
 
   controls.addEventListener('change', renderScene);
   listeners += 1;
+
+  /**
+   * Size the drawing buffer to what is actually on screen, at device pixels.
+   *
+   * Before this the buffer was pinned to 1280x720 for the page's whole life and
+   * the browser stretched it across ~1913 CSS pixels, which is exactly the blur
+   * the team saw. The measurement still runs at 1280x720 -- runBenchmark pins
+   * it -- but nobody has to look at a stretched image to get that.
+   */
+  function applySurface(cssWidth: number, cssHeight: number, dpr: number): void {
+    camera.aspect = cssWidth / cssHeight;
+    camera.updateProjectionMatrix();
+    renderer.setPixelRatio(dpr);
+    renderer.setSize(cssWidth, cssHeight, false);
+    renderScene();
+  }
+
+  const resizeObserver = new ResizeObserver(() => {
+    const rect = ui.canvasHost.getBoundingClientRect();
+    if (rect.width > 0 && rect.height > 0) {
+      applySurface(Math.max(1, Math.floor(rect.width)), Math.max(1, Math.floor(rect.height)),
+                   window.devicePixelRatio || 1);
+      publish();
+    }
+  });
+  resizeObserver.observe(ui.canvasHost);
+  let observers = 1;
 
   const renderFrame = (pose: CameraPose & {eye?: [number, number, number]}) => {
     // `eye` is handed over by flagshipPose on purpose; recomputing the trig
@@ -121,11 +163,12 @@ async function main(): Promise<void> {
       objectTable: json.objectTable.length,
     },
     camera: orbit,
-    lens: {fovDeg: camera.fov, aspect: camera.aspect, surface: [SURFACE.width, SURFACE.height]},
+    lens: {fovDeg: camera.fov, aspect: camera.aspect,
+           surface: [gl.drawingBufferWidth, gl.drawingBufferHeight]},
     volumeField: null,
     resources: {
       buffers: counts.buffers, textures: counts.textures,
-      renderTargets: counts.renderTargets, listeners, observers: 0,
+      renderTargets: counts.renderTargets, listeners, observers,
     },
     interactive: true,
     measurementValid: true,
@@ -148,7 +191,7 @@ async function main(): Promise<void> {
   attachContextLoss(renderer.domElement, {
     probe,
     stopBenchmark: () => driver.stop(),
-    disposeGpuResources: () => { controls.dispose(); geometry.dispose(); renderer.dispose(); },
+    disposeGpuResources: () => { resizeObserver.disconnect(); controls.dispose(); geometry.dispose(); renderer.dispose(); },
     onLost: () => {
       publish();
       ui.fail('WebGL context lost. Frame times from this run are not a measurement.');
@@ -156,9 +199,14 @@ async function main(): Promise<void> {
   });
 
   function publish(): void {
+    // Read live, never captured at construction: the surface changes with the
+    // element and is pinned during a run, so a snapshot taken once would report
+    // the 300x150 default canvas for the page's whole life.
+    probe.lens = {fovDeg: camera.fov, aspect: camera.aspect,
+                  surface: [gl.drawingBufferWidth, gl.drawingBufferHeight]};
     probe.resources = {
       buffers: counts.buffers, textures: counts.textures,
-      renderTargets: counts.renderTargets, listeners, observers: 0,
+      renderTargets: counts.renderTargets, listeners, observers,
     };
     ui.setProbe('flagship', probe);
   }
@@ -207,6 +255,13 @@ async function main(): Promise<void> {
       // frame times would describe a scene nobody chose. Off for the duration,
       // then back to the start pose so the page is usable again.
       controls.enabled = false;
+      // The frame times of record are at 1280x720 device pixels. The observer
+      // is stood down so it cannot resize the surface mid-measurement.
+      const rect = ui.canvasHost.getBoundingClientRect();
+      const restore = {w: Math.max(1, Math.floor(rect.width)), h: Math.max(1, Math.floor(rect.height)),
+                       dpr: window.devicePixelRatio || 1};
+      resizeObserver.unobserve(ui.canvasHost);
+      applySurface(SURFACE.width, SURFACE.height, 1);
       try {
         const result = await driver.runBenchmark();
         probe.benchmark = result;
@@ -214,6 +269,8 @@ async function main(): Promise<void> {
         publish();
         return result;
       } finally {
+        applySurface(restore.w, restore.h, restore.dpr);
+        resizeObserver.observe(ui.canvasHost);
         controls.enabled = true;
         renderFrame(flagshipPose(0, orbit));
       }
