@@ -71,6 +71,9 @@ const ui = mountChrome({
     + 'misses the city and would look like broken picking.',
   ],
 });
+// First readout row, so every pasted summary names the renderer that produced
+// it: two unlabelled pastes in one thread were indistinguishable.
+ui.setReadout('renderer', 'vtk.js');
 
 async function main(): Promise<void> {
   let bundle: FlagshipBundle;
@@ -282,7 +285,11 @@ async function main(): Promise<void> {
       note: 'a different object is a legitimate occlusion result, not a failure',
     };
     ui.setReadout('picked part', probe.selectedObject.dtccId);
-    ui.setReadout('pick matches target', String(probe.pickCheck.sameObject));
+    // A miss means a nearer building occludes the aimed-at one, not a failure.
+    // Renderer parity is 'picked part' agreeing across pages 15 and 16.
+    ui.setReadout('aimed-at building', probe.pickCheck.sameObject
+      ? 'hit'
+      : 'occluded by picked part (not a failure)');
   } else {
     ui.setReadout('picked part', 'no hit');
   }
