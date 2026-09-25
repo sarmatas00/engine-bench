@@ -15,7 +15,8 @@ import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
 import {mountChrome} from '@lib/chrome';
 import {
   ORBIT_FLAGSHIP_V1, createGpuTimer, flagshipPose, instrumentGlObjects,
-  FLAGSHIP_FOV_DEG, loadFlagshipGeometry, makeFrameSync, objectForTriangle, pickTargetTriangle,
+  FLAGSHIP_FOV_DEG, createFpsMeter, describeGpu, loadFlagshipGeometry, makeFrameSync,
+  objectForTriangle, percentile, pickTargetTriangle,
   triangleCentroid,
   type FlagshipBundle, type GeometryProbe,
 } from '@lib/flagship-geometry';
@@ -34,12 +35,20 @@ THREE.ColorManagement.enabled = false;
 
 const SURFACE = {width: 1280, height: 720} as const;
 
+/** Replaced by main() once the scene is up. */
+let benchmarkHandler: () => Promise<void> =
+  async () => { ui.setReadout('benchmark', 'still loading, try again in a moment'); };
+
 const ui = mountChrome({
   num: '16',
   title: 'Three.js flagship geometry',
   expect: 'the Delft flagship district, ~10k buildings, orbiting once. No volume, no field — this is the geometry axis.',
   claim: 'a semantically rich city model is the case the shipped tile never tested',
   decision: 'whether either renderer struggles with a 10,356-part city — the axis flagship genuinely extends.',
+  // The handler is filled in once the page has loaded; until then the button
+  // reports that rather than silently doing nothing.
+  controls: [{kind: 'button', id: 'run-benchmark', label: 'Run benchmark (210 frames)',
+              onClick: () => { void benchmarkHandler(); }}],
   findings: [
     'flagship carries no usable volume grid: the 256 MiB native format cannot hold a 2 km city and a '
     + 'high-resolution VolumeGrid at once. The largest that fits is 100x100x28, which has FEWER z layers '
@@ -141,9 +150,29 @@ async function main(): Promise<void> {
 
   /** Draw the current camera. Used by the controls on every change, and by
    *  renderFrame once it has placed the camera. */
+  const fps = createFpsMeter();
+  /**
+   * One place that ticks the meter and writes the readout.
+   *
+   * SILENT DURING A BENCHMARK RUN. The driver awaits a real macrotask between
+   * frames, so wall-clock intervals inside a run are the driver's pacing, not
+   * the cost of drawing -- measured at 76 FPS on a page whose frames take
+   * 3.3 ms, which would read as the scene being four times slower than it is.
+   * The run reports its own statistics; this meter is for interaction.
+   */
+  let benchmarking = false;
+  function tickFps(): void {
+    if (benchmarking) return;
+    fps.tick();
+    const value = fps.fps();
+    if (value !== null) ui.setReadout('fps while interacting', value.toFixed(0));
+  }
   const renderScene = () => {
     renderer.render(scene, camera);
     frameSync();
+    fps.tick();
+    const value = fps.fps();
+    if (value !== null) ui.setReadout('fps', value.toFixed(0));
   };
 
   controls.addEventListener('change', renderScene);
@@ -283,12 +312,48 @@ async function main(): Promise<void> {
     ui.setReadout('picked part', 'no hit');
   }
 
+  /**
+   * Run the measurement and put the result on the page.
+   *
+   * Exists because "it feels slower on my machine" cannot be compared against a
+   * published range. This prints the same statistics those ranges were built
+   * from, beside the GPU string they were measured on, so a number from any
+   * machine is attributable to the surface that produced it.
+   */
+  async function runAndReport(): Promise<void> {
+    ui.setReadout('benchmark', 'running 210 frames at 1280x720...');
+    benchmarking = true;
+    fps.reset();
+    try {
+      const result = await runBenchmark();
+      const cpu = result.cpuFrameTimesMs;
+      const gpu = result.gpuFrameTimesMs ?? [];
+      ui.setReadout('cpu p50 ms', percentile(cpu, 0.5).toFixed(2));
+      ui.setReadout('cpu p95 ms', percentile(cpu, 0.95).toFixed(2));
+      ui.setReadout('min FPS', (1000 / percentile(cpu, 0.95)).toFixed(0));
+      // Reported with its sample count, never as a bare number: disjoint GPU
+      // samples are dropped here and a p50 over a handful of survivors is not
+      // a p50 over a run.
+      ui.setReadout('gpu p50 ms', gpu.length
+        ? `${percentile(gpu, 0.5).toFixed(2)} (${gpu.length}/${cpu.length} kept)`
+        : 'no usable samples');
+      ui.setReadout('benchmark', `done, ${cpu.length} measured frames`);
+    } catch (err) {
+      ui.setReadout('benchmark', `failed: ${(err as Error).message}`);
+    } finally {
+      benchmarking = false;
+      fps.reset();
+    }
+  }
+
+  benchmarkHandler = runAndReport;
+
   ui.setReadout('building parts', probe.counts.buildingParts);
+  ui.setReadout('GPU', describeGpu(gl));
   ui.setReadout('triangles', probe.counts.triangles);
   ui.setReadout('camera radius m', Math.round(orbit.radius));
 
-  (window as unknown as {__bench: {runBenchmark: () => Promise<unknown>}}).__bench.runBenchmark =
-    async () => {
+  async function runBenchmark() {
       // A drag mid-run would move the camera the driver is placing, so the
       // frame times would describe a scene nobody chose. Off for the duration,
       // then back to the start pose so the page is usable again.
@@ -312,7 +377,10 @@ async function main(): Promise<void> {
         controls.enabled = true;
         renderFrame(flagshipPose(0, orbit));
       }
-    };
+  }
+
+  (window as unknown as {__bench: {runBenchmark: () => Promise<unknown>}}).__bench.runBenchmark =
+    runBenchmark;
 
   publish();
   ui.ready();

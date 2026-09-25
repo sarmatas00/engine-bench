@@ -23,8 +23,8 @@ import vtkCellPicker from '@kitware/vtk.js/Rendering/Core/CellPicker';
 
 import {mountChrome} from '@lib/chrome';
 import {
-  FLAGSHIP_FOV_DEG, ORBIT_FLAGSHIP_V1, createGpuTimer, flagshipPose, instrumentGlObjects,
-  makeFrameSync,
+  FLAGSHIP_FOV_DEG, ORBIT_FLAGSHIP_V1, createFpsMeter, createGpuTimer, describeGpu, flagshipPose,
+  instrumentGlObjects, makeFrameSync, percentile,
   loadFlagshipGeometry, objectForTriangle, pickTargetTriangle, triangleCentroid,
   type FlagshipBundle, type GeometryProbe,
 } from '@lib/flagship-geometry';
@@ -45,12 +45,20 @@ function triangleCells(indices: Uint32Array): Uint32Array {
   return cells;
 }
 
+/** Replaced by main() once the scene is up. */
+let benchmarkHandler: () => Promise<void> =
+  async () => { ui.setReadout('benchmark', 'still loading, try again in a moment'); };
+
 const ui = mountChrome({
   num: '15',
   title: 'VTK.js flagship geometry',
   expect: 'the Delft flagship district, ~10k buildings, orbiting once. No volume, no field — this is the geometry axis.',
   claim: 'a semantically rich city model is the case the shipped tile never tested',
   decision: 'whether either renderer struggles with a 10,356-part city — the axis flagship genuinely extends.',
+  // The handler is filled in once the page has loaded; until then the button
+  // reports that rather than silently doing nothing.
+  controls: [{kind: 'button', id: 'run-benchmark', label: 'Run benchmark (210 frames)',
+              onClick: () => { void benchmarkHandler(); }}],
   findings: [
     'flagship carries no usable volume grid: the 256 MiB native format cannot hold a 2 km city and a '
     + 'high-resolution VolumeGrid at once. The largest that fits is 100x100x28, FEWER z layers than the '
@@ -94,6 +102,23 @@ async function main(): Promise<void> {
   const counts = gl ? instrumentGlObjects(gl) : {buffers: 0, textures: 0, renderTargets: 0, renderbuffers: 0};
   const gpuTimer = gl ? createGpuTimer(gl) : null;
   const frameSync = makeFrameSync(gl);
+  const fps = createFpsMeter();
+  /**
+   * One place that ticks the meter and writes the readout.
+   *
+   * SILENT DURING A BENCHMARK RUN. The driver awaits a real macrotask between
+   * frames, so wall-clock intervals inside a run are the driver's pacing, not
+   * the cost of drawing -- measured at 76 FPS on a page whose frames take
+   * 3.3 ms, which would read as the scene being four times slower than it is.
+   * The run reports its own statistics; this meter is for interaction.
+   */
+  let benchmarking = false;
+  function tickFps(): void {
+    if (benchmarking) return;
+    fps.tick();
+    const value = fps.fps();
+    if (value !== null) ui.setReadout('fps while interacting', value.toFixed(0));
+  }
 
   /**
    * Size the drawing buffer to what is on screen, at device pixels.
@@ -110,6 +135,19 @@ async function main(): Promise<void> {
     apiRenderWindow.setSize(Math.max(1, width), Math.max(1, height));
     renderer.resetCameraClippingRange();
     renderWindow.render();
+  }
+
+  // vtk.js draws its own frames while the interactor is dragging, bypassing
+  // renderFrame entirely, so without this the meter would sit silent during
+  // exactly the interaction someone is trying to measure. The interactor emits
+  // one Animation event per animated frame. Guarded rather than assumed: if the
+  // event is not there, the meter simply stays on renderFrame's ticks.
+  const interactorForFps = renderWindow.getInteractor() as unknown as
+    {onAnimation?: (cb: () => void) => unknown} | null;
+  if (typeof interactorForFps?.onAnimation === 'function') {
+    interactorForFps.onAnimation(() => {
+      tickFps();
+    });
   }
 
   const resizeObserver = new ResizeObserver(() => {
@@ -152,6 +190,7 @@ async function main(): Promise<void> {
     renderWindow.render();
     // Makes the wall clock measure a frame, not command submission.
     frameSync();
+    tickFps();
   };
 
   const probe: GeometryProbe = {
@@ -247,12 +286,48 @@ async function main(): Promise<void> {
     ui.setReadout('picked part', 'no hit');
   }
 
+  /**
+   * Run the measurement and put the result on the page.
+   *
+   * Exists because "it feels slower on my machine" cannot be compared against a
+   * published range. This prints the same statistics those ranges were built
+   * from, beside the GPU string they were measured on, so a number from any
+   * machine is attributable to the surface that produced it.
+   */
+  async function runAndReport(): Promise<void> {
+    ui.setReadout('benchmark', 'running 210 frames at 1280x720...');
+    benchmarking = true;
+    fps.reset();
+    try {
+      const result = await runBenchmark();
+      const cpu = result.cpuFrameTimesMs;
+      const gpu = result.gpuFrameTimesMs ?? [];
+      ui.setReadout('cpu p50 ms', percentile(cpu, 0.5).toFixed(2));
+      ui.setReadout('cpu p95 ms', percentile(cpu, 0.95).toFixed(2));
+      ui.setReadout('min FPS', (1000 / percentile(cpu, 0.95)).toFixed(0));
+      // Reported with its sample count, never as a bare number: disjoint GPU
+      // samples are dropped here and a p50 over a handful of survivors is not
+      // a p50 over a run.
+      ui.setReadout('gpu p50 ms', gpu.length
+        ? `${percentile(gpu, 0.5).toFixed(2)} (${gpu.length}/${cpu.length} kept)`
+        : 'no usable samples');
+      ui.setReadout('benchmark', `done, ${cpu.length} measured frames`);
+    } catch (err) {
+      ui.setReadout('benchmark', `failed: ${(err as Error).message}`);
+    } finally {
+      benchmarking = false;
+      fps.reset();
+    }
+  }
+
+  benchmarkHandler = runAndReport;
+
   ui.setReadout('building parts', probe.counts.buildingParts);
+  ui.setReadout('GPU', describeGpu(gl));
   ui.setReadout('triangles', probe.counts.triangles);
   ui.setReadout('camera radius m', Math.round(orbit.radius));
 
-  (window as unknown as {__bench: {runBenchmark: () => Promise<unknown>}}).__bench.runBenchmark =
-    async () => {
+  async function runBenchmark() {
       // Same reason as page 16: vtk.js's own interactor would otherwise let a
       // drag move the camera the driver is placing.
       //
@@ -280,7 +355,10 @@ async function main(): Promise<void> {
         if (style) interactor?.setInteractorStyle(style);
         renderFrame(flagshipPose(0, orbit));
       }
-    };
+  }
+
+  (window as unknown as {__bench: {runBenchmark: () => Promise<unknown>}}).__bench.runBenchmark =
+    runBenchmark;
 
   publish();
   ui.ready();
