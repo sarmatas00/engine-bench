@@ -41,6 +41,11 @@ Every absolute path goes through `assetUrl` (`src/lib/dataset.ts`), which prefix
 `/engine-bench/` only under `build:pages`, so hosting cannot drift the local numbers.
 Publish the resulting `dist/` to the `gh-pages` branch.
 
+`public/.nojekyll` is empty and exists only so the build emits `dist/.nojekyll`.
+Without it GitHub Pages runs Jekyll over the output, and a deploy that replaces
+`gh-pages` wholesale silently drops the file — which is how it went missing once
+already. Do not delete it.
+
 `dtcc-sim`'s own `Dockerfile` (`~/Projects/dtcc/dtcc-sim`) does not build as shipped on an Apple
 Silicon machine under `--platform linux/amd64` — see `NOTES.md` under `## Findings` for the full
 diagnosis. Until DTCC fixes it upstream, build with two one-line patches: add `binutils` to the
