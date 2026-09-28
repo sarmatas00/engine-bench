@@ -25,3 +25,9 @@ public/data/real/*.png      -diff binary
 # no line structure; scientific-manifest.json stays diffable like field.json
 # above -- it is where the domain meaning (units, association, params) lives.
 public/data/scientific/*.bin   -diff binary
+
+# Flagship (pages 15-18): same rule. speed.grid.f32 is 33 MiB of float32 that
+# git otherwise reads as 1.2M lines of text.
+public/data/flagship/*.bin          -diff binary
+public/data/flagship/*.mesh.json    -diff
+public/data/flagship/volume/*.f32   -diff binary

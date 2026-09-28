@@ -61,9 +61,9 @@ const ui = mountChrome({
               onClick: () => { void benchmarkHandler(); }}],
   findings: [
     'The redraws/sec readout is NOT comparable with the other page. MEASURED over ten identical drags: vtk.js issued 43 draw calls, Three.js issued 10. vtk.js animates continuously while its interactor is dragging; Three.js redraws once per controls event. Both are correct behaviour and the rates are not the same quantity. Use the Run benchmark button to compare the two pages \u2014 it drives both through the identical 210-frame camera path.',
-    'flagship carries no usable volume grid: the 256 MiB native format cannot hold a 2 km city and a '
-    + 'high-resolution VolumeGrid at once. The largest that fits is 100x100x28, FEWER z layers than the '
-    + '32 the spike already measured, so nothing here may be quoted as a volume result.',
+    'This page draws no volume. The first flagship could not carry a usable one: the 256 MiB native format '
+    + 'held a 2 km city and at most a 100x100x28 grid. Anders\u2019s grid-only file does carry one '
+    + '(250x250x139); pages 17 and 18 draw it with this same city. Nothing here is a volume result.',
     'orbit-flagship-v1 derives radius and target from dataset.json rather than reusing orbit-v1’s '
     + 'literals, which were tuned to a 250 m tile and would put the camera inside this city.',
     'The startup pick aims at a projected building centroid, not screen centre: the camera target sits '

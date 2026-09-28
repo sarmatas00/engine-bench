@@ -4,11 +4,10 @@
  *
  * WHAT THIS AXIS IS, AND WHAT IT IS NOT. It measures a semantically rich city
  * model -- 1.16M vertices, 694k triangles, a 10,356-entry object table -- on
- * both renderers. It does NOT measure volume rendering. flagship carries no
- * usable volume grid: the 256 MiB native format cannot hold a 2 km city and a
- * high-resolution VolumeGrid at once, and the largest that fits (100x100x28)
- * has FEWER z layers than the 32 the spike already measured. Nothing here may
- * be quoted as a volume result.
+ * both renderers. It does NOT measure volume rendering. The first flagship
+ * could not carry a usable grid (the 256 MiB native format held the city and
+ * at most 100x100x28); the volume axis is flagship-volume.ts, pages 17 and 18,
+ * built from Anders's later grid-only file. Nothing here is a volume result.
  *
  * NOT COMPARABLE TO PAGES 13/14's FRAME TIMES. Different scene, different
  * camera radius, different city. The comparison this axis supports is vtk.js

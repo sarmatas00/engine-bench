@@ -1097,3 +1097,117 @@ and not the cost of drawing -- measured at 76 FPS on a page whose frames take
   this by **removing all 17 checksums**, so `dataset.json` records flagship's own
   sha256 instead -- this bench verifies what it measured whether or not upstream
   does.
+
+## The volume axis: flagship, pages 17 and 18 (2026-09-28)
+
+The geometry axis could not carry a volume (see above: the 256 MiB format held
+the city and at most 100x100x28). Anders then generated a **grid-only** flagship,
+`--grid-only --volume-spacing 8 8 1`, with no tetrahedra, under Protobuf's own
+2 GiB ceiling:
+
+~~~
+                       pages 13/14 tile     flagship volume      ratio
+grid                          64x64x32         250x250x139
+cells                          131,072           8,687,500         66x
+vertical layers                     32                 139        4.3x
+cell size (m)          7.9 x 7.9 x 2.6        8 x 8 x ~1.0
+~~~
+
+Source: `flagship.dtcc`, sha256 `1fc93435...98df` (490 MB), inside
+`flagship.dtccpkg` (manifest `dtcc-flagship-delft-v3` 3.1.0). Extracted by
+`scripts/flagship/extract_volume.py` into `public/data/flagship/volume/`: the
+`speed` field only, 33.1 MiB of float32. The field is **synthetic** ("Not a
+fluid solver; no conservation or no-slip guarantee", its own limitations).
+
+### Reading it needs a newer Core than .venv has
+
+The `.venv` Core refuses the file ("Expected ModelFile or canonical bytes within
+the 256 MiB limit"). Core `develop` at `b375f47` raises the cap to 2 GiB, and in
+the same range made `load_model` validate against LinkML, which `.venv` does not
+carry. The extraction ran in a separate environment with `develop` Core
+installed from a clean worktree; loading takes ~47 s and ~2.7 GB. `.venv` was
+left alone.
+
+### The buildings are the same bytes
+
+`extract.py` run on the new file writes `buildings.mesh.bin` and
+`buildings.mesh.json` with the **same sha256** as the published ones, and the
+same bounds, origin, z0 and counts. Pages 17/18 reuse the geometry artifact and
+only the volume is new.
+
+### Cell order: taken from the generator, then proven against the city
+
+Core does not document the order of a VolumeGrid's cell values. The generator
+does: it samples cell centres from `np.meshgrid(xc, yc, zc)` with the default
+`'xy'` indexing, so the array is `(ny, nx, nz)` with z fastest ("(northing,
+easting, elevation) array order", its own comment). Both renderers want x
+fastest, so the extractor transposes, then checks the result against the city
+and refuses to write if it fails:
+
+- **vertical:** the bottom layer (below ground) is 100% solid, the top 0%.
+- **horizontal:** a probe 2 m above each building's base lands in a solid cell
+  **91.4%** of the time; read with x and y swapped, **27.4%**. The swapped
+  reading is the control that makes this a test of the order and not of the
+  threshold.
+
+The horizontal check uses only buildings at least one cell (8 m) wide. Measured:
+narrower parts hit a solid cell 45% of the time, because the generator masks by
+cell centre and a small footprint often misses every centre. A probe that cannot
+land inside its building tests the resolution, not the order.
+
+Solid cells (13.6%) are NaN in the source and `air_mask` agrees exactly. They
+are written as the field minimum, which both opacity functions map to zero.
+
+### Three settings that would have decided the result on their own
+
+- **vtk.js corrects opacity for step length; page 14's shader does not.**
+  vtk.js uses `1-(1-a)^(step/unitDistance)` with a unit distance of 1 m by
+  default, so at a 2 m step it composites a denser volume than the same transfer
+  function in page 14's march, saturates rays sooner and stops earlier. Page 17
+  sets `setScalarOpacityUnitDistance(0, 2)`, making the correction the identity.
+  **Pages 13/14 do not**, so on those pages vtk.js was drawing a denser volume
+  than Three.js and doing less work per ray for it. Not re-measured here.
+- **pages 13/14's opacity (0.3) turns this field into a lid.** Median speed sits
+  at 77% of the range, so a sample carries ~0.10 opacity and a ray saturates
+  after ~40 samples (80 m). The volume drew as opaque orange hiding the whole
+  city, and the benchmark would have timed the first 80 m of every ray.
+  `DEFAULT_OPACITY` here is 0.01: a typical ray ends 38-62% opaque, the city
+  shows through, and rays march their full length.
+- **vtk.js caps a ray at 1,000 samples by default**, and only warns. The box
+  diagonal is ~2,833 m, ~1,417 steps of 2 m. Both pages set 1,500; page 14's
+  shader loop was 512.
+
+Also: while the mouse is dragging, vtk.js draws the volume into a smaller
+viewport with coarser samples (`isAnimating()` in `vtkOpenGLVolumeMapper`), so
+page 17's live `redraws/sec` measures cheaper frames than page 18 draws. The
+benchmark calls `render()` directly, never animates, and is full quality.
+
+### Frame time: Three.js wins here too, and the sign never reverses
+
+Nine interleaved cold-context runs per renderer over two sessions,
+orbit-flagship-v1, 30 warmup + 180 measured frames, pinned 1280x720, ANGLE Metal
+on an Apple M4. Ranges are the union of all runs.
+
+~~~
+                    vtk.js (17)       Three.js (18)    disjoint?
+cpu p50          9.20 - 11.40 ms     6.70 - 8.00 ms       yes
+gpu p50          7.99 -  9.02 ms     5.53 - 6.22 ms       yes
+gpu kept              179-180/180        74-180/180
+~~~
+
+`cpu p95` is left out of the table because its tail is noise, not renderer:
+the first run of session 1 was slow on both pages (22.2 and 27.5 ms), and one
+Three.js run hit 15.1 ms (the same run kept only 74 GPU samples). The other
+seven runs per page sit at 10.2-13.9 ms (vtk.js) against 7.5-7.9 ms (Three.js).
+
+The two pages draw the same image (screenshots side by side, same camera, same
+wake colouring), so this is the same work. Three.js is ~1.4x faster on the
+volume axis, a smaller gap than the geometry axis's ~2x. At vtk.js's slowest
+median, 11.4 ms is still ~88 frames per second.
+
+**This does not overturn the recommendation, and it removes one argument for
+it.** "vtk.js for larger scientific data" was the hypothesis the volume test
+existed to check; on this field and this machine it does not hold. What still
+separates the two is what the spike decided on: page 18's volume is page 14's
+hand-written ray marcher, which we would own, and vtk.js's is a library call.
+One Apple GPU; any other is unmeasured.

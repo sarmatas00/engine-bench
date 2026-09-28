@@ -15,14 +15,19 @@ const rows: [string, string, string, string, string][] = [
   ['11-vtkjs-grid', 'VTK.js', 'Grid volume + isosurface; the mesh itself never loaded.', 'Narrowed to one job.', 'Needs a grid, not our mesh. That conversion now exists and feeds page 10 too.'],
   ['12-playcanvas', 'PlayCanvas', 'Mesh renders; no CRS, basemap or terrain API.', 'Rejected.', 'Rejected on geography, not rendering.'],
   ['13-vtkjs-scientific', 'VTK.js scientific', 'One scene: Gothenburg terrain and buildings, the DTCC smoke field as a volume, a slice and Core\'s streamlines. Click a building to read its marker back.', 'The vtk.js reference path.', 'Whether one vtk.js scene carries city geometry and scientific fields together with identity and values readable back. Task 6 mirrors it in Three.js.'],
-  ['14-threejs-scientific', 'Three.js scientific', 'The same scene as page 13 in Three.js: Gothenburg terrain and buildings, the DTCC smoke field as a volume, a slice and Core\'s streamlines, with the volume occluded by the city through a depth texture. Click a building to read its marker back.', 'The Three.js comparison path.', 'The second measurement of page 13\'s scene. Three.js ships no volume renderer, so the compositor and its depth stop are code we would own — the probe panel carries the measured line count.']
+  ['14-threejs-scientific', 'Three.js scientific', 'The same scene as page 13 in Three.js: Gothenburg terrain and buildings, the DTCC smoke field as a volume, a slice and Core\'s streamlines, with the volume occluded by the city through a depth texture. Click a building to read its marker back.', 'The Three.js comparison path.', 'The second measurement of page 13\'s scene. Three.js ships no volume renderer, so the compositor and its depth stop are code we would own — the probe panel carries the measured line count.'],
+  ['15-vtkjs-flagship', 'VTK.js Delft city', 'The Delft flagship district, 10,356 building parts, orbiting once.', 'Geometry axis, vtk.js.', 'Whether either renderer struggles with a city 48x the shipped tile. Compare with page 16 using the Run benchmark button.'],
+  ['16-threejs-flagship', 'Three.js Delft city', 'The same district in Three.js.', 'Geometry axis, Three.js.', 'Three.js is about twice as fast here, and both are far past any display refresh.'],
+  ['17-vtkjs-flagship-volume', 'VTK.js Delft volume', 'The Delft district with a synthetic 250x250x139 wind-speed volume around it.', 'Volume axis, vtk.js.', 'Whether either renderer struggles with an 8.7M-cell volume drawn with the city. Compare with page 18.'],
+  ['18-threejs-flagship-volume', 'Three.js Delft volume', 'The same scene in Three.js, with a ray marcher we would own.', 'Volume axis, Three.js.', 'The second measurement of page 17\'s scene.'],
 ];
 
 /**
  * Pages that load one bundle and have no synthetic/real variant, so their link
  * must never carry the dataset query the matrix pages take.
  */
-const COMBINED = new Set(['13-vtkjs-scientific', '14-threejs-scientific']);
+const COMBINED = new Set(['13-vtkjs-scientific', '14-threejs-scientific', '15-vtkjs-flagship',
+  '16-threejs-flagship', '17-vtkjs-flagship-volume', '18-threejs-flagship-volume']);
 
 // The briefing's own argument order, so the index reads as the case rather than a file listing.
 const sections: Record<string, string> = {
@@ -31,7 +36,8 @@ const sections: Record<string, string> = {
   '04-values-lost': 'Limitation 2 — colouring by simulation results',
   '05-fix-a1-deck-terrain': 'What the fixes cost',
   '09-cesium-terrain': 'What else was considered, and why it lost',
-  '13-vtkjs-scientific': 'Scientific visualization — one scene carrying the city and the fields'
+  '13-vtkjs-scientific': 'Scientific visualization — one scene carrying the city and the fields',
+  '15-vtkjs-flagship': 'Scaling up — the Delft flagship district'
 };
 
 /**

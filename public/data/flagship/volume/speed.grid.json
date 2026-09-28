@@ -1,0 +1,49 @@
+{
+  "field": "speed",
+  "unit": "m/s",
+  "dims": [
+    250,
+    250,
+    139
+  ],
+  "origin": [
+    -996.2223749999976,
+    -996.2170000000042,
+    -0.5015251798561149
+  ],
+  "spacing": [
+    8.0,
+    8.0,
+    0.9969496402877699
+  ],
+  "order": "x-fastest",
+  "association": "cell-centre",
+  "frame": "the flagship geometry artifact's local frame (dataset.json origin and z0)",
+  "range": [
+    0.1356530338525772,
+    8.788548469543457
+  ],
+  "maskedCells": 1180701,
+  "maskedFill": 0.1356530338525772,
+  "maskedFillReason": "solid cells are NaN in the source; written as the field minimum, which both transfer functions map to zero opacity",
+  "orderCheck": {
+    "bottomLayerSolid": 1.0,
+    "topLayerSolid": 0.0,
+    "buildingProbes": 6789,
+    "buildingProbesSolid": 0.9138,
+    "buildingProbesSolidIfXYSwapped": 0.274
+  },
+  "synthetic": true,
+  "source": {
+    "file": "flagship.dtcc",
+    "sha256": "1fc93435e75892f001f1b12ebfb050d5ad9292438d611c869dfafbf1b94498df",
+    "object": "synthetic-flow-domain/air_grid",
+    "dtccCore": {
+      "version": "0.9.8dev",
+      "commit": "b375f47"
+    }
+  },
+  "stages": {
+    "extract": "2026-09-28T10:57:09.045270+00:00"
+  }
+}
