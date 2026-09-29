@@ -156,20 +156,28 @@ const SLICE_POSE = {radius: 420, elevationDeg: 75, azimuthDeg: 35};
  *
  * If a legitimate change moves these: RE-MEASURE AND RE-PIN, and say in the
  * commit which renderer moved and why. Do not widen the tolerance.
+ *
+ * RE-PINNED 2026-09-29, vtk.js only (1.66/1.31/1.31/1.55 -> 1.94/1.40/1.44/1.67,
+ * mean 1.46 -> 1.61; Three.js unchanged). Page 13 now sets its opacity unit
+ * distance to the step, so vtk.js no longer composites a denser volume than
+ * page 14 (1-(1-a)^2 per 2 m sample at the default unit of 1). A thinner volume
+ * lets the building-free ray accumulate more before saturating, so the ratio
+ * rises toward page 14's, and the cross-page gap narrows from 1.20 to 1.09.
+ * Identical on chromium/SwiftShader and firefox, as before.
  */
 const OCCLUSION_POSE = {target: [0, 0, 40] as [number, number, number], radius: 520, elevationDeg: 12, azimuthDeg: 20};
 const OCCLUSION_RAYS: Array<{u: number; v: number; expected: Record<Renderer, number>}> = [
-  {u: 0.11, v: 0.84, expected: {vtkjs: 1.66, threejs: 2.22}},
-  {u: 0.14, v: 0.90, expected: {vtkjs: 1.31, threejs: 1.43}},
-  {u: 0.17, v: 0.86, expected: {vtkjs: 1.31, threejs: 1.49}},
-  {u: 0.32, v: 0.90, expected: {vtkjs: 1.55, threejs: 1.84}},
+  {u: 0.11, v: 0.84, expected: {vtkjs: 1.94, threejs: 2.22}},
+  {u: 0.14, v: 0.90, expected: {vtkjs: 1.40, threejs: 1.43}},
+  {u: 0.17, v: 0.86, expected: {vtkjs: 1.44, threejs: 1.49}},
+  {u: 0.32, v: 0.90, expected: {vtkjs: 1.67, threejs: 1.84}},
 ];
 /** Mean over the four rays, pinned the same way. */
-const OCCLUSION_MEAN: Record<Renderer, number> = {vtkjs: 1.46, threejs: 1.75};
+const OCCLUSION_MEAN: Record<Renderer, number> = {vtkjs: 1.61, threejs: 1.75};
 /** How far the two renderers' mean occlusion ratios sit apart, pinned because
  *  the old "within 2x" bound was satisfied MORE comfortably by the broken
  *  build (1.01) than by the healthy one (1.20). */
-const OCCLUSION_CROSS_PAGE = 1.20;
+const OCCLUSION_CROSS_PAGE = 1.09;
 const OCCLUSION_TOLERANCE = 0.10;
 
 /** 100 deterministic control cycles, in ten blocks of ten, with a viewport

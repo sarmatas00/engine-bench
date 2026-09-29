@@ -444,12 +444,19 @@ async function main(): Promise<void> {
   const origin = `http://localhost:${server.port}`;
   console.log(`serving dist/ at ${origin} (and ${origin}/engine-bench/)`);
 
-  // The same launch flags the Playwright chromium project uses. The p50s of
-  // record were taken on ANGLE/SwiftShader; a run on a real GPU would be a
-  // different measurement wearing the same name.
+  // SwiftShader by default: the same launch flags the Playwright chromium
+  // project uses, and the surface the software pass of record was taken on.
+  // BENCH_RASTERIZER=metal drives the real GPU instead. The record names the
+  // rasterizer either way, because a run on a real GPU is a different
+  // measurement and must never wear the software pass's name. Before this
+  // switch existed the Metal pass was driven by hand and its samples were lost.
+  const rasterizer = process.env.BENCH_RASTERIZER === 'metal' ? 'metal' : 'swiftshader';
   const browser = await chromium.launch({
-    args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'],
+    args: rasterizer === 'metal'
+      ? ['--use-angle=metal', '--enable-gpu', '--ignore-gpu-blocklist']
+      : ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'],
   });
+  console.log(`rasterizer: ANGLE/${rasterizer === 'metal' ? 'Metal' : 'SwiftShader'}`);
 
   const runs: any[] = [];
   try {
@@ -548,7 +555,7 @@ async function main(): Promise<void> {
   const record = {
     generatedAt: new Date().toISOString(),
     harness: {
-      browser: 'chromium (playwright) on ANGLE/SwiftShader',
+      browser: `chromium (playwright) on ANGLE/${rasterizer === 'metal' ? 'Metal' : 'SwiftShader'}`,
       browserVersion: null as string | null,
       viewport: {width: 1280, height: 800, deviceScaleFactor: 1},
       benchmarkSurface: BENCHMARK_SURFACE,

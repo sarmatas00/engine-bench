@@ -906,3 +906,16 @@ Both pages, driven through `/ego-browser` at the GPU surface:
   readout on both pages. Recorded rather than published, because a console error
   found live is a finding only after it survives being attributed to the tool
   that produced it.
+
+# APPENDED 2026-09-29 — page 13's opacity mismatch, fixed and re-measured
+
+Page 13 composited `1-(1-a)^2` per 2 m sample (vtk.js's default opacity unit
+distance of 1) where page 14 composites `a`, so vtk.js drew a denser volume on
+every run in this document. Page 13 now sets the unit distance to the sample
+distance. Re-measured on ANGLE Metal, Apple M4, through `measure:scientific`
+(3 accepted runs per renderer per session, before plus two sessions after):
+**vtk.js CPU p50 5.5/4.8/4.8 ms before, 5.4/5.3/4.4 and 5.2/5.1/4.6 ms after;
+Three.js unchanged.** The change is inside the within-session spread, so every
+frame-time conclusion above stands. The occlusion parity pins moved for vtk.js
+only and were re-pinned. Full table and session records: NOTES.md, "Page 13's
+opacity mismatch, fixed and re-measured".
