@@ -15,6 +15,7 @@
  */
 import '@kitware/vtk.js/Rendering/Profiles/Volume';
 import '@kitware/vtk.js/Rendering/Profiles/Geometry';
+import '@kitware/vtk.js/Rendering/Profiles/Glyph';
 import vtkFullScreenRenderWindow from '@kitware/vtk.js/Rendering/Misc/FullScreenRenderWindow';
 import vtkPolyData from '@kitware/vtk.js/Common/DataModel/PolyData';
 import vtkImageData from '@kitware/vtk.js/Common/DataModel/ImageData';
@@ -25,6 +26,8 @@ import vtkVolume from '@kitware/vtk.js/Rendering/Core/Volume';
 import vtkVolumeMapper from '@kitware/vtk.js/Rendering/Core/VolumeMapper';
 import vtkColorTransferFunction from '@kitware/vtk.js/Rendering/Core/ColorTransferFunction';
 import vtkPiecewiseFunction from '@kitware/vtk.js/Common/DataModel/PiecewiseFunction';
+import vtkArrowSource from '@kitware/vtk.js/Filters/Sources/ArrowSource';
+import vtkGlyph3DMapper from '@kitware/vtk.js/Rendering/Core/Glyph3DMapper';
 
 import {mountChrome} from '@lib/chrome';
 import {colormap} from '@lib/colormap';
@@ -33,7 +36,7 @@ import {
   instrumentGlObjects, makeFrameSync, percentile, loadFlagshipGeometry, type FlagshipBundle,
 } from '@lib/flagship-geometry';
 import {
-  DEFAULT_OPACITY, VOLUME_MAX_SAMPLES, VOLUME_STEP_M, loadFlagshipVolume, opacityNodes,
+  ARROW_COLOUR, ARROW_METRES_PER_MS, ARROW_SHAPE, DEFAULT_OPACITY, VOLUME_MAX_SAMPLES, VOLUME_STEP_M, loadFlagshipVolume, opacityNodes,
   type FlagshipVolume, type VolumeProbe,
 } from '@lib/flagship-volume';
 import {attachContextLoss, createBenchmarkDriver, type CameraPose} from '@lib/scientific-probes';
@@ -54,6 +57,8 @@ function triangleCells(indices: Uint32Array): Uint32Array {
 }
 
 /** Replaced by main() once the scene is up. */
+let arrowsHandler: (visible: boolean) => void = () => {};
+/** Replaced by main() once the scene is up. */
 let benchmarkHandler: () => Promise<void> =
   async () => { ui.setReadout('benchmark', 'still loading, try again in a moment'); };
 
@@ -63,8 +68,11 @@ const ui = mountChrome({
   expect: 'the Delft district with a synthetic wind-speed field as a translucent volume around the buildings, orbiting once.',
   claim: 'vtk.js should do best on volume data, the case the geometry axis could not test',
   decision: 'whether either renderer struggles with an 8.7-million-cell volume drawn together with a 10,356-part city.',
-  controls: [{kind: 'button', id: 'run-benchmark', label: 'Run benchmark (210 frames)',
-              onClick: () => { void benchmarkHandler(); }}],
+  controls: [
+    {kind: 'toggle', id: 'arrows', label: 'Wind arrows', value: true, onChange: v => arrowsHandler(v)},
+    {kind: 'button', id: 'run-benchmark', label: 'Run benchmark (210 frames)',
+     onClick: () => { void benchmarkHandler(); }},
+  ],
   findings: [
     'The field is SYNTHETIC: real Delft buildings, analytic wind. Its own source says "Not a fluid solver". '
     + 'It is here as a realistically sized volume, not as a flow result.',
@@ -77,6 +85,9 @@ const ui = mountChrome({
     + 'The Run benchmark button renders at full quality on both pages and is the comparison.',
     'Solid cells (inside buildings and below ground, 13.6% of the grid) are written as the field minimum, '
     + 'which the opacity function maps to zero, so they draw as empty.',
+    'Wind arrows come from vtk.js itself: vtkArrowSource for the shape and vtkGlyph3DMapper to place, turn and '
+    + 'size one per point from the velocity field. Page 18 builds the same thing by hand. The benchmark measures '
+    + 'whatever the toggle shows, and the readout says which.',
   ],
 });
 // First readout row, so every pasted summary names the renderer that produced it.
@@ -195,6 +206,28 @@ async function main(): Promise<void> {
   volume.getProperty().setScalarOpacityUnitDistance(0, VOLUME_STEP_M);
   renderer.addVolume(volume);
 
+  // --- wind arrows: vtk.js's own glyph path ---------------------------------
+  const {arrows} = volumeData;
+  const arrowPoints = vtkPolyData.newInstance();
+  arrowPoints.getPoints().setData(arrows.positions, 3);
+  arrowPoints.getPointData().setVectors(vtkDataArray.newInstance({
+    name: 'wind', values: arrows.vectors, numberOfComponents: 3,
+  }));
+  const arrowSource = vtkArrowSource.newInstance({...ARROW_SHAPE});
+  const glyphMapper = vtkGlyph3DMapper.newInstance();
+  glyphMapper.setInputData(arrowPoints, 0);
+  glyphMapper.setInputConnection(arrowSource.getOutputPort(), 1);
+  glyphMapper.setOrientationArray('wind');
+  glyphMapper.setOrientationModeToDirection();
+  glyphMapper.setScaleArray('wind');
+  glyphMapper.setScaleModeToScaleByMagnitude();
+  glyphMapper.setScaleFactor(ARROW_METRES_PER_MS);
+  glyphMapper.setScalarVisibility(false);
+  const arrowActor = vtkActor.newInstance();
+  arrowActor.setMapper(glyphMapper);
+  arrowActor.getProperty().setColor(...ARROW_COLOUR);
+  renderer.addActor(arrowActor);
+
   const renderFrame = (pose: CameraPose & {eye?: [number, number, number]}) => {
     const eye = pose.eye!;
     const camera = renderer.getActiveCamera();
@@ -229,6 +262,7 @@ async function main(): Promise<void> {
       opacityScale: DEFAULT_OPACITY,
       opacityCorrection: `1-(1-a)^(${volumeMapper.getSampleDistance()}/${volume.getProperty().getScalarOpacityUnitDistance(0)})`,
     },
+    arrows: {visible: arrowActor.getVisibility(), count: arrows.meta.count},
     resources: {
       buffers: counts.buffers, textures: counts.textures,
       renderTargets: counts.renderTargets, listeners: 0, observers: 0,
@@ -237,6 +271,7 @@ async function main(): Promise<void> {
   };
 
   function publish(): void {
+    probe.arrows = {visible: arrowActor.getVisibility(), count: arrows.meta.count};
     probe.lens = {fovDeg: renderer.getActiveCamera().getViewAngle(),
                   aspect: gl ? gl.drawingBufferWidth / gl.drawingBufferHeight : 1,
                   surface: gl ? [gl.drawingBufferWidth, gl.drawingBufferHeight] : [0, 0]};
@@ -265,6 +300,7 @@ async function main(): Promise<void> {
       resizeObserver.disconnect();
       mapper.delete(); actor.delete(); polyData.delete();
       volumeMapper.delete(); volume.delete(); image.delete();
+      glyphMapper.delete(); arrowActor.delete(); arrowSource.delete(); arrowPoints.delete();
     },
     onLost: () => {
       publish();
@@ -298,8 +334,15 @@ async function main(): Promise<void> {
   }
 
   benchmarkHandler = runAndReport;
+  arrowsHandler = (visible: boolean) => {
+    arrowActor.setVisibility(visible);
+    ui.setReadout('arrows', visible ? `on (${arrows.meta.count})` : 'off');
+    renderWindow.render();
+    publish();
+  };
 
   ui.setReadout('volume', `${meta.field}, ${meta.dims.join(' x ')} (${(volumeData.data.length / 1e6).toFixed(1)}M cells)`);
+  ui.setReadout('arrows', `on (${arrows.meta.count})`);
   ui.setReadout('GPU', describeGpu(gl));
   ui.setReadout('triangles', probe.counts.triangles);
   ui.setReadout('camera radius m', Math.round(orbit.radius));

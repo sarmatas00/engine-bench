@@ -11,6 +11,7 @@
  */
 import * as THREE from 'three';
 import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
+import {mergeGeometries} from 'three/addons/utils/BufferGeometryUtils.js';
 import {mountChrome} from '@lib/chrome';
 import {COLORMAP_GLSL} from '@lib/colormap';
 import {
@@ -18,7 +19,7 @@ import {
   instrumentGlObjects, loadFlagshipGeometry, makeFrameSync, percentile, type FlagshipBundle,
 } from '@lib/flagship-geometry';
 import {
-  DEFAULT_OPACITY, VOLUME_MAX_SAMPLES, VOLUME_STEP_M, loadFlagshipVolume, opacityNodes, volumeBox,
+  ARROW_COLOUR, ARROW_METRES_PER_MS, ARROW_SHAPE, DEFAULT_OPACITY, VOLUME_MAX_SAMPLES, VOLUME_STEP_M, loadFlagshipVolume, opacityNodes, volumeBox,
   type FlagshipVolume, type VolumeProbe,
 } from '@lib/flagship-volume';
 import {attachContextLoss, createBenchmarkDriver, type CameraPose} from '@lib/scientific-probes';
@@ -114,6 +115,28 @@ void main() {
   gl_FragColor = texture(uColor, vUv);
 }`;
 
+/**
+ * vtkArrowSource's arrow, rebuilt: a capped shaft from 0 to 1 - tipLength along
+ * +x, a cone over the rest to 1, then the whole arrow shifted back by
+ * 0.5 - tipLength/2, as ArrowSource.js does. This is the part vtk.js gives for
+ * free and Three.js does not have.
+ */
+function arrowGeometry(): THREE.BufferGeometry {
+  const {shaftRadius, shaftResolution, tipRadius, tipResolution, tipLength} = ARROW_SHAPE;
+  const shaft = new THREE.CylinderGeometry(shaftRadius, shaftRadius, 1 - tipLength, shaftResolution);
+  shaft.translate(0, (1 - tipLength) / 2, 0);
+  const tip = new THREE.ConeGeometry(tipRadius, tipLength, tipResolution);
+  tip.translate(0, 1 - tipLength / 2, 0);
+  const merged = mergeGeometries([shaft.toNonIndexed(), tip.toNonIndexed()])!;
+  shaft.dispose(); tip.dispose();
+  merged.rotateZ(-Math.PI / 2);                  // +y (Three.js's axis) onto +x (vtk.js's)
+  merged.translate(-0.5 + tipLength / 2, 0, 0);
+  merged.computeVertexNormals();
+  return merged;
+}
+
+/** Replaced by main() once the scene is up. */
+let arrowsHandler: (visible: boolean) => void = () => {};
 /** Replaced by main() once the scene is up. */
 let benchmarkHandler: () => Promise<void> =
   async () => { ui.setReadout('benchmark', 'still loading, try again in a moment'); };
@@ -124,8 +147,11 @@ const ui = mountChrome({
   expect: 'the Delft district with a synthetic wind-speed field as a translucent volume around the buildings, orbiting once.',
   claim: 'vtk.js should do best on volume data, the case the geometry axis could not test',
   decision: 'whether either renderer struggles with an 8.7-million-cell volume drawn together with a 10,356-part city.',
-  controls: [{kind: 'button', id: 'run-benchmark', label: 'Run benchmark (210 frames)',
-              onClick: () => { void benchmarkHandler(); }}],
+  controls: [
+    {kind: 'toggle', id: 'arrows', label: 'Wind arrows', value: true, onChange: v => arrowsHandler(v)},
+    {kind: 'button', id: 'run-benchmark', label: 'Run benchmark (210 frames)',
+     onClick: () => { void benchmarkHandler(); }},
+  ],
   findings: [
     'The field is SYNTHETIC: real Delft buildings, analytic wind. Its own source says "Not a fluid solver". '
     + 'It is here as a realistically sized volume, not as a flow result.',
@@ -135,6 +161,9 @@ const ui = mountChrome({
     + `needs ~1,417 steps of ${VOLUME_STEP_M} m. Page 17 is given the same cap.`,
     'The redraws/sec readout is NOT comparable with page 17: vtk.js redraws more often while dragging and at '
     + 'reduced quality. Use the Run benchmark button to compare the two pages.',
+    'Wind arrows are code we would own here: vtkArrowSource\'s shape rebuilt from cylinder and cone, and one '
+    + 'InstancedMesh with a matrix per arrow turned and sized from the velocity field. Page 17 gets both from vtk.js. '
+    + 'The benchmark measures whatever the toggle shows, and the readout says which.',
   ],
 });
 // First readout row, so every pasted summary names the renderer that produced it.
@@ -196,6 +225,36 @@ async function main(): Promise<void> {
 
   const opaque = new THREE.Scene();
   opaque.add(new THREE.Mesh(geometry, material));
+
+  // --- wind arrows: one instanced mesh, in the opaque pass --------------------
+  // Opaque, like vtk.js's glyph actor, so the volume stops at an arrow the same
+  // way it stops at a building on both pages.
+  const {arrows} = volumeData;
+  const arrowGeo = arrowGeometry();
+  const arrowMaterial = new THREE.MeshLambertMaterial();
+  arrowMaterial.color.setRGB(...ARROW_COLOUR);
+  const arrowMesh = new THREE.InstancedMesh(arrowGeo, arrowMaterial, arrows.meta.count);
+  {
+    const xAxis = new THREE.Vector3(1, 0, 0);
+    const dir = new THREE.Vector3();
+    const at = new THREE.Vector3();
+    const turn = new THREE.Quaternion();
+    const size = new THREE.Vector3();
+    const m = new THREE.Matrix4();
+    for (let i = 0; i < arrows.meta.count; i++) {
+      dir.fromArray(arrows.vectors, i * 3);
+      // vtkGlyph3DMapper's SCALE_BY_MAGNITUDE: uniform scale |v| * factor.
+      const length = dir.length() * ARROW_METRES_PER_MS;
+      turn.setFromUnitVectors(xAxis, dir.normalize());
+      m.compose(at.fromArray(arrows.positions, i * 3), turn, size.setScalar(length));
+      arrowMesh.setMatrixAt(i, m);
+    }
+    arrowMesh.instanceMatrix.needsUpdate = true;
+  }
+  // The arrows span the whole 2 km domain; one bounding sphere per instance
+  // set is fine, and culling the lot at a grazing angle would hide them all.
+  arrowMesh.frustumCulled = false;
+  opaque.add(arrowMesh);
   opaque.add(camera);
   opaque.add(new THREE.AmbientLight(0xffffff, 0.9));
 
@@ -347,6 +406,7 @@ async function main(): Promise<void> {
       stepMetres: VOLUME_STEP_M, maxSamples: VOLUME_MAX_SAMPLES, opacityScale: DEFAULT_OPACITY,
       opacityCorrection: 'none: a per sample',
     },
+    arrows: {visible: arrowMesh.visible, count: arrows.meta.count},
     resources: {
       buffers: counts.buffers, textures: counts.textures,
       renderTargets: counts.renderTargets, listeners, observers,
@@ -373,6 +433,7 @@ async function main(): Promise<void> {
       resizeObserver.disconnect(); controls.dispose();
       material.dispose(); geometry.dispose();
       volumeMaterial.dispose(); boxGeometry.dispose(); texture.dispose();
+      arrowMesh.dispose(); arrowGeo.dispose(); arrowMaterial.dispose();
       blitMaterial.dispose(); blitGeometry.dispose(); opaqueTarget.dispose();
       renderer.dispose();
     },
@@ -383,6 +444,7 @@ async function main(): Promise<void> {
   });
 
   function publish(): void {
+    probe.arrows = {visible: arrowMesh.visible, count: arrows.meta.count};
     probe.lens = {fovDeg: camera.fov, aspect: camera.aspect,
                   surface: [gl.drawingBufferWidth, gl.drawingBufferHeight]};
     probe.resources = {
@@ -418,8 +480,15 @@ async function main(): Promise<void> {
   }
 
   benchmarkHandler = runAndReport;
+  arrowsHandler = (visible: boolean) => {
+    arrowMesh.visible = visible;
+    ui.setReadout('arrows', visible ? `on (${arrows.meta.count})` : 'off');
+    renderScene();
+    publish();
+  };
 
   ui.setReadout('volume', `${meta.field}, ${meta.dims.join(' x ')} (${(volumeData.data.length / 1e6).toFixed(1)}M cells)`);
+  ui.setReadout('arrows', `on (${arrows.meta.count})`);
   ui.setReadout('GPU', describeGpu(gl));
   ui.setReadout('triangles', probe.counts.triangles);
   ui.setReadout('camera radius m', Math.round(orbit.radius));
