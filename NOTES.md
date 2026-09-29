@@ -1165,8 +1165,8 @@ are written as the field minimum, which both opacity functions map to zero.
   default, so at a 2 m step it composites a denser volume than the same transfer
   function in page 14's march, saturates rays sooner and stops earlier. Page 17
   sets `setScalarOpacityUnitDistance(0, 2)`, making the correction the identity.
-  **Pages 13/14 do not**, so on those pages vtk.js was drawing a denser volume
-  than Three.js and doing less work per ray for it. Not re-measured here.
+  Pages 13/14 had the same mismatch; page 13 was fixed and re-measured on
+  2026-09-29 and it made no measurable difference to frame time (see below).
 - **pages 13/14's opacity (0.3) turns this field into a lid.** Median speed sits
   at 77% of the range, so a sample carries ~0.10 opacity and a ray saturates
   after ~40 samples (80 m). The volume drew as opaque orange hiding the whole
@@ -1211,3 +1211,38 @@ existed to check; on this field and this machine it does not hold. What still
 separates the two is what the spike decided on: page 18's volume is page 14's
 hand-written ray marcher, which we would own, and vtk.js's is a library call.
 One Apple GPU; any other is unmeasured.
+
+## Page 13's opacity mismatch, fixed and re-measured (2026-09-29)
+
+Page 13 now sets `setScalarOpacityUnitDistance(0, sampleDistance)`, as page 17
+does, so vtk.js composites the same opacity per sample as page 14's shader.
+Before, it applied `1-(1-a)^2` per 2 m sample and drew a denser volume.
+
+**Frame time did not move.** `BENCH_RASTERIZER=metal bun run
+measure:scientific`, 3 interleaved cold runs per renderer per session, Apple M4:
+
+~~~
+                         vtk.js cpu p50 (ms)     vtk.js gpu p50 (ms)     Three.js cpu p50 (ms)
+before the fix           5.5 / 4.8 / 4.8         6.34 / 6.23 / 5.76      4.6 / 5.0 / 4.8
+after, session 1         5.4 / 5.3 / 4.4         6.00 / 6.31 / 5.61      5.0 / 4.8 / 4.8
+after, session 2         5.2 / 5.1 / 4.6         6.14 / 5.91 / 6.22      4.8 / 4.7 / 5.2
+~~~
+
+The change sits well inside the run-to-run spread (vtk.js 13-23% within a
+session), so the published 13/14 result stands: no frame-time winner on that
+scene. At opacity 0.3 over a 350 m tile the smoke rays rarely saturate, which
+is why the density difference cost almost nothing there, unlike flagship's
+139 m-deep volume. Records: `.cache/sessions/2026-09-29T12-00-44-319Z.json`
+(before), `...12-02-01-558Z.json` and `...12-02-43-987Z.json` (after), all
+three resource-gated and accepted.
+
+**The occlusion parity pins moved, for vtk.js only**, and were re-pinned as the
+test asks: 1.66/1.31/1.31/1.55 -> 1.94/1.40/1.44/1.67 (mean 1.46 -> 1.61),
+identical on chromium and firefox. Three.js is unchanged at 1.75, so the
+cross-page gap narrowed from 1.20 to 1.09: the two renderers now occlude more
+alike, which is what matching the opacity should do. All 26 parity tests pass.
+
+**`measure:scientific` can now drive the GPU.** `BENCH_RASTERIZER=metal` swaps
+the SwiftShader flags for ANGLE Metal and names the rasterizer in the record.
+The Metal pass in the measurements doc was driven by hand and its samples were
+lost; these three sessions are the first hardware runs with a raw record.

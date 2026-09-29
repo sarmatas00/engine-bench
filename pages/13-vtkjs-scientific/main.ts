@@ -810,6 +810,11 @@ function build(ui: Ui, bundle: ScientificBundle, heatValues: Float32Array): void
   const volume = vtkVolume.newInstance(); volume.setMapper(volumeMapper);
   volume.getProperty().setRGBTransferFunction(0, ctf);
   volume.getProperty().setScalarOpacity(0, ofun);
+  // Unit distance = step, so vtk.js's opacity correction 1-(1-a)^(step/unit)
+  // is the identity and each sample carries the transfer function's opacity,
+  // as page 14's shader does. At the default unit of 1 this page composited a
+  // denser volume than page 14 and stopped its rays sooner (found on page 17).
+  volume.getProperty().setScalarOpacityUnitDistance(0, volumeMapper.getSampleDistance());
   renderer.addVolume(volume);
 
   // The slice actor renders its own single-layer image, resampled at the exact

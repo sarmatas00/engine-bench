@@ -71,7 +71,7 @@ const ui = mountChrome({
     'Opacity per sample is matched to page 18 on purpose. vtk.js corrects opacity for step length, '
     + '1-(1-a)^(step/unit distance), with a unit distance of 1 m by default; page 18 applies a per sample, as page 14 does. '
     + 'At a 2 m step that made vtk.js markedly more opaque, so its rays saturated and stopped sooner: less work, '
-    + 'not a faster renderer. This page sets the unit distance to the step. Pages 13/14 do not.',
+    + 'not a faster renderer. This page sets the unit distance to the step, and so does page 13 since 2026-09-29.',
     'While you DRAG, vtk.js draws the volume into a smaller viewport with coarser samples (its '
     + 'interaction mode). The live redraws/sec therefore measures cheaper frames than page 18 draws. '
     + 'The Run benchmark button renders at full quality on both pages and is the comparison.',
