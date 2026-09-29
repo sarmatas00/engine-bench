@@ -1,0 +1,16 @@
+{
+  "count": 2243,
+  "layout": "x, y, z, vx, vy, vz as float32 per arrow",
+  "layer": 28,
+  "heightNapM": 14.762565511140892,
+  "strideCells": 5,
+  "spacingM": [
+    40.0,
+    40.0
+  ],
+  "skippedSolid": 257,
+  "speedRange": [
+    1.407907247543335,
+    7.915997505187988
+  ]
+}

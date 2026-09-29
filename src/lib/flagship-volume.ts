@@ -36,11 +36,47 @@ export type FlagshipVolumeJson = {
   source: {file: string; sha256: string; object: string; dtccCore: {version: string; commit: string}};
 };
 
+export type FlagshipArrowsJson = {
+  count: number;
+  layout: string;
+  layer: number;
+  heightNapM: number;
+  strideCells: number;
+  spacingM: [number, number];
+  skippedSolid: number;
+  speedRange: [number, number];
+};
+
+export type FlagshipArrows = {
+  meta: FlagshipArrowsJson;
+  /** Arrow i's base is at positions[3i..3i+3], its wind vector at vectors[3i..3i+3]. */
+  positions: Float32Array;
+  vectors: Float32Array;
+};
+
 export type FlagshipVolume = {
   meta: FlagshipVolumeJson;
   /** x varies fastest, then y, then z: what vtkImageData and Data3DTexture both read. */
   data: Float32Array;
+  arrows: FlagshipArrows;
 };
+
+/**
+ * Wind arrows: one layer at ~15 m NAP, one arrow per 40 m (extract_volume.py).
+ *
+ * The shape is vtkArrowSource's, with thicker shaft and tip so an arrow reads
+ * at the orbit's 2 km distance (at vtk.js's 0.03/0.1 the shaft is under a
+ * pixel). Page 18 builds the same shape from these numbers; page 17 hands them
+ * to vtkArrowSource. Length is ARROW_METRES_PER_MS times the local wind speed,
+ * so the fastest wind (7.9 m/s) draws ~36 m, just under the 40 m spacing.
+ */
+export const ARROW_SHAPE = {
+  tipResolution: 6, tipRadius: 0.15, tipLength: 0.35,
+  shaftResolution: 6, shaftRadius: 0.05,
+} as const;
+export const ARROW_METRES_PER_MS = 4.5;
+/** Linear RGB, the same triple on both pages. */
+export const ARROW_COLOUR: [number, number, number] = [0.95, 0.95, 0.95];
 
 /**
  * The ray-marching step in metres, pages 13/14's value. Frame time is roughly
@@ -104,6 +140,9 @@ export type VolumeProbe = Omit<GeometryProbe, 'axis' | 'volumeField' | 'selected
      *  assumed equal: see page 17's setScalarOpacityUnitDistance. */
     opacityCorrection: string;
   };
+  /** Whether wind arrows are drawn. Frame times with and without are different
+   *  workloads, so every benchmark result is read against this. */
+  arrows: {visible: boolean; count: number};
 };
 
 const DATA = 'data/flagship/volume';
@@ -143,7 +182,7 @@ export function checkVolumeJson(meta: FlagshipVolumeJson, byteLength: number): v
  */
 export async function loadFlagshipVolume(): Promise<FlagshipVolume> {
   const manifest = JSON.parse(new TextDecoder().decode(await fetchBytes(assetUrl(`${DATA}/manifest.json`)))) as {
-    axis: string; grid: string; files: Record<string, VerifiedFile>;
+    axis: string; grid: string; arrows: string; files: Record<string, VerifiedFile>;
   };
   if (manifest.axis !== 'volume') throw new Error(`flagship volume manifest: axis ${manifest.axis}`);
   const need = (name: string): VerifiedFile => {
@@ -159,5 +198,33 @@ export async function loadFlagshipVolume(): Promise<FlagshipVolume> {
   const bin = await fetchBytes(assetUrl(`${DATA}/${binName}`));
   await verified(bin, need(binName), `flagship ${binName}`);
   checkVolumeJson(meta, bin.byteLength);
-  return {meta, data: new Float32Array(bin.buffer, bin.byteOffset, bin.byteLength / 4)};
+
+  const arrowsJsonBytes = await fetchBytes(assetUrl(`${DATA}/${manifest.arrows}`));
+  await verified(arrowsJsonBytes, need(manifest.arrows), `flagship ${manifest.arrows}`);
+  const arrowsMeta = JSON.parse(new TextDecoder().decode(arrowsJsonBytes)) as FlagshipArrowsJson;
+  const arrowsBinName = manifest.arrows.replace(/\.json$/, '.f32');
+  const arrowsBin = await fetchBytes(assetUrl(`${DATA}/${arrowsBinName}`));
+  await verified(arrowsBin, need(arrowsBinName), `flagship ${arrowsBinName}`);
+
+  return {
+    meta,
+    data: new Float32Array(bin.buffer, bin.byteOffset, bin.byteLength / 4),
+    arrows: splitArrowRows(arrowsMeta, new Float32Array(arrowsBin.buffer, arrowsBin.byteOffset, arrowsBin.byteLength / 4)),
+  };
+}
+
+/** (x, y, z, vx, vy, vz) rows into the two arrays both renderers take. */
+export function splitArrowRows(meta: FlagshipArrowsJson, rows: Float32Array): FlagshipArrows {
+  if (rows.length !== meta.count * 6) {
+    throw new Error(`arrows: ${meta.count} arrows need ${meta.count * 6} floats, file has ${rows.length}`);
+  }
+  const positions = new Float32Array(meta.count * 3);
+  const vectors = new Float32Array(meta.count * 3);
+  for (let i = 0; i < meta.count; i++) {
+    for (let c = 0; c < 3; c++) {
+      positions[i * 3 + c] = rows[i * 6 + c];
+      vectors[i * 3 + c] = rows[i * 6 + 3 + c];
+    }
+  }
+  return {meta, positions, vectors};
 }

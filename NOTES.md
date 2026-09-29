@@ -1246,3 +1246,47 @@ alike, which is what matching the opacity should do. All 26 parity tests pass.
 the SwiftShader flags for ANGLE Metal and names the rasterizer in the record.
 The Metal pass in the measurements doc was driven by hand and its samples were
 lost; these three sessions are the first hardware runs with a raw record.
+
+## Wind arrows on the volume pages, 17 and 18 (2026-09-29)
+
+Anders asked whether streamlines or arrows (glyphs) come out of the box. In
+vtk.js 36.12.1 both do: `vtkGlyph3DMapper` + `vtkArrowSource` for arrows,
+`vtkImageStreamline` for tracing through a grid. Three.js 0.185.1 has neither.
+Streamlines are a wash for us anyway: flagship already carries Core-computed
+streamlines per snapshot, and drawing precomputed lines is easy on both (pages
+13/14 do it). Arrows are where vtk.js saves real work, so both pages now draw
+them, behind a **Wind arrows** toggle that is on by default.
+
+`extract_volume.py` samples one layer of the `velocity` field: the grid layer
+nearest 15 m NAP (the generator's own `height_15m` height; the cell centre is
+14.8 m), every 5th cell in x and y, so one arrow per 40 m. Solid cells are
+skipped rather than drawn at zero length: **2,243 arrows**, 257 skipped.
+`arrows.f32` is (x, y, z, vx, vy, vz) float32 per arrow in the geometry
+artifact's local frame; 53 KB. Re-running the extractor left
+`speed.grid.f32` byte-identical.
+
+- **Page 17** hands the points and wind vectors to `vtkGlyph3DMapper`
+  (orientation by direction, uniform scale by magnitude times 4.5 m per m/s)
+  with a `vtkArrowSource`. That is the whole implementation.
+- **Page 18** rebuilds `vtkArrowSource`'s shape from its source (capped
+  cylinder shaft along +x to 1 - tipLength, cone to 1, shifted back by
+  0.5 - tipLength/2), then draws one `InstancedMesh` with a matrix per arrow
+  turned and sized the same way. It sits in the opaque pass, so the volume
+  stops at an arrow exactly as vtk.js's glyph actor makes it.
+- Both take shape, colour and scale from `flagship-volume.ts`. The shaft and
+  tip are thicker than vtk.js's defaults (0.05/0.15 against 0.03/0.10):
+  at the 2 km orbit the default shaft is under a pixel.
+
+**The arrows cost nothing measurable on either renderer.** Apple M4, ANGLE
+Metal, interleaved cold contexts, 180 frames at 1280x720:
+
+~~~
+                           vtk.js (17)                 Three.js (18)
+                     cpu p50       gpu p50        cpu p50      gpu p50
+arrows on, 6 runs   9.9 - 10.4    8.46 - 8.75    6.9 - 7.3    5.79 - 6.04
+arrows off, 3 runs  10.0 - 10.4   8.40 - 8.66    7.0 - 7.2    5.50 - 5.82
+~~~
+
+The arrows-off runs also land inside the published volume-only ranges
+(9.20-11.40 and 6.70-8.00), so that result reproduces. One arrows-off Three.js
+run kept only 23 of 180 GPU samples; its CPU figure is unaffected.

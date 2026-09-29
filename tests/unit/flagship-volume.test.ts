@@ -2,8 +2,8 @@ import {describe, expect, test} from 'bun:test';
 import {readFileSync} from 'node:fs';
 import {resolve} from 'node:path';
 import {
-  VOLUME_MAX_SAMPLES, VOLUME_STEP_M, cellIndex, checkVolumeJson, opacityNodes, volumeBox,
-  type FlagshipVolumeJson,
+  ARROW_METRES_PER_MS, VOLUME_MAX_SAMPLES, VOLUME_STEP_M, cellIndex, checkVolumeJson, opacityNodes,
+  splitArrowRows, volumeBox, type FlagshipArrowsJson, type FlagshipVolumeJson,
 } from '@lib/flagship-volume';
 
 const shipped = JSON.parse(readFileSync(
@@ -44,5 +44,23 @@ describe('flagship volume', () => {
     expect(() => checkVolumeJson(shipped, bytes)).not.toThrow();
     expect(() => checkVolumeJson(shipped, bytes - 4)).toThrow(/needs/);
     expect(() => checkVolumeJson({...shipped, order: 'z-fastest' as 'x-fastest'}, bytes)).toThrow(/order/);
+  });
+
+  test('arrow rows split into positions and wind vectors, and a short file is refused', () => {
+    const meta = {count: 2} as FlagshipArrowsJson;
+    const rows = new Float32Array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+    const {positions, vectors} = splitArrowRows(meta, rows);
+    expect([...positions]).toEqual([1, 2, 3, 7, 8, 9]);
+    expect([...vectors]).toEqual([4, 5, 6, 10, 11, 12]);
+    expect(() => splitArrowRows(meta, rows.subarray(0, 11))).toThrow(/need 12 floats/);
+  });
+
+  test('the shipped arrows fit their 40 m spacing and match their file', () => {
+    const dir = resolve(import.meta.dirname, '../../public/data/flagship/volume');
+    const arrows = JSON.parse(readFileSync(resolve(dir, 'arrows.json'), 'utf8')) as FlagshipArrowsJson;
+    const bytes = readFileSync(resolve(dir, 'arrows.f32'));
+    expect(bytes.byteLength).toBe(arrows.count * 6 * 4);
+    // The fastest arrow stays shorter than the gap to its neighbour.
+    expect(arrows.speedRange[1] * ARROW_METRES_PER_MS).toBeLessThan(arrows.spacingM[0]);
   });
 });

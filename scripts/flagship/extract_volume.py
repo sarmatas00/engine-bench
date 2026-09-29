@@ -31,6 +31,8 @@ REPO = Path(__file__).resolve().parents[2]
 GEOMETRY = REPO / "public" / "data" / "flagship"
 OUT = GEOMETRY / "volume"
 FIELD = "speed"          # the field pages 13 and 14 open on
+ARROW_HEIGHT_NAP_M = 15.0   # the generator's own height_15m slice height
+ARROW_STRIDE_CELLS = 5      # one arrow per 5x5 cells: 40 m apart on the 8 m grid
 DOMAIN_ID = "synthetic-flow-domain"
 GRID_KEY = "air_grid"
 
@@ -129,6 +131,48 @@ def check_order(mask_xyz: np.ndarray, grid, probes: np.ndarray) -> dict:
     }
 
 
+def sample_arrows(velocity_xyz: np.ndarray, air_xyz: np.ndarray, grid, local_offset) -> tuple[np.ndarray, dict]:
+    """One horizontal layer of wind arrows, sampled from the velocity field.
+
+    The layer is the grid's z layer whose centre is nearest ARROW_HEIGHT_NAP_M,
+    every ARROW_STRIDE_CELLS cells in x and y, starting mid-block so the
+    lattice sits centred in the domain. Solid cells are skipped, not zeroed: an
+    arrow of length zero inside a building would still be an instance to draw.
+
+    Rows are (x, y, z, vx, vy, vz) float32 at cell centres, in the geometry
+    artifact's local frame. Both pages draw exactly these rows.
+    """
+    nz, ny, nx = air_xyz.shape
+    b = grid.bounds
+    centres_z = b.zmin + (np.arange(nz) + 0.5) * grid.zstep
+    k = int(np.argmin(np.abs(centres_z - ARROW_HEIGHT_NAP_M)))
+    first = ARROW_STRIDE_CELLS // 2
+    js, is_ = np.meshgrid(np.arange(first, ny, ARROW_STRIDE_CELLS),
+                          np.arange(first, nx, ARROW_STRIDE_CELLS), indexing="ij")
+    js, is_ = js.ravel(), is_.ravel()
+    keep = air_xyz[k, js, is_]
+    js, is_ = js[keep], is_[keep]
+    ox, oy, oz = local_offset
+    rows = np.empty((len(js), 6), dtype=np.float32)
+    rows[:, 0] = b.xmin + (is_ + 0.5) * grid.xstep - ox
+    rows[:, 1] = b.ymin + (js + 0.5) * grid.ystep - oy
+    rows[:, 2] = centres_z[k] - oz
+    rows[:, 3:6] = velocity_xyz[k, js, is_]
+    if not np.isfinite(rows).all():
+        raise SystemExit("arrow rows contain NaN: the air mask and velocity disagree")
+    speed = np.linalg.norm(rows[:, 3:6], axis=1)
+    return rows, {
+        "count": int(len(rows)),
+        "layout": "x, y, z, vx, vy, vz as float32 per arrow",
+        "layer": k,
+        "heightNapM": float(centres_z[k]),
+        "strideCells": ARROW_STRIDE_CELLS,
+        "spacingM": [ARROW_STRIDE_CELLS * grid.xstep, ARROW_STRIDE_CELLS * grid.ystep],
+        "skippedSolid": int((~keep).sum()),
+        "speedRange": [float(speed.min()), float(speed.max())],
+    }
+
+
 def core_revision() -> str:
     import dtcc_core
     from importlib.metadata import version, PackageNotFoundError
@@ -190,8 +234,16 @@ def main() -> None:
     # Values sit at CELL CENTRES, so node 0 is half a step in from the bounds.
     origin = [b.xmin + grid.xstep / 2 - ox, b.ymin + grid.ystep / 2 - oy, b.zmin + grid.zstep / 2 - z0]
 
+    velocity = np.asarray(by_name["velocity"].values, dtype=np.float32)
+    if velocity.shape != (nx * ny * nz, 3):
+        raise SystemExit(f"velocity: {velocity.shape}, expected (cells, 3)")
+    velocity_xyz = np.ascontiguousarray(velocity.reshape(ny, nx, nz, 3).transpose(2, 0, 1, 3))
+    arrow_rows, arrows_meta = sample_arrows(velocity_xyz, air_xyz, grid, (ox, oy, z0))
+
     args.out.mkdir(parents=True, exist_ok=True)
     (args.out / "speed.grid.f32").write_bytes(speed.astype("<f4").tobytes())
+    (args.out / "arrows.f32").write_bytes(arrow_rows.astype("<f4").tobytes())
+    (args.out / "arrows.json").write_text(json.dumps(arrows_meta, indent=2) + "\n")
     meta = {
         "field": FIELD,
         "unit": "m/s",
@@ -225,11 +277,13 @@ def main() -> None:
     manifest = {
         "axis": "volume",
         "grid": "speed.grid.json",
-        "files": {name: verified(name) for name in ("speed.grid.json", "speed.grid.f32")},
+        "arrows": "arrows.json",
+        "files": {name: verified(name) for name in
+                  ("speed.grid.json", "speed.grid.f32", "arrows.json", "arrows.f32")},
     }
     (args.out / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
-    print(json.dumps({k: meta[k] for k in ("dims", "origin", "spacing", "range", "maskedCells", "orderCheck")},
-                     indent=2))
+    print(json.dumps({**{k: meta[k] for k in ("dims", "origin", "spacing", "range", "maskedCells", "orderCheck")},
+                      "arrows": arrows_meta}, indent=2))
 
 
 if __name__ == "__main__":
