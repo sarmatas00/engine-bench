@@ -28,6 +28,7 @@ import vtkColorTransferFunction from '@kitware/vtk.js/Rendering/Core/ColorTransf
 import vtkPiecewiseFunction from '@kitware/vtk.js/Common/DataModel/PiecewiseFunction';
 import vtkArrowSource from '@kitware/vtk.js/Filters/Sources/ArrowSource';
 import vtkGlyph3DMapper from '@kitware/vtk.js/Rendering/Core/Glyph3DMapper';
+import vtkImageStreamline from '@kitware/vtk.js/Filters/General/ImageStreamline';
 
 import {mountChrome} from '@lib/chrome';
 import {colormap} from '@lib/colormap';
@@ -36,7 +37,8 @@ import {
   instrumentGlObjects, makeFrameSync, percentile, loadFlagshipGeometry, type FlagshipBundle,
 } from '@lib/flagship-geometry';
 import {
-  ARROW_COLOUR, ARROW_METRES_PER_MS, ARROW_SHAPE, DEFAULT_OPACITY, VOLUME_MAX_SAMPLES, VOLUME_STEP_M, loadFlagshipVolume, opacityNodes,
+  ARROW_COLOUR, ARROW_METRES_PER_MS, ARROW_SHAPE, DEFAULT_OPACITY, STREAMLINE_COLOUR, STREAMLINE_MAX_STEPS,
+  STREAMLINE_STEP_S, VOLUME_MAX_SAMPLES, VOLUME_STEP_M, loadFlagshipVolume, opacityNodes,
   type FlagshipVolume, type VolumeProbe,
 } from '@lib/flagship-volume';
 import {attachContextLoss, createBenchmarkDriver, type CameraPose} from '@lib/scientific-probes';
@@ -59,6 +61,8 @@ function triangleCells(indices: Uint32Array): Uint32Array {
 /** Replaced by main() once the scene is up. */
 let arrowsHandler: (visible: boolean) => void = () => {};
 /** Replaced by main() once the scene is up. */
+let streamlinesHandler: (visible: boolean) => void = () => {};
+/** Replaced by main() once the scene is up. */
 let benchmarkHandler: () => Promise<void> =
   async () => { ui.setReadout('benchmark', 'still loading, try again in a moment'); };
 
@@ -70,6 +74,7 @@ const ui = mountChrome({
   decision: 'whether either renderer struggles with an 8.7-million-cell volume drawn together with a 10,356-part city.',
   controls: [
     {kind: 'toggle', id: 'arrows', label: 'Wind arrows', value: true, onChange: v => arrowsHandler(v)},
+    {kind: 'toggle', id: 'streamlines', label: 'Streamlines', value: true, onChange: v => streamlinesHandler(v)},
     {kind: 'button', id: 'run-benchmark', label: 'Run benchmark (210 frames)',
      onClick: () => { void benchmarkHandler(); }},
   ],
@@ -88,6 +93,9 @@ const ui = mountChrome({
     'Wind arrows come from vtk.js itself: vtkArrowSource for the shape and vtkGlyph3DMapper to place, turn and '
     + 'size one per point from the velocity field. Page 18 builds the same thing by hand. The benchmark measures '
     + 'whatever the toggle shows, and the readout says which.',
+    'Streamlines are traced in the browser by vtk.js\'s own vtkImageStreamline, from 92 seeds through the '
+    + 'velocity field (full 8 m horizontal resolution, every 4th layer up to 60 m). Page 18 has to port that '
+    + 'tracer. Lines are one pixel wide on both: WebGL implementations may ignore any other width.',
   ],
 });
 // First readout row, so every pasted summary names the renderer that produced it.
@@ -228,6 +236,38 @@ async function main(): Promise<void> {
   arrowActor.getProperty().setColor(...ARROW_COLOUR);
   renderer.addActor(arrowActor);
 
+  // --- streamlines: vtk.js's own tracer ---------------------------------------
+  const {velocity} = volumeData;
+  const velImage = vtkImageData.newInstance();
+  velImage.setDimensions(velocity.meta.dims);
+  velImage.setOrigin(velocity.meta.origin);
+  velImage.setSpacing(velocity.meta.spacing);
+  velImage.getPointData().setVectors(vtkDataArray.newInstance({
+    name: 'velocity', values: velocity.data, numberOfComponents: 3,
+  }));
+  const seedPoints = vtkPolyData.newInstance();
+  seedPoints.getPoints().setData(Float32Array.from(velocity.meta.seeds.flat()), 3);
+  const tracer = vtkImageStreamline.newInstance();
+  tracer.setIntegrationStep(STREAMLINE_STEP_S);
+  tracer.setMaximumNumberOfSteps(STREAMLINE_MAX_STEPS);
+  tracer.setInputData(velImage, 0);
+  tracer.setInputData(seedPoints, 1);
+  const traceStart = performance.now();
+  const lines = tracer.getOutputData();
+  const traceMs = performance.now() - traceStart;
+  const lineMapper = vtkMapper.newInstance();
+  lineMapper.setInputData(lines);
+  lineMapper.setScalarVisibility(false);
+  const lineActor = vtkActor.newInstance();
+  lineActor.setMapper(lineMapper);
+  lineActor.getProperty().setColor(...STREAMLINE_COLOUR);
+  lineActor.getProperty().setLighting(false);
+  renderer.addActor(lineActor);
+  const streamlineStats = () => ({
+    visible: lineActor.getVisibility(), lines: lines.getNumberOfLines(),
+    points: lines.getNumberOfPoints(), traceMs: Math.round(traceMs),
+  });
+
   const renderFrame = (pose: CameraPose & {eye?: [number, number, number]}) => {
     const eye = pose.eye!;
     const camera = renderer.getActiveCamera();
@@ -263,6 +303,7 @@ async function main(): Promise<void> {
       opacityCorrection: `1-(1-a)^(${volumeMapper.getSampleDistance()}/${volume.getProperty().getScalarOpacityUnitDistance(0)})`,
     },
     arrows: {visible: arrowActor.getVisibility(), count: arrows.meta.count},
+    streamlines: streamlineStats(),
     resources: {
       buffers: counts.buffers, textures: counts.textures,
       renderTargets: counts.renderTargets, listeners: 0, observers: 0,
@@ -272,6 +313,7 @@ async function main(): Promise<void> {
 
   function publish(): void {
     probe.arrows = {visible: arrowActor.getVisibility(), count: arrows.meta.count};
+    probe.streamlines = streamlineStats();
     probe.lens = {fovDeg: renderer.getActiveCamera().getViewAngle(),
                   aspect: gl ? gl.drawingBufferWidth / gl.drawingBufferHeight : 1,
                   surface: gl ? [gl.drawingBufferWidth, gl.drawingBufferHeight] : [0, 0]};
@@ -301,6 +343,7 @@ async function main(): Promise<void> {
       mapper.delete(); actor.delete(); polyData.delete();
       volumeMapper.delete(); volume.delete(); image.delete();
       glyphMapper.delete(); arrowActor.delete(); arrowSource.delete(); arrowPoints.delete();
+      lineMapper.delete(); lineActor.delete(); tracer.delete(); seedPoints.delete(); velImage.delete();
     },
     onLost: () => {
       publish();
@@ -334,6 +377,12 @@ async function main(): Promise<void> {
   }
 
   benchmarkHandler = runAndReport;
+  streamlinesHandler = (visible: boolean) => {
+    lineActor.setVisibility(visible);
+    ui.setReadout('streamlines', visible ? `on (${lines.getNumberOfLines()})` : 'off');
+    renderWindow.render();
+    publish();
+  };
   arrowsHandler = (visible: boolean) => {
     arrowActor.setVisibility(visible);
     ui.setReadout('arrows', visible ? `on (${arrows.meta.count})` : 'off');
@@ -343,6 +392,8 @@ async function main(): Promise<void> {
 
   ui.setReadout('volume', `${meta.field}, ${meta.dims.join(' x ')} (${(volumeData.data.length / 1e6).toFixed(1)}M cells)`);
   ui.setReadout('arrows', `on (${arrows.meta.count})`);
+  ui.setReadout('streamlines', `on (${lines.getNumberOfLines()})`);
+  ui.setReadout('trace ms', Math.round(traceMs));
   ui.setReadout('GPU', describeGpu(gl));
   ui.setReadout('triangles', probe.counts.triangles);
   ui.setReadout('camera radius m', Math.round(orbit.radius));

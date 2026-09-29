@@ -54,12 +54,42 @@ export type FlagshipArrows = {
   vectors: Float32Array;
 };
 
+export type VelocityGridJson = {
+  dims: [number, number, number];
+  origin: [number, number, number];
+  spacing: [number, number, number];
+  order: 'x-fastest';
+  components: 3;
+  layersNapM: [number, number];
+  zStrideLayers: number;
+  solidCellsZeroed: number;
+  seeds: [number, number, number][];
+  seedSpacingM: number;
+};
+
+export type VelocityGrid = {
+  meta: VelocityGridJson;
+  /** Three components per node, x-fastest: node n's vector is data[3n..3n+3]. */
+  data: Float32Array;
+};
+
 export type FlagshipVolume = {
   meta: FlagshipVolumeJson;
   /** x varies fastest, then y, then z: what vtkImageData and Data3DTexture both read. */
   data: Float32Array;
   arrows: FlagshipArrows;
+  velocity: VelocityGrid;
 };
+
+/**
+ * Streamline integration, vtkImageStreamline's own defaults: a 1 s step and at
+ * most 1,000 steps per seed. Velocity is in m/s, so one step moves a point
+ * 1-8 m on this field. Both pages take these from here.
+ */
+export const STREAMLINE_STEP_S = 1;
+export const STREAMLINE_MAX_STEPS = 1000;
+/** Linear RGB for the lines, the same triple on both pages. */
+export const STREAMLINE_COLOUR: [number, number, number] = [0.45, 0.85, 1.0];
 
 /**
  * Wind arrows: one layer at ~15 m NAP, one arrow per 40 m (extract_volume.py).
@@ -143,6 +173,8 @@ export type VolumeProbe = Omit<GeometryProbe, 'axis' | 'volumeField' | 'selected
   /** Whether wind arrows are drawn. Frame times with and without are different
    *  workloads, so every benchmark result is read against this. */
   arrows: {visible: boolean; count: number};
+  /** Same for streamlines, plus what tracing them cost at load. */
+  streamlines: {visible: boolean; lines: number; points: number; traceMs: number};
 };
 
 const DATA = 'data/flagship/volume';
@@ -182,7 +214,7 @@ export function checkVolumeJson(meta: FlagshipVolumeJson, byteLength: number): v
  */
 export async function loadFlagshipVolume(): Promise<FlagshipVolume> {
   const manifest = JSON.parse(new TextDecoder().decode(await fetchBytes(assetUrl(`${DATA}/manifest.json`)))) as {
-    axis: string; grid: string; arrows: string; files: Record<string, VerifiedFile>;
+    axis: string; grid: string; arrows: string; velocity: string; files: Record<string, VerifiedFile>;
   };
   if (manifest.axis !== 'volume') throw new Error(`flagship volume manifest: axis ${manifest.axis}`);
   const need = (name: string): VerifiedFile => {
@@ -206,11 +238,111 @@ export async function loadFlagshipVolume(): Promise<FlagshipVolume> {
   const arrowsBin = await fetchBytes(assetUrl(`${DATA}/${arrowsBinName}`));
   await verified(arrowsBin, need(arrowsBinName), `flagship ${arrowsBinName}`);
 
+  const velJsonBytes = await fetchBytes(assetUrl(`${DATA}/${manifest.velocity}`));
+  await verified(velJsonBytes, need(manifest.velocity), `flagship ${manifest.velocity}`);
+  const velMeta = JSON.parse(new TextDecoder().decode(velJsonBytes)) as VelocityGridJson;
+  const velBinName = manifest.velocity.replace(/\.json$/, '.f32');
+  const velBin = await fetchBytes(assetUrl(`${DATA}/${velBinName}`));
+  await verified(velBin, need(velBinName), `flagship ${velBinName}`);
+  const nodes = velMeta.dims[0] * velMeta.dims[1] * velMeta.dims[2];
+  if (velMeta.order !== 'x-fastest' || velBin.byteLength !== nodes * 3 * 4) {
+    throw new Error(`velocity: ${velMeta.dims.join('x')}x3 float32 needs ${nodes * 12} bytes, file has ${velBin.byteLength}`);
+  }
+
   return {
     meta,
     data: new Float32Array(bin.buffer, bin.byteOffset, bin.byteLength / 4),
     arrows: splitArrowRows(arrowsMeta, new Float32Array(arrowsBin.buffer, arrowsBin.byteOffset, arrowsBin.byteLength / 4)),
+    velocity: {meta: velMeta, data: new Float32Array(velBin.buffer, velBin.byteOffset, velBin.byteLength / 4)},
   };
+}
+
+export type TracedLines = {
+  /** All points of all lines, xyz. */
+  positions: Float32Array;
+  /** Line i is points lineStarts[i] .. lineStarts[i+1]-1 (one extra entry at the end). */
+  lineStarts: Uint32Array;
+};
+
+/**
+ * Streamlines through a velocity grid: the Three.js side's own implementation,
+ * because Three.js has none. Page 17 uses vtkImageStreamline instead.
+ *
+ * A line-for-line port of vtkImageStreamline (vtk.js 36.12.1,
+ * Filters/General/ImageStreamline), INCLUDING its float32 scratch arrays, so
+ * the two produce the same points and tests/unit can require it: midpoint
+ * (RK2) steps of `step` seconds, trilinear velocity, a line ends when a sample
+ * leaves the image bounds (the node box plus half a cell) or after `maxSteps`, and the seed itself is not a point
+ * of its line. There is no stop at walls: a line that reaches a zero-velocity
+ * solid cell stalls there, on both pages alike.
+ */
+export function traceStreamlines(
+  grid: VelocityGrid, seeds: readonly (readonly number[])[], step: number, maxSteps: number,
+): TracedLines {
+  const [nx, ny, nz] = grid.meta.dims;
+  const origin = grid.meta.origin;
+  const spacing = grid.meta.spacing;
+  const ext = [nx - 1, ny - 1, nz - 1];
+  // vtkImageData.getBounds() in 36.12.1 is the node box widened by HALF A
+  // SPACING on every side, and the tracer's in-bounds test uses it: a point up
+  // to half a cell past the last node is clamped to the edge, not dropped.
+  // Stopping at the node box instead ended 1 of 4 test lines 20 points early.
+  const lower = [0, 1, 2].map(a => origin[a] - spacing[a] / 2);
+  const upper = [0, 1, 2].map(a => origin[a] + spacing[a] * ext[a] + spacing[a] / 2);
+  const data = grid.data;
+  const ijk = new Int32Array(3);
+  const pc = new Float32Array(3);
+  const w = new Float32Array(8);
+  const ids = new Uint32Array(8);
+  const velAt = new Float32Array(3);
+  const xtmp = new Float32Array(3);
+  const xyz = new Float32Array(3);
+
+  // computeStructuredCoordinates, for an extent starting at 0 on every axis.
+  const locate = (x: Float32Array): boolean => {
+    for (let i = 0; i < 3; i++) {
+      const loc = (x[i] - origin[i]) / spacing[i];
+      ijk[i] = Math.floor(loc);
+      pc[i] = loc - ijk[i];
+      if (ijk[i] < 0) {
+        if (x[i] >= lower[i]) { pc[i] = 0; ijk[i] = 0; } else return false;
+      } else if (ijk[i] >= ext[i]) {
+        if (x[i] <= upper[i]) { pc[i] = 1; ijk[i] = ext[i] - 1; } else return false;
+      }
+    }
+    return true;
+  };
+  const vectorAt = (x: Float32Array, out: Float32Array): boolean => {
+    if (!locate(x)) return false;
+    const r = pc[0], s = pc[1], t = pc[2];
+    const rm = 1 - r, sm = 1 - s, tm = 1 - t;
+    w[0] = rm * sm * tm; w[1] = r * sm * tm; w[2] = rm * s * tm; w[3] = r * s * tm;
+    w[4] = rm * sm * t; w[5] = r * sm * t; w[6] = rm * s * t; w[7] = r * s * t;
+    ids[0] = ijk[2] * nx * ny + ijk[1] * nx + ijk[0];
+    ids[1] = ids[0] + 1; ids[2] = ids[0] + nx; ids[3] = ids[2] + 1;
+    ids[4] = ids[0] + nx * ny; ids[5] = ids[4] + 1; ids[6] = ids[4] + nx; ids[7] = ids[6] + 1;
+    out[0] = 0; out[1] = 0; out[2] = 0;
+    for (let n = 0; n < 8; n++) {
+      for (let j = 0; j < 3; j++) out[j] += w[n] * data[ids[n] * 3 + j];
+    }
+    return true;
+  };
+
+  const points: number[] = [];
+  const starts: number[] = [0];
+  for (const seed of seeds) {
+    xyz[0] = seed[0]; xyz[1] = seed[1]; xyz[2] = seed[2];
+    for (let k = 0; k < maxSteps; k++) {
+      if (!vectorAt(xyz, velAt)) break;
+      for (let i = 0; i < 3; i++) xtmp[i] = xyz[i] + step / 2 * velAt[i];
+      if (!vectorAt(xtmp, velAt)) break;
+      for (let i = 0; i < 3; i++) xyz[i] += step * velAt[i];
+      if (!vectorAt(xyz, velAt)) break;
+      points.push(xyz[0], xyz[1], xyz[2]);
+    }
+    starts.push(points.length / 3);
+  }
+  return {positions: new Float32Array(points), lineStarts: new Uint32Array(starts)};
 }
 
 /** (x, y, z, vx, vy, vz) rows into the two arrays both renderers take. */

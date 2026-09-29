@@ -19,7 +19,8 @@ import {
   instrumentGlObjects, loadFlagshipGeometry, makeFrameSync, percentile, type FlagshipBundle,
 } from '@lib/flagship-geometry';
 import {
-  ARROW_COLOUR, ARROW_METRES_PER_MS, ARROW_SHAPE, DEFAULT_OPACITY, VOLUME_MAX_SAMPLES, VOLUME_STEP_M, loadFlagshipVolume, opacityNodes, volumeBox,
+  ARROW_COLOUR, ARROW_METRES_PER_MS, ARROW_SHAPE, DEFAULT_OPACITY, STREAMLINE_COLOUR, STREAMLINE_MAX_STEPS,
+  STREAMLINE_STEP_S, VOLUME_MAX_SAMPLES, traceStreamlines, VOLUME_STEP_M, loadFlagshipVolume, opacityNodes, volumeBox,
   type FlagshipVolume, type VolumeProbe,
 } from '@lib/flagship-volume';
 import {attachContextLoss, createBenchmarkDriver, type CameraPose} from '@lib/scientific-probes';
@@ -138,6 +139,8 @@ function arrowGeometry(): THREE.BufferGeometry {
 /** Replaced by main() once the scene is up. */
 let arrowsHandler: (visible: boolean) => void = () => {};
 /** Replaced by main() once the scene is up. */
+let streamlinesHandler: (visible: boolean) => void = () => {};
+/** Replaced by main() once the scene is up. */
 let benchmarkHandler: () => Promise<void> =
   async () => { ui.setReadout('benchmark', 'still loading, try again in a moment'); };
 
@@ -149,6 +152,7 @@ const ui = mountChrome({
   decision: 'whether either renderer struggles with an 8.7-million-cell volume drawn together with a 10,356-part city.',
   controls: [
     {kind: 'toggle', id: 'arrows', label: 'Wind arrows', value: true, onChange: v => arrowsHandler(v)},
+    {kind: 'toggle', id: 'streamlines', label: 'Streamlines', value: true, onChange: v => streamlinesHandler(v)},
     {kind: 'button', id: 'run-benchmark', label: 'Run benchmark (210 frames)',
      onClick: () => { void benchmarkHandler(); }},
   ],
@@ -164,6 +168,9 @@ const ui = mountChrome({
     'Wind arrows are code we would own here: vtkArrowSource\'s shape rebuilt from cylinder and cone, and one '
     + 'InstancedMesh with a matrix per arrow turned and sized from the velocity field. Page 17 gets both from vtk.js. '
     + 'The benchmark measures whatever the toggle shows, and the readout says which.',
+    'Streamlines need a tracer Three.js does not have. traceStreamlines (flagship-volume.ts) is a port of '
+    + 'vtk.js\'s vtkImageStreamline, and a unit test requires the two to produce the same points. Lines are one '
+    + 'pixel wide on both pages: WebGL implementations may ignore any other width.',
   ],
 });
 // First readout row, so every pasted summary names the renderer that produced it.
@@ -255,6 +262,28 @@ async function main(): Promise<void> {
   // set is fine, and culling the lot at a grazing angle would hide them all.
   arrowMesh.frustumCulled = false;
   opaque.add(arrowMesh);
+
+  // --- streamlines: our own tracer, drawn as plain line segments -------------
+  const traceStart = performance.now();
+  const traced = traceStreamlines(volumeData.velocity, volumeData.velocity.meta.seeds,
+                                  STREAMLINE_STEP_S, STREAMLINE_MAX_STEPS);
+  const traceMs = performance.now() - traceStart;
+  const segmentIndex: number[] = [];
+  for (let l = 0; l + 1 < traced.lineStarts.length; l++) {
+    for (let p = traced.lineStarts[l]; p + 1 < traced.lineStarts[l + 1]; p++) segmentIndex.push(p, p + 1);
+  }
+  const lineGeo = new THREE.BufferGeometry();
+  lineGeo.setAttribute('position', new THREE.BufferAttribute(traced.positions, 3));
+  lineGeo.setIndex(segmentIndex);
+  const lineMaterial = new THREE.LineBasicMaterial();
+  lineMaterial.color.setRGB(...STREAMLINE_COLOUR);
+  const lineMesh = new THREE.LineSegments(lineGeo, lineMaterial);
+  lineMesh.frustumCulled = false;
+  opaque.add(lineMesh);
+  const lineCount = traced.lineStarts.length - 1;
+  const streamlineStats = () => ({
+    visible: lineMesh.visible, lines: lineCount, points: traced.positions.length / 3, traceMs: Math.round(traceMs),
+  });
   opaque.add(camera);
   opaque.add(new THREE.AmbientLight(0xffffff, 0.9));
 
@@ -407,6 +436,7 @@ async function main(): Promise<void> {
       opacityCorrection: 'none: a per sample',
     },
     arrows: {visible: arrowMesh.visible, count: arrows.meta.count},
+    streamlines: streamlineStats(),
     resources: {
       buffers: counts.buffers, textures: counts.textures,
       renderTargets: counts.renderTargets, listeners, observers,
@@ -434,6 +464,7 @@ async function main(): Promise<void> {
       material.dispose(); geometry.dispose();
       volumeMaterial.dispose(); boxGeometry.dispose(); texture.dispose();
       arrowMesh.dispose(); arrowGeo.dispose(); arrowMaterial.dispose();
+      lineGeo.dispose(); lineMaterial.dispose();
       blitMaterial.dispose(); blitGeometry.dispose(); opaqueTarget.dispose();
       renderer.dispose();
     },
@@ -445,6 +476,7 @@ async function main(): Promise<void> {
 
   function publish(): void {
     probe.arrows = {visible: arrowMesh.visible, count: arrows.meta.count};
+    probe.streamlines = streamlineStats();
     probe.lens = {fovDeg: camera.fov, aspect: camera.aspect,
                   surface: [gl.drawingBufferWidth, gl.drawingBufferHeight]};
     probe.resources = {
@@ -480,6 +512,12 @@ async function main(): Promise<void> {
   }
 
   benchmarkHandler = runAndReport;
+  streamlinesHandler = (visible: boolean) => {
+    lineMesh.visible = visible;
+    ui.setReadout('streamlines', visible ? `on (${lineCount})` : 'off');
+    renderScene();
+    publish();
+  };
   arrowsHandler = (visible: boolean) => {
     arrowMesh.visible = visible;
     ui.setReadout('arrows', visible ? `on (${arrows.meta.count})` : 'off');
@@ -489,6 +527,8 @@ async function main(): Promise<void> {
 
   ui.setReadout('volume', `${meta.field}, ${meta.dims.join(' x ')} (${(volumeData.data.length / 1e6).toFixed(1)}M cells)`);
   ui.setReadout('arrows', `on (${arrows.meta.count})`);
+  ui.setReadout('streamlines', `on (${lineCount})`);
+  ui.setReadout('trace ms', Math.round(traceMs));
   ui.setReadout('GPU', describeGpu(gl));
   ui.setReadout('triangles', probe.counts.triangles);
   ui.setReadout('camera radius m', Math.round(orbit.radius));
