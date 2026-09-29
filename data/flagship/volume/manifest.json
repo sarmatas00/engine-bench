@@ -2,10 +2,11 @@
   "axis": "volume",
   "grid": "speed.grid.json",
   "arrows": "arrows.json",
+  "velocity": "velocity.grid.json",
   "files": {
     "speed.grid.json": {
       "byteLength": 1177,
-      "sha256": "526c263068330a39a5e1cf5ccaaec6b5eb4fd348a706b47dfb02048229ab6d86"
+      "sha256": "efb15ae6ee5d08f0dddac4d0e38e17c54617c394fedc2eea83aae2788e525d35"
     },
     "speed.grid.f32": {
       "byteLength": 34750000,
@@ -18,6 +19,14 @@
     "arrows.f32": {
       "byteLength": 53832,
       "sha256": "23487bf157de9bd473e21c52c0431cfba40f50c9a4b9d2e3ec08665024a0931d"
+    },
+    "velocity.grid.json": {
+      "byteLength": 5624,
+      "sha256": "a79fb48243fe2cb598664199749d935ddd00467cf43249c604c25430a3d81c5e"
+    },
+    "velocity.grid.f32": {
+      "byteLength": 12000000,
+      "sha256": "7f80756c7417321d79df6f2a93c5a9be5e448a9acdc0eb695125db105d58e5c6"
     }
   }
 }
