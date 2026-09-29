@@ -1290,3 +1290,54 @@ arrows off, 3 runs  10.0 - 10.4   8.40 - 8.66    7.0 - 7.2    5.50 - 5.82
 The arrows-off runs also land inside the published volume-only ranges
 (9.20-11.40 and 6.70-8.00), so that result reproduces. One arrows-off Three.js
 run kept only 23 of 180 GPU samples; its CPU figure is unaffected.
+
+## Streamlines on the volume pages, traced in the browser (2026-09-29)
+
+Anders asked for streamlines as well as glyphs, from the grid's `velocity`
+field. Both pages now trace them in the browser, behind a **Streamlines**
+toggle (on by default), next to the arrows.
+
+**The field they trace.** The full velocity field is 99 MiB, too much for a
+page. `extract_volume.py` writes `velocity.grid.f32` (12 MB): full 8 m
+horizontal resolution, so building wakes survive, and every 4th layer between
+-1.2 and 58.6 m NAP (16 layers, ~4 m apart). Solid cells are NaN in the source
+and `vtkImageStreamline` has no stop rule, so a NaN would poison every later
+point of a line; they are written as zero velocity (133,823 cells), and a line
+that reaches a wall stalls there, identically on both pages. **92 seeds**, one
+per 200 m on the 15 m arrow layer, so every seed starts in air. Re-running the
+extractor left `speed.grid.f32` and `arrows.f32` byte-identical.
+
+- **Page 17** uses `vtkImageStreamline`: set the grid and the seeds, read the
+  output. Midpoint (RK2) steps of 1 s, at most 1,000 per seed, its defaults.
+- **Page 18** has no tracer to call. `traceStreamlines` in
+  `flagship-volume.ts` is a port of `vtkImageStreamline`, float32 scratch arrays
+  included, and `tests/unit/streamline-port.test.ts` requires the two to
+  produce **exactly the same points**: on a synthetic swirl with lines leaving
+  the box, and on the shipped grid and seeds (92 lines, 67,730 points).
+  Drawn as plain `LineSegments`.
+
+**A detail the test caught.** `vtkImageData.getBounds()` in 36.12.1 is the node
+box widened by half a spacing on every side, and the tracer's in-bounds test
+uses it, so a point up to half a cell past the last node is clamped, not
+dropped. The first port stopped at the node box and ended one of four test
+lines 20 points early. Reading vtk.js's source was not enough to see it; the
+point-for-point comparison was.
+
+**Cost.** Tracing happens once, at load: vtk.js **109-138 ms**, the port
+**12-13 ms**, for the same points. The port avoids a per-sample array
+allocation vtk.js makes (`new Array(3)` in `vectorAt`); that is a
+characteristic of this vtk.js filter, not of vtk.js rendering. Drawing is
+cheap on both. Apple M4, interleaved cold contexts, 180 frames at 1280x720:
+
+~~~
+                                    vtk.js (17)              Three.js (18)
+                               cpu p50     gpu p50      cpu p50    gpu p50
+arrows + streamlines, 6 runs   9.7 - 10.7  8.24 - 8.84  6.7 - 7.2  5.62 - 6.09
+both off, 3 runs               9.1 -  9.6  7.86 - 8.21  6.7 - 6.9  5.44 - 5.86
+~~~
+
+On vtk.js the overlays may add a few tenths of a millisecond; both rows sit
+inside the published volume-only range (9.20-11.40), so it is not separable
+from run-to-run spread with these runs. Three.js shows no difference. Lines
+are one pixel wide on both pages, because WebGL implementations may ignore
+any other width.

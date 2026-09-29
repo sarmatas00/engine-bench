@@ -33,6 +33,9 @@ OUT = GEOMETRY / "volume"
 FIELD = "speed"          # the field pages 13 and 14 open on
 ARROW_HEIGHT_NAP_M = 15.0   # the generator's own height_15m slice height
 ARROW_STRIDE_CELLS = 5      # one arrow per 5x5 cells: 40 m apart on the 8 m grid
+SEED_STRIDE_ARROWS = 5      # one streamline seed per 5x5 arrows: 200 m apart
+TRACE_Z_RANGE_NAP_M = (-2.0, 60.0)   # layers the browser traces through
+TRACE_Z_STRIDE = 4          # every 4th layer: ~4 m vertical, full 8 m horizontal
 DOMAIN_ID = "synthetic-flow-domain"
 GRID_KEY = "air_grid"
 
@@ -173,6 +176,38 @@ def sample_arrows(velocity_xyz: np.ndarray, air_xyz: np.ndarray, grid, local_off
     }
 
 
+def trace_grid(velocity_xyz: np.ndarray, air_xyz: np.ndarray, grid, local_offset) -> tuple[np.ndarray, dict]:
+    """The velocity field both pages trace streamlines through.
+
+    The full field is 99 MiB, too much for a page. Horizontally it keeps the
+    full 8 m cells, so building wakes survive; vertically every
+    TRACE_Z_STRIDE-th layer between TRACE_Z_RANGE_NAP_M. Solid cells carry
+    NaN in the source, and vtkImageStreamline has no stop rule, so a NaN would
+    poison every later point of a line: they are written as zero velocity, and
+    a line that reaches a wall stalls there on both pages.
+    """
+    nz, ny, nx = air_xyz.shape
+    b = grid.bounds
+    centres_z = b.zmin + (np.arange(nz) + 0.5) * grid.zstep
+    lo, hi = TRACE_Z_RANGE_NAP_M
+    ks = np.arange(nz)[(centres_z >= lo) & (centres_z <= hi)][::TRACE_Z_STRIDE]
+    sub = velocity_xyz[ks].copy()
+    sub[~air_xyz[ks]] = 0.0
+    if not np.isfinite(sub).all():
+        raise SystemExit("trace grid has NaN outside solid cells")
+    ox, oy, oz = local_offset
+    return np.ascontiguousarray(sub, dtype=np.float32), {
+        "dims": [nx, ny, int(len(ks))],
+        "origin": [b.xmin + grid.xstep / 2 - ox, b.ymin + grid.ystep / 2 - oy, float(centres_z[ks[0]]) - oz],
+        "spacing": [grid.xstep, grid.ystep, float(centres_z[ks[1]] - centres_z[ks[0]])],
+        "order": "x-fastest",
+        "components": 3,
+        "layersNapM": [float(centres_z[ks[0]]), float(centres_z[ks[-1]])],
+        "zStrideLayers": TRACE_Z_STRIDE,
+        "solidCellsZeroed": int((~air_xyz[ks]).sum()),
+    }
+
+
 def core_revision() -> str:
     import dtcc_core
     from importlib.metadata import version, PackageNotFoundError
@@ -239,11 +274,23 @@ def main() -> None:
         raise SystemExit(f"velocity: {velocity.shape}, expected (cells, 3)")
     velocity_xyz = np.ascontiguousarray(velocity.reshape(ny, nx, nz, 3).transpose(2, 0, 1, 3))
     arrow_rows, arrows_meta = sample_arrows(velocity_xyz, air_xyz, grid, (ox, oy, z0))
+    trace, trace_meta = trace_grid(velocity_xyz, air_xyz, grid, (ox, oy, z0))
+    # Seeds are a coarser lattice of the arrow points, so every seed is in air.
+    per_row = len(np.arange(ARROW_STRIDE_CELLS // 2, nx, ARROW_STRIDE_CELLS))
+    lattice = arrow_rows[:, :3]
+    col = np.rint((lattice[:, 0] - lattice[:, 0].min()) / (ARROW_STRIDE_CELLS * grid.xstep)).astype(int)
+    row = np.rint((lattice[:, 1] - lattice[:, 1].min()) / (ARROW_STRIDE_CELLS * grid.ystep)).astype(int)
+    pick = (col % SEED_STRIDE_ARROWS == SEED_STRIDE_ARROWS // 2) & (row % SEED_STRIDE_ARROWS == SEED_STRIDE_ARROWS // 2)
+    trace_meta["seeds"] = [[round(float(v), 3) for v in p] for p in lattice[pick]]
+    trace_meta["seedSpacingM"] = SEED_STRIDE_ARROWS * ARROW_STRIDE_CELLS * grid.xstep
+    del per_row
 
     args.out.mkdir(parents=True, exist_ok=True)
     (args.out / "speed.grid.f32").write_bytes(speed.astype("<f4").tobytes())
     (args.out / "arrows.f32").write_bytes(arrow_rows.astype("<f4").tobytes())
     (args.out / "arrows.json").write_text(json.dumps(arrows_meta, indent=2) + "\n")
+    (args.out / "velocity.grid.f32").write_bytes(trace.astype("<f4").tobytes())
+    (args.out / "velocity.grid.json").write_text(json.dumps(trace_meta, indent=2) + "\n")
     meta = {
         "field": FIELD,
         "unit": "m/s",
@@ -278,12 +325,16 @@ def main() -> None:
         "axis": "volume",
         "grid": "speed.grid.json",
         "arrows": "arrows.json",
+        "velocity": "velocity.grid.json",
         "files": {name: verified(name) for name in
-                  ("speed.grid.json", "speed.grid.f32", "arrows.json", "arrows.f32")},
+                  ("speed.grid.json", "speed.grid.f32", "arrows.json", "arrows.f32",
+                   "velocity.grid.json", "velocity.grid.f32")},
     }
     (args.out / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     print(json.dumps({**{k: meta[k] for k in ("dims", "origin", "spacing", "range", "maskedCells", "orderCheck")},
-                      "arrows": arrows_meta}, indent=2))
+                      "arrows": arrows_meta,
+                      "trace": {k: v for k, v in trace_meta.items() if k != "seeds"} | {"seedCount": len(trace_meta["seeds"])}},
+                     indent=2))
 
 
 if __name__ == "__main__":
