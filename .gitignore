@@ -10,3 +10,7 @@ __pycache__/
 
 # PR Lens writes its previews here. They are rebuilt on demand.
 .pr-lens/
+
+# Local-only size-test series (scripts/fields/generate_large.py); 0.5-2 GB each.
+public/data/fields-large/
+public/data/fields-xl/

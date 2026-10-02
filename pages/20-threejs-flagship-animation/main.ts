@@ -1,28 +1,31 @@
 /**
- * Page 18 -- Three.js on the volume axis. The pair with page 17.
+ * Page 20 -- Three.js on the animation axis. The pair with page 19.
  *
- * Page 16's city (same mesh, camera path, lights and colours) with flagship's
- * 250x250x139 speed field ray-marched through it. Three.js ships no volume
- * renderer, so the compositor below is code we would own: the same two-pass
- * design page 14 settled on (opaque pass into a multisampled target with a
- * depth texture, then a front-to-back march that stops at the buildings).
+ * Page 18's city and ray marcher (shared through threejs-volume.ts), with
+ * Anders's time-dependent pressure field in place of the static speed volume,
+ * swapped while drawing in one of three modes (flagship-fields.ts, SwapMode).
  *
- * The only comparison supported is against page 17.
+ *  - stream: one Data3DTexture whose image.data is pointed at the next frame,
+ *    then needsUpdate. Three.js allocates the texture once (texStorage3D) and
+ *    after that only calls texSubImage3D, the same GL work as page 19.
+ *  - preloaded: one Data3DTexture per frame, all initialised up front, and the
+ *    shader's uData uniform pointed at one per draw.
+ *
+ * The only comparison supported is against page 19, mode for mode.
  */
 import * as THREE from 'three';
 import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
-import {mergeGeometries} from 'three/addons/utils/BufferGeometryUtils.js';
 import {mountChrome} from '@lib/chrome';
-import {BLIT_FRAGMENT_GLSL, BLIT_VERTEX_GLSL, VOLUME_FRAGMENT_GLSL, VOLUME_VERTEX_GLSL} from '@lib/threejs-volume';
 import {
   ORBIT_FLAGSHIP_V1, FLAGSHIP_FOV_DEG, createFpsMeter, createGpuTimer, describeGpu, flagshipPose,
   instrumentGlObjects, loadFlagshipGeometry, makeFrameSync, percentile, type FlagshipBundle,
 } from '@lib/flagship-geometry';
+import {DEFAULT_OPACITY, VOLUME_MAX_SAMPLES, VOLUME_STEP_M, opacityNodes} from '@lib/flagship-volume';
 import {
-  ARROW_COLOUR, ARROW_METRES_PER_MS, ARROW_SHAPE, DEFAULT_OPACITY, STREAMLINE_COLOUR, STREAMLINE_MAX_STEPS,
-  STREAMLINE_STEP_S, VOLUME_MAX_SAMPLES, traceStreamlines, VOLUME_STEP_M, loadFlagshipVolume, opacityNodes, volumeBox,
-  type FlagshipVolume, type VolumeProbe,
-} from '@lib/flagship-volume';
+  PLAYBACK_FPS, SWAP_MODES, benchmarkFrame, seriesFromQuery, countVolumeUploads, loadFieldSeries, seriesBox,
+  type AnimationProbe, type FieldSeries, type SwapMode,
+} from '@lib/flagship-fields';
+import {BLIT_FRAGMENT_GLSL, BLIT_VERTEX_GLSL, VOLUME_FRAGMENT_GLSL, VOLUME_VERTEX_GLSL} from '@lib/threejs-volume';
 import {attachContextLoss, createBenchmarkDriver, type CameraPose} from '@lib/scientific-probes';
 
 // Page 16's colour pair, same reason: no sRGB conversion vtk.js does not make.
@@ -30,61 +33,38 @@ THREE.ColorManagement.enabled = false;
 
 const SURFACE = {width: 1280, height: 720} as const;
 
-/**
- * vtkArrowSource's arrow, rebuilt: a capped shaft from 0 to 1 - tipLength along
- * +x, a cone over the rest to 1, then the whole arrow shifted back by
- * 0.5 - tipLength/2, as ArrowSource.js does. This is the part vtk.js gives for
- * free and Three.js does not have.
- */
-function arrowGeometry(): THREE.BufferGeometry {
-  const {shaftRadius, shaftResolution, tipRadius, tipResolution, tipLength} = ARROW_SHAPE;
-  const shaft = new THREE.CylinderGeometry(shaftRadius, shaftRadius, 1 - tipLength, shaftResolution);
-  shaft.translate(0, (1 - tipLength) / 2, 0);
-  const tip = new THREE.ConeGeometry(tipRadius, tipLength, tipResolution);
-  tip.translate(0, 1 - tipLength / 2, 0);
-  const merged = mergeGeometries([shaft.toNonIndexed(), tip.toNonIndexed()])!;
-  shaft.dispose(); tip.dispose();
-  merged.rotateZ(-Math.PI / 2);                  // +y (Three.js's axis) onto +x (vtk.js's)
-  merged.translate(-0.5 + tipLength / 2, 0, 0);
-  merged.computeVertexNormals();
-  return merged;
-}
-
 /** Replaced by main() once the scene is up. */
-let arrowsHandler: (visible: boolean) => void = () => {};
+let modeHandler: (mode: string) => void = () => {};
 /** Replaced by main() once the scene is up. */
-let streamlinesHandler: (visible: boolean) => void = () => {};
+let playHandler: (playing: boolean) => void = () => {};
 /** Replaced by main() once the scene is up. */
 let benchmarkHandler: () => Promise<void> =
   async () => { ui.setReadout('benchmark', 'still loading, try again in a moment'); };
 
 const ui = mountChrome({
-  num: '18',
-  title: 'Three.js flagship volume',
-  expect: 'the Delft district with a synthetic wind-speed field as a translucent volume around the buildings, orbiting once.',
-  claim: 'vtk.js should do best on volume data, the case the geometry axis could not test',
-  decision: 'whether either renderer struggles with an 8.7-million-cell volume drawn together with a 10,356-part city.',
+  num: '20',
+  title: 'Three.js flagship animation',
+  expect: 'the Delft district inside a synthetic pressure field that changes over time, playing in a loop.',
+  claim: 'a Twin will play simulations back, so the volume has to change while it is drawn',
+  decision: 'whether either renderer\'s frame rate holds while the volume is replaced every frame, '
+    + 'streamed into one texture or preloaded as one texture per frame.',
   controls: [
-    {kind: 'toggle', id: 'arrows', label: 'Wind arrows', value: true, onChange: v => arrowsHandler(v)},
-    {kind: 'toggle', id: 'streamlines', label: 'Streamlines', value: true, onChange: v => streamlinesHandler(v)},
+    {kind: 'select', id: 'mode', label: 'Swap', options: SWAP_MODES, value: 'stream', onChange: v => modeHandler(v)},
+    {kind: 'toggle', id: 'play', label: 'Play', value: true, onChange: v => playHandler(v)},
     {kind: 'button', id: 'run-benchmark', label: 'Run benchmark (210 frames)',
      onClick: () => { void benchmarkHandler(); }},
   ],
   findings: [
-    'The field is SYNTHETIC: real Delft buildings, analytic wind. Its own source says "Not a fluid solver". '
-    + 'It is here as a realistically sized volume, not as a flow result.',
-    'The ray marcher is page 14\'s, which is code we would own: Three.js has no volume renderer. It stops at '
-    + 'the buildings by reading their depth from an offscreen pass rasterized at the canvas\'s own sample count.',
-    `The step cap is ${VOLUME_MAX_SAMPLES}, not page 14's 512: this box's diagonal is ~2.8 km, so a grazing ray `
-    + `needs ~1,417 steps of ${VOLUME_STEP_M} m. Page 17 is given the same cap.`,
-    'The redraws/sec readout is NOT comparable with page 17: vtk.js redraws more often while dragging and at '
-    + 'reduced quality. Use the Run benchmark button to compare the two pages.',
-    'Wind arrows are code we would own here: vtkArrowSource\'s shape rebuilt from cylinder and cone, and one '
-    + 'InstancedMesh with a matrix per arrow turned and sized from the velocity field. Page 17 gets both from vtk.js. '
-    + 'The benchmark measures whatever the toggle shows, and the readout says which.',
-    'Streamlines need a tracer Three.js does not have. traceStreamlines (flagship-volume.ts) is a port of '
-    + 'vtk.js\'s vtkImageStreamline, and a unit test requires the two to produce the same points. Lines are one '
-    + 'pixel wide on both pages: WebGL implementations may ignore any other width.',
+    'The field is SYNTHETIC and ignores the buildings: Anders\'s generator says "not a fluid simulation". '
+    + 'It is a time series of realistic shape, here to measure playback, not to show a flow.',
+    'Bigger series for the size test (?fields=large, ?fields=xl) are generated locally and not published; '
+    + 'see NOTES.md for their results.',
+    'The benchmark advances one data frame per drawn frame, whatever the mode, which is harder than real '
+    + 'playback. Static draws frame 0 throughout and is the baseline for the other two.',
+    'Stream points one texture at the next frame\'s array and flags it for upload; Three.js then sends it '
+    + 'with texSubImage3D into the texture it already has. The probe counts the GL calls to prove it.',
+    'Preloaded is one texture per frame and a uniform switch. The ray marcher is page 18\'s, shared code.',
+    'The redraws/sec readout is NOT comparable with page 19. Use Run benchmark to compare the two pages.',
   ],
 });
 // First readout row, so every pasted summary names the renderer that produced it.
@@ -92,19 +72,18 @@ ui.setReadout('renderer', 'Three.js');
 
 async function main(): Promise<void> {
   let bundle: FlagshipBundle;
-  let volumeData: FlagshipVolume;
+  let series: FieldSeries;
+  const seriesName = seriesFromQuery(location.search);
   try {
-    [bundle, volumeData] = await Promise.all([loadFlagshipGeometry(), loadFlagshipVolume()]);
+    [bundle, series] = await Promise.all([loadFlagshipGeometry(), loadFieldSeries(seriesName)]);
   } catch (err) {
     ui.fail(`flagship data failed to load: ${(err as Error).message}`);
     return;
   }
   const {mesh, dataset, orbit} = bundle;
-  const {meta} = volumeData;
+  const {meta, frames} = series;
 
-  // Created here rather than by WebGLRenderer, page 16's reasoning: counters go
-  // in before Three.js allocates anything, and `antialias` is left unset so this
-  // canvas multisamples exactly as vtk.js's does.
+  // Created here rather than by WebGLRenderer, page 16's reasoning.
   const canvas = document.createElement('canvas');
   canvas.style.cssText = 'position:absolute;inset:0;width:100%;height:100%';
   ui.canvasHost.prepend(canvas);
@@ -114,16 +93,14 @@ async function main(): Promise<void> {
   if (!rawGl) { ui.fail('no WebGL2 context'); return; }
   const gl: WebGL2RenderingContext = rawGl;
   const counts = instrumentGlObjects(gl);
+  const uploads = countVolumeUploads(gl);
 
   const renderer = new THREE.WebGLRenderer({canvas, context: gl});
   renderer.autoClear = false;
   renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
-  const background = new THREE.Color().setRGB(0.067, 0.086, 0.11);
-  renderer.setClearColor(background, 1);
+  renderer.setClearColor(new THREE.Color().setRGB(0.067, 0.086, 0.11), 1);
   const gpuTimer = createGpuTimer(gl);
   const frameSync = makeFrameSync(gl);
-  // R32F linear filtering has its own extension; vtk.js filters linearly too,
-  // so a nearest fallback would be a different image. Recorded, not assumed.
   const floatLinear = renderer.extensions.has('OES_texture_float_linear');
 
   // --- the city: page 16's mesh and lights ---------------------------------
@@ -146,58 +123,6 @@ async function main(): Promise<void> {
 
   const opaque = new THREE.Scene();
   opaque.add(new THREE.Mesh(geometry, material));
-
-  // --- wind arrows: one instanced mesh, in the opaque pass --------------------
-  // Opaque, like vtk.js's glyph actor, so the volume stops at an arrow the same
-  // way it stops at a building on both pages.
-  const {arrows} = volumeData;
-  const arrowGeo = arrowGeometry();
-  const arrowMaterial = new THREE.MeshLambertMaterial();
-  arrowMaterial.color.setRGB(...ARROW_COLOUR);
-  const arrowMesh = new THREE.InstancedMesh(arrowGeo, arrowMaterial, arrows.meta.count);
-  {
-    const xAxis = new THREE.Vector3(1, 0, 0);
-    const dir = new THREE.Vector3();
-    const at = new THREE.Vector3();
-    const turn = new THREE.Quaternion();
-    const size = new THREE.Vector3();
-    const m = new THREE.Matrix4();
-    for (let i = 0; i < arrows.meta.count; i++) {
-      dir.fromArray(arrows.vectors, i * 3);
-      // vtkGlyph3DMapper's SCALE_BY_MAGNITUDE: uniform scale |v| * factor.
-      const length = dir.length() * ARROW_METRES_PER_MS;
-      turn.setFromUnitVectors(xAxis, dir.normalize());
-      m.compose(at.fromArray(arrows.positions, i * 3), turn, size.setScalar(length));
-      arrowMesh.setMatrixAt(i, m);
-    }
-    arrowMesh.instanceMatrix.needsUpdate = true;
-  }
-  // The arrows span the whole 2 km domain; one bounding sphere per instance
-  // set is fine, and culling the lot at a grazing angle would hide them all.
-  arrowMesh.frustumCulled = false;
-  opaque.add(arrowMesh);
-
-  // --- streamlines: our own tracer, drawn as plain line segments -------------
-  const traceStart = performance.now();
-  const traced = traceStreamlines(volumeData.velocity, volumeData.velocity.meta.seeds,
-                                  STREAMLINE_STEP_S, STREAMLINE_MAX_STEPS);
-  const traceMs = performance.now() - traceStart;
-  const segmentIndex: number[] = [];
-  for (let l = 0; l + 1 < traced.lineStarts.length; l++) {
-    for (let p = traced.lineStarts[l]; p + 1 < traced.lineStarts[l + 1]; p++) segmentIndex.push(p, p + 1);
-  }
-  const lineGeo = new THREE.BufferGeometry();
-  lineGeo.setAttribute('position', new THREE.BufferAttribute(traced.positions, 3));
-  lineGeo.setIndex(segmentIndex);
-  const lineMaterial = new THREE.LineBasicMaterial();
-  lineMaterial.color.setRGB(...STREAMLINE_COLOUR);
-  const lineMesh = new THREE.LineSegments(lineGeo, lineMaterial);
-  lineMesh.frustumCulled = false;
-  opaque.add(lineMesh);
-  const lineCount = traced.lineStarts.length - 1;
-  const streamlineStats = () => ({
-    visible: lineMesh.visible, lines: lineCount, points: traced.positions.length / 3, traceMs: Math.round(traceMs),
-  });
   opaque.add(camera);
   opaque.add(new THREE.AmbientLight(0xffffff, 0.9));
 
@@ -205,9 +130,6 @@ async function main(): Promise<void> {
   const depthTexture = new THREE.DepthTexture(1, 1, THREE.UnsignedIntType);
   depthTexture.minFilter = THREE.NearestFilter;
   depthTexture.magFilter = THREE.NearestFilter;
-  // The canvas's OWN sample count, read off the default framebuffer: page 14's
-  // first version rasterized its city at one sample against vtk.js's four and
-  // published the difference as "Three.js is 12% faster".
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   const canvasSamples = gl.getParameter(gl.SAMPLES) as number;
   const opaqueTarget = new THREE.WebGLRenderTarget(1, 1, {
@@ -215,26 +137,37 @@ async function main(): Promise<void> {
     minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter,
   });
 
-  // --- the volume -----------------------------------------------------------
+  // --- the volume textures ----------------------------------------------------
   const [nx, ny, nz] = meta.dims;
-  const texture = new THREE.Data3DTexture(volumeData.data, nx, ny, nz);
-  texture.format = THREE.RedFormat;
-  texture.type = THREE.FloatType;
-  texture.minFilter = floatLinear ? THREE.LinearFilter : THREE.NearestFilter;
-  texture.magFilter = floatLinear ? THREE.LinearFilter : THREE.NearestFilter;
-  texture.wrapS = texture.wrapT = texture.wrapR = THREE.ClampToEdgeWrapping;
-  texture.unpackAlignment = 4;
-  texture.needsUpdate = true;
+  const makeTexture = (data: Float32Array) => {
+    const texture = new THREE.Data3DTexture(data, nx, ny, nz);
+    texture.format = THREE.RedFormat;
+    texture.type = THREE.FloatType;
+    texture.minFilter = floatLinear ? THREE.LinearFilter : THREE.NearestFilter;
+    texture.magFilter = floatLinear ? THREE.LinearFilter : THREE.NearestFilter;
+    texture.wrapS = texture.wrapT = texture.wrapR = THREE.ClampToEdgeWrapping;
+    texture.unpackAlignment = 4;
+    texture.needsUpdate = true;
+    return texture;
+  };
+  const streamTexture = makeTexture(frames[0]);
+  let preloaded: THREE.Data3DTexture[] | null = null;
+  function buildPreloaded(): void {
+    if (preloaded) return;
+    preloaded = frames.map(makeTexture);
+    for (const t of preloaded) renderer.initTexture(t);
+  }
 
-  const box = volumeBox(meta);
+  const box = seriesBox(meta);
   const [lo, hi] = meta.range;
-  // Normalised to the colour range, so the shader's f in 0..1 lands on the same
-  // nodes page 17's piecewise function holds in field units.
   const nodes = opacityNodes(0, 1, DEFAULT_OPACITY).map(([, a]) => a);
   const uResolution = {value: new THREE.Vector2(1, 1)};
+  const uData = {value: streamTexture as THREE.Data3DTexture};
   const volumeMaterial = new THREE.ShaderMaterial({
     uniforms: {
-      uData: {value: texture},
+      uData,
+      // Values on the vertices: node 0 IS the origin, so the shader's
+      // (index + 0.5) / size lands on texel centres exactly as on page 18.
       uOrigin: {value: new THREE.Vector3(...meta.origin)},
       uSpacing: {value: new THREE.Vector3(...meta.spacing)},
       uSize: {value: new THREE.Vector3(nx, ny, nz)},
@@ -250,7 +183,6 @@ async function main(): Promise<void> {
     },
     vertexShader: VOLUME_VERTEX_GLSL, fragmentShader: VOLUME_FRAGMENT_GLSL,
     side: THREE.BackSide, transparent: true, depthTest: false, depthWrite: false,
-    // Premultiplied accumulation, so ONE / ONE_MINUS_SRC_ALPHA (page 14).
     blending: THREE.CustomBlending, blendSrc: THREE.OneFactor, blendDst: THREE.OneMinusSrcAlphaFactor,
     blendEquation: THREE.AddEquation,
   });
@@ -271,6 +203,23 @@ async function main(): Promise<void> {
   const blitScene = new THREE.Scene();
   blitScene.add(new THREE.Mesh(blitGeometry, blitMaterial));
   const blitCamera = new THREE.Camera();
+
+  let mode: SwapMode = 'stream';
+  let shown = 0;
+  function showFrame(k: number): void {
+    if (mode === 'preloaded') {
+      uData.value = preloaded![k];
+    } else {
+      uData.value = streamTexture;
+      // Same rule as page 19: stream uploads on every call, static only to
+      // get back to frame 0.
+      if (mode === 'stream' || shown !== k) {
+        streamTexture.image.data = frames[k];
+        streamTexture.needsUpdate = true;
+      }
+    }
+    shown = k;
+  }
 
   const controls = new OrbitControls(camera, canvas);
   controls.enableDamping = false;
@@ -322,7 +271,8 @@ async function main(): Promise<void> {
   resizeObserver.observe(ui.canvasHost);
   const observers = 1;
 
-  const renderFrame = (pose: CameraPose & {eye?: [number, number, number]}) => {
+  const renderFrame = (pose: CameraPose & {eye?: [number, number, number]; drawIndex?: number}) => {
+    if (pose.drawIndex !== undefined) showFrame(benchmarkFrame(pose.drawIndex, frames.length, mode));
     const eye = pose.eye!;
     camera.position.set(eye[0], eye[1], eye[2]);
     controls.target.set(pose.target[0], pose.target[1], pose.target[2]);
@@ -331,11 +281,12 @@ async function main(): Promise<void> {
     renderScene();
   };
 
-  const probe: VolumeProbe = {
+  const volumeTextures = () => (preloaded ? 1 + preloaded.length : 1);
+  const probe: AnimationProbe = {
     renderer: 'threejs',
     status: 'ready',
     canvasCount: ui.canvasHost.querySelectorAll('canvas').length,
-    axis: 'volume',
+    axis: 'animation',
     counts: {
       buildingParts: dataset.counts.buildingParts,
       vertices: mesh.positions.length / 3,
@@ -345,12 +296,14 @@ async function main(): Promise<void> {
     camera: orbit,
     lens: {fovDeg: camera.fov, aspect: camera.aspect, surface: [gl.drawingBufferWidth, gl.drawingBufferHeight]},
     volumeField: {
-      field: meta.field, dims: meta.dims, cells: volumeData.data.length, range: meta.range,
+      field: meta.field, dims: meta.dims, nodes: frames[0].length, range: meta.range,
       stepMetres: VOLUME_STEP_M, maxSamples: VOLUME_MAX_SAMPLES, opacityScale: DEFAULT_OPACITY,
       opacityCorrection: 'none: a per sample',
     },
-    arrows: {visible: arrowMesh.visible, count: arrows.meta.count},
-    streamlines: streamlineStats(),
+    animation: {
+      series: seriesName, mode, frames: frames.length, bytesPerFrame: frames[0].byteLength,
+      volumeTextures: volumeTextures(), uploads: {...uploads},
+    },
     resources: {
       buffers: counts.buffers, textures: counts.textures,
       renderTargets: counts.renderTargets, listeners, observers,
@@ -366,19 +319,30 @@ async function main(): Promise<void> {
       cameraPath: ORBIT_FLAGSHIP_V1.cameraPath,
       warmupFrames: ORBIT_FLAGSHIP_V1.warmupFrames,
       forcedFrames: ORBIT_FLAGSHIP_V1.forcedFrames,
-      pose: i => flagshipPose(i, orbit),
+      pose: i => ({...flagshipPose(i, orbit), drawIndex: i}),
     },
   });
+
+  // --- live playback ---------------------------------------------------------
+  let playing = true;
+  let playFrame = 0;
+  const timer = window.setInterval(() => {
+    if (!playing || benchmarking || mode === 'static') return;
+    playFrame = (playFrame + 1) % frames.length;
+    showFrame(playFrame);
+    renderScene();
+    ui.setReadout('frame', `${playFrame + 1}/${frames.length}, t=${meta.frames[playFrame].timeSeconds.toFixed(1)} s`);
+  }, 1000 / PLAYBACK_FPS);
 
   attachContextLoss(renderer.domElement, {
     probe,
     stopBenchmark: () => driver.stop(),
     disposeGpuResources: () => {
+      window.clearInterval(timer);
       resizeObserver.disconnect(); controls.dispose();
       material.dispose(); geometry.dispose();
-      volumeMaterial.dispose(); boxGeometry.dispose(); texture.dispose();
-      arrowMesh.dispose(); arrowGeo.dispose(); arrowMaterial.dispose();
-      lineGeo.dispose(); lineMaterial.dispose();
+      volumeMaterial.dispose(); boxGeometry.dispose(); streamTexture.dispose();
+      preloaded?.forEach(t => t.dispose());
       blitMaterial.dispose(); blitGeometry.dispose(); opaqueTarget.dispose();
       renderer.dispose();
     },
@@ -389,23 +353,20 @@ async function main(): Promise<void> {
   });
 
   function publish(): void {
-    probe.arrows = {visible: arrowMesh.visible, count: arrows.meta.count};
-    probe.streamlines = streamlineStats();
+    probe.animation = {...probe.animation, mode, volumeTextures: volumeTextures(), uploads: {...uploads}};
     probe.lens = {fovDeg: camera.fov, aspect: camera.aspect,
                   surface: [gl.drawingBufferWidth, gl.drawingBufferHeight]};
     probe.resources = {
       buffers: counts.buffers, textures: counts.textures,
       renderTargets: counts.renderTargets, listeners, observers,
     };
-    ui.setProbe('flagshipVolume', probe);
+    ui.setProbe('flagshipAnimation', probe);
   }
 
   renderFrame(flagshipPose(0, orbit));
 
   async function runAndReport(): Promise<void> {
-    ui.setReadout('benchmark', 'running 210 frames at 1280x720...');
-    benchmarking = true;
-    fps.reset();
+    ui.setReadout('benchmark', `running 210 frames at 1280x720, ${mode}...`);
     try {
       const result = await runBenchmark();
       const cpu = result.cpuFrameTimesMs;
@@ -416,37 +377,14 @@ async function main(): Promise<void> {
       ui.setReadout('gpu p50 ms', gpu.length
         ? `${percentile(gpu, 0.5).toFixed(2)} (${gpu.length}/${cpu.length} kept)`
         : 'no usable samples');
-      ui.setReadout('benchmark', `done, ${cpu.length} measured frames`);
+      const b = probe.animation.benchmarkUploads!;
+      ui.setReadout('uploads/frame', `${(b.calls / b.drawnFrames).toFixed(2)} (${(b.bytes / b.drawnFrames / 1e6).toFixed(2)} MB), `
+        + `${b.allocations} allocations`);
+      ui.setReadout('benchmark', `done, ${mode}, ${cpu.length} measured frames`);
     } catch (err) {
       ui.setReadout('benchmark', `failed: ${(err as Error).message}`);
-    } finally {
-      benchmarking = false;
-      fps.reset();
     }
   }
-
-  benchmarkHandler = runAndReport;
-  streamlinesHandler = (visible: boolean) => {
-    lineMesh.visible = visible;
-    ui.setReadout('streamlines', visible ? `on (${lineCount})` : 'off');
-    renderScene();
-    publish();
-  };
-  arrowsHandler = (visible: boolean) => {
-    arrowMesh.visible = visible;
-    ui.setReadout('arrows', visible ? `on (${arrows.meta.count})` : 'off');
-    renderScene();
-    publish();
-  };
-
-  ui.setReadout('volume', `${meta.field}, ${meta.dims.join(' x ')} (${(volumeData.data.length / 1e6).toFixed(1)}M cells)`);
-  ui.setReadout('arrows', `on (${arrows.meta.count})`);
-  ui.setReadout('streamlines', `on (${lineCount})`);
-  ui.setReadout('trace ms', Math.round(traceMs));
-  ui.setReadout('GPU', describeGpu(gl));
-  ui.setReadout('triangles', probe.counts.triangles);
-  ui.setReadout('camera radius m', Math.round(orbit.radius));
-  if (!floatLinear) ui.setReadout('volume filter', 'NEAREST (no OES_texture_float_linear): not comparable');
 
   async function runBenchmark() {
     controls.enabled = false;
@@ -454,10 +392,20 @@ async function main(): Promise<void> {
     const restore = {w: Math.max(1, Math.floor(rect.width)), h: Math.max(1, Math.floor(rect.height)),
                      dpr: window.devicePixelRatio || 1};
     resizeObserver.unobserve(ui.canvasHost);
+    // Set and cleared HERE, not in runAndReport: __bench.runBenchmark is
+    // called directly too, and a flag left set would freeze playback.
+    benchmarking = true;
+    fps.reset();
     applySurface(SURFACE.width, SURFACE.height, 1);
+    const before = {...uploads};
     try {
       const result = await driver.runBenchmark();
       probe.benchmark = result;
+      probe.animation.benchmarkUploads = {
+        calls: uploads.calls - before.calls, bytes: uploads.bytes - before.bytes,
+        allocations: uploads.allocations - before.allocations,
+        drawnFrames: ORBIT_FLAGSHIP_V1.warmupFrames + result.cpuFrameTimesMs.length, mode,
+      };
       probe.measurementValid = result.cpuFrameTimesMs.length === ORBIT_FLAGSHIP_V1.forcedFrames;
       publish();
       return result;
@@ -466,12 +414,33 @@ async function main(): Promise<void> {
       resizeObserver.observe(ui.canvasHost);
       controls.enabled = true;
       renderFrame(flagshipPose(0, orbit));
+      benchmarking = false;
+      fps.reset();
     }
   }
 
-  (window as unknown as {__bench: {runBenchmark: () => Promise<unknown>}}).__bench.runBenchmark =
-    runBenchmark;
+  benchmarkHandler = runAndReport;
+  modeHandler = (value: string) => {
+    mode = value as SwapMode;
+    if (mode === 'preloaded') buildPreloaded();
+    showFrame(mode === 'static' ? 0 : playFrame);
+    renderScene();
+    ui.setReadout('mode', mode);
+    publish();
+  };
+  playHandler = (value: boolean) => { playing = value; };
 
+  (window as unknown as {__bench: Record<string, unknown>}).__bench.runBenchmark = runBenchmark;
+  (window as unknown as {__bench: Record<string, unknown>}).__bench.setMode = (m: SwapMode) => modeHandler(m);
+  (window as unknown as {__bench: Record<string, unknown>}).__bench.setPlaying = (p: boolean) => playHandler(p);
+
+  ui.setReadout('volume', `${meta.field}, ${meta.dims.join(' x ')} nodes (${(frames[0].length / 1e6).toFixed(2)}M), `
+    + `${frames.length} frames${seriesName === 'shipped' ? '' : `, ?fields=${seriesName}`}`);
+  ui.setReadout('mode', mode);
+  ui.setReadout('GPU', describeGpu(gl));
+  ui.setReadout('triangles', probe.counts.triangles);
+  ui.setReadout('camera radius m', Math.round(orbit.radius));
+  if (!floatLinear) ui.setReadout('volume filter', 'NEAREST (no OES_texture_float_linear): not comparable');
   publish();
   ui.ready();
 }
