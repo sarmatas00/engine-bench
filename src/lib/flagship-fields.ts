@@ -71,6 +71,33 @@ export const SWAP_MODES: SwapMode[] = ['static', 'stream', 'preloaded'];
  */
 export const PLAYBACK_FPS = 10;
 
+/**
+ * Volume resolution: the ray march runs on a target this many times smaller
+ * PER AXIS than the canvas, then is scaled up over the full-resolution city.
+ * Ray-march cost is per pixel, so 1/2 is a quarter of the work.
+ *
+ * MEASURED (M4, 3024x1559 Retina window, orbiting): full 19-24 FPS on both
+ * renderers, 1/2 44-51 FPS, 1/4 59-60 FPS. So the default is 'auto': half the
+ * window's CSS resolution, which is 1/2 of the canvas at pixel ratio 1 and 1/4
+ * on a Retina screen. The benchmark always draws at full, so its numbers stay
+ * comparable with pages 17/18.
+ */
+export const VOLUME_SCALES = [1, 2, 4] as const;
+export type VolumeScale = (typeof VOLUME_SCALES)[number];
+export type VolumeScaleChoice = 'auto' | 'full' | '1/2' | '1/4';
+export const VOLUME_SCALE_CHOICES: VolumeScaleChoice[] = ['auto', 'full', '1/2', '1/4'];
+export const DEFAULT_VOLUME_SCALE_CHOICE: VolumeScaleChoice = 'auto';
+export const VOLUME_SCALE_LABELS: Record<VolumeScale, string> = {1: 'full', 2: '1/2', 4: '1/4'};
+
+/** The scale a choice means on a screen with this pixel ratio. */
+export function resolveVolumeScale(choice: string, pixelRatio: number): VolumeScale {
+  if (choice === 'full') return 1;
+  if (choice === '1/2') return 2;
+  if (choice === '1/4') return 4;
+  // auto: half the CSS resolution, i.e. 2 x pixel ratio, snapped to a scale we offer.
+  return pixelRatio >= 1.5 ? 4 : 2;
+}
+
 /** The data frame a benchmark draw shows: one step per drawn frame, looping. */
 export function benchmarkFrame(drawIndex: number, frameCount: number, mode: SwapMode): number {
   return mode === 'static' ? 0 : drawIndex % frameCount;
@@ -96,6 +123,7 @@ export type AnimationProbe = Omit<GeometryProbe, 'axis' | 'volumeField' | 'selec
     /** The last playback test (runPlayback), without its raw gaps. */
     playback?: ReturnType<typeof summarisePlayback> & {
       refreshMs: number; mode: SwapMode; displayedFrames: number; dataSwaps: number; orbit: boolean;
+      volumeScale: VolumeScale;
       /** Drawing-buffer size the test ran at, so a result is never read without it. */
       surface: [number, number];
       uploads: VolumeUploadCounts;

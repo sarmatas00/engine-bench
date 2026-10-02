@@ -22,8 +22,8 @@ import {
 } from '@lib/flagship-geometry';
 import {DEFAULT_OPACITY, VOLUME_MAX_SAMPLES, VOLUME_STEP_M, opacityNodes} from '@lib/flagship-volume';
 import {
-  PLAYBACK_FPS, SWAP_MODES, benchmarkFrame, measureRefreshMs, runPlayback, seriesFromQuery, summarisePlayback, countVolumeUploads, loadFieldSeries, seriesBox,
-  type AnimationProbe, type FieldSeries, type SwapMode,
+  DEFAULT_VOLUME_SCALE_CHOICE, PLAYBACK_FPS, SWAP_MODES, VOLUME_SCALE_CHOICES, VOLUME_SCALE_LABELS, benchmarkFrame, resolveVolumeScale, measureRefreshMs, runPlayback, seriesFromQuery, summarisePlayback, countVolumeUploads, loadFieldSeries, seriesBox,
+  type AnimationProbe, type FieldSeries, type SwapMode, type VolumeScale,
 } from '@lib/flagship-fields';
 import {BLIT_FRAGMENT_GLSL, BLIT_VERTEX_GLSL, VOLUME_FRAGMENT_GLSL, VOLUME_VERTEX_GLSL} from '@lib/threejs-volume';
 import {attachContextLoss, createBenchmarkDriver, type CameraPose} from '@lib/scientific-probes';
@@ -35,6 +35,8 @@ const SURFACE = {width: 1280, height: 720} as const;
 
 /** Replaced by main() once the scene is up. */
 let modeHandler: (mode: string) => void = () => {};
+/** Replaced by main() once the scene is up. */
+let scaleHandler: (label: string) => void = () => {};
 /** Replaced by main() once the scene is up. */
 let playHandler: (playing: boolean) => void = () => {};
 /** Replaced by main() once the scene is up. */
@@ -52,6 +54,9 @@ const ui = mountChrome({
     + 'streamed into one texture or preloaded as one texture per frame.',
   controls: [
     {kind: 'select', id: 'mode', label: 'Swap', options: SWAP_MODES, value: 'stream', onChange: v => modeHandler(v)},
+    {kind: 'select', id: 'volume-scale', label: 'Volume resolution',
+     options: VOLUME_SCALE_CHOICES, value: DEFAULT_VOLUME_SCALE_CHOICE,
+     onChange: v => scaleHandler(v)},
     {kind: 'toggle', id: 'play', label: 'Play', value: true, onChange: v => playHandler(v)},
     {kind: 'button', id: 'run-benchmark', label: 'Run benchmark (210 frames)',
      onClick: () => { void benchmarkHandler(); }},
@@ -59,6 +64,9 @@ const ui = mountChrome({
      onClick: () => { void playbackHandler(); }},
   ],
   findings: [
+    'Volume resolution (default auto: half the window\'s CSS resolution, so 1/4 of the canvas on Retina) ray-marches the volume on a smaller target and scales it up over the '
+    + 'full-resolution city: our own code here, vtk.js\'s imageSampleDistance on page 19. The benchmark always '
+    + 'draws at full resolution, so its numbers compare with pages 17/18; the playback test uses the setting.',
     'Playback test: 10 s of real playback (data at 10 frames/s, the display at its own refresh, the camera '
     + 'orbiting as if dragged), recording the gap between displayed frames. It measures stutter, which the '
     + 'benchmark cannot: the benchmark times draws one after another, not what a viewer sees.',
@@ -105,7 +113,8 @@ async function main(): Promise<void> {
   const renderer = new THREE.WebGLRenderer({canvas, context: gl});
   renderer.autoClear = false;
   renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
-  renderer.setClearColor(new THREE.Color().setRGB(0.067, 0.086, 0.11), 1);
+  const background = new THREE.Color().setRGB(0.067, 0.086, 0.11);
+  renderer.setClearColor(background, 1);
   const gpuTimer = createGpuTimer(gl);
   const frameSync = makeFrameSync(gl);
   const floatLinear = renderer.extensions.has('OES_texture_float_linear');
@@ -143,6 +152,30 @@ async function main(): Promise<void> {
     depthTexture, depthBuffer: true, stencilBuffer: false, samples: canvasSamples,
     minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter,
   });
+
+  // --- reduced-resolution volume pass ------------------------------------------
+  // The march runs into this target, 1/scale of the canvas per axis, cleared to
+  // transparent; a full-screen quad then lays it over the city with the same
+  // premultiplied blend the volume pass uses. Linear filtering does the upscale.
+  // At scale 1 none of this runs: the volume draws straight to the canvas, the
+  // path pages 18 and 20 always had.
+  const volumeTarget = new THREE.WebGLRenderTarget(1, 1, {
+    depthBuffer: false, stencilBuffer: false,
+    minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter,
+  });
+  const compositeMaterial = new THREE.ShaderMaterial({
+    uniforms: {uColor: {value: volumeTarget.texture}},
+    vertexShader: BLIT_VERTEX_GLSL, fragmentShader: BLIT_FRAGMENT_GLSL,
+    transparent: true, depthTest: false, depthWrite: false,
+    blending: THREE.CustomBlending, blendSrc: THREE.OneFactor, blendDst: THREE.OneMinusSrcAlphaFactor,
+    blendEquation: THREE.AddEquation,
+  });
+  const compositeGeometry = new THREE.PlaneGeometry(2, 2);
+  const compositeScene = new THREE.Scene();
+  compositeScene.add(new THREE.Mesh(compositeGeometry, compositeMaterial));
+  let volumeChoice: string = DEFAULT_VOLUME_SCALE_CHOICE;
+  let volumeScale: VolumeScale = resolveVolumeScale(volumeChoice, window.devicePixelRatio || 1);
+  const bufferSize = new THREE.Vector2(1, 1);
 
   // --- the volume textures ----------------------------------------------------
   const [nx, ny, nz] = meta.dims;
@@ -240,20 +273,47 @@ async function main(): Promise<void> {
     const value = fps.fps();
     if (value !== null) ui.setReadout('redraws/sec', value.toFixed(0));
   }
-  const renderScene = () => {
+  const transparent = new THREE.Color(0, 0, 0);
+  /** One frame, no GPU sync: the city at full resolution, the volume at `scale`. */
+  const drawScene = (scale: VolumeScale) => {
     renderer.setRenderTarget(opaqueTarget);
     renderer.clear();
     renderer.render(opaque, camera);
     renderer.setRenderTarget(null);
     renderer.clear();
     renderer.render(blitScene, blitCamera);
+    if (scale === 1) {
+      uResolution.value.copy(bufferSize);
+      renderer.render(volumeScene, camera);
+      return;
+    }
+    const w = Math.ceil(bufferSize.x / scale), h = Math.ceil(bufferSize.y / scale);
+    if (volumeTarget.width !== w || volumeTarget.height !== h) volumeTarget.setSize(w, h);
+    // The shader turns gl_FragCoord into a depth-texture coordinate with this.
+    uResolution.value.set(w, h);
+    renderer.setRenderTarget(volumeTarget);
+    renderer.setClearColor(transparent, 0);
+    renderer.clear();
     renderer.render(volumeScene, camera);
+    renderer.setClearColor(background, 1);
+    renderer.setRenderTarget(null);
+    renderer.render(compositeScene, blitCamera);
+  };
+  // vtk.js's rule, so the two pages behave alike: reduced resolution while the
+  // picture is moving (playing, or the user dragging), full resolution once it
+  // comes to rest. The benchmark always draws full.
+  let interacting = false;
+  const moving = () => interacting || (playing && mode !== 'static');
+  const renderScene = () => {
+    drawScene(benchmarking || !moving() ? 1 : volumeScale);
     frameSync();
     tickFps();
   };
 
   controls.addEventListener('change', renderScene);
-  listeners += 1;
+  controls.addEventListener('start', () => { interacting = true; });
+  controls.addEventListener('end', () => { interacting = false; renderScene(); });
+  listeners += 3;
 
   function applySurface(cssWidth: number, cssHeight: number, dpr: number): void {
     renderer.setPixelRatio(dpr);
@@ -261,13 +321,15 @@ async function main(): Promise<void> {
     const bufferWidth = Math.max(1, Math.floor(cssWidth * dpr));
     const bufferHeight = Math.max(1, Math.floor(cssHeight * dpr));
     opaqueTarget.setSize(bufferWidth, bufferHeight);
-    uResolution.value.set(bufferWidth, bufferHeight);
+    bufferSize.set(bufferWidth, bufferHeight);
     camera.aspect = bufferWidth / bufferHeight;
     camera.updateProjectionMatrix();
     renderScene();
   }
 
   const resizeObserver = new ResizeObserver(() => {
+    // 'auto' depends on the pixel ratio, which changes when the window moves screens.
+    scaleHandler(volumeChoice);
     const rect = ui.canvasHost.getBoundingClientRect();
     if (rect.width > 0 && rect.height > 0) {
       applySurface(Math.max(1, Math.floor(rect.width)), Math.max(1, Math.floor(rect.height)),
@@ -351,6 +413,7 @@ async function main(): Promise<void> {
       volumeMaterial.dispose(); boxGeometry.dispose(); streamTexture.dispose();
       preloaded?.forEach(t => t.dispose());
       blitMaterial.dispose(); blitGeometry.dispose(); opaqueTarget.dispose();
+      compositeMaterial.dispose(); compositeGeometry.dispose(); volumeTarget.dispose();
       renderer.dispose();
     },
     onLost: () => {
@@ -456,18 +519,12 @@ async function main(): Promise<void> {
           camera.lookAt(controls.target);
           camera.updateMatrixWorld();
         }
-        // renderScene without its frameSync: a viewer's frames are pipelined.
-        renderer.setRenderTarget(opaqueTarget);
-        renderer.clear();
-        renderer.render(opaque, camera);
-        renderer.setRenderTarget(null);
-        renderer.clear();
-        renderer.render(blitScene, blitCamera);
-        renderer.render(volumeScene, camera);
+        // No frameSync: a viewer's frames are pipelined, so this must be too.
+        drawScene(volumeScale);
       },
       });
       const summary = {
-        ...summarisePlayback(result.gapsMs, refreshMs), refreshMs, mode,
+        ...summarisePlayback(result.gapsMs, refreshMs), refreshMs, mode, volumeScale,
         surface: [gl!.drawingBufferWidth, gl!.drawingBufferHeight] as [number, number],
         displayedFrames: result.displayedFrames, dataSwaps: result.dataSwaps, orbit: result.orbit,
         uploads: {calls: uploads.calls - before.calls, bytes: uploads.bytes - before.bytes,
@@ -488,7 +545,8 @@ async function main(): Promise<void> {
     ui.setReadout('playback', `running 10 s, ${mode}...`);
     const r = await runPlaybackTest();
     ui.setReadout('playback', `${mode}: ${r.missedPct.toFixed(1)}% frames late, worst ${r.worst.toFixed(0)} ms, `
-      + `p99 ${r.p99.toFixed(1)} ms (refresh ${r.refreshMs.toFixed(1)} ms) at ${r.surface.join('x')}`);
+      + `p99 ${r.p99.toFixed(1)} ms (refresh ${r.refreshMs.toFixed(1)} ms) at ${r.surface.join('x')}, `
+      + `volume ${VOLUME_SCALE_LABELS[r.volumeScale]}`);
   };
   benchmarkHandler = runAndReport;
   modeHandler = (value: string) => {
@@ -499,16 +557,27 @@ async function main(): Promise<void> {
     ui.setReadout('mode', mode);
     publish();
   };
-  playHandler = (value: boolean) => { playing = value; };
+  // Pausing redraws at rest, so a still picture is full resolution.
+  playHandler = (value: boolean) => { playing = value; renderScene(); };
+  scaleHandler = (label: string) => {
+    volumeChoice = label;
+    volumeScale = resolveVolumeScale(label, window.devicePixelRatio || 1);
+    renderScene();
+    ui.setReadout('volume resolution', `${volumeChoice} (${VOLUME_SCALE_LABELS[volumeScale]} of the canvas)`);
+    publish();
+  };
 
   (window as unknown as {__bench: Record<string, unknown>}).__bench.runBenchmark = runBenchmark;
   (window as unknown as {__bench: Record<string, unknown>}).__bench.runPlayback = runPlaybackTest;
   (window as unknown as {__bench: Record<string, unknown>}).__bench.setMode = (m: SwapMode) => modeHandler(m);
   (window as unknown as {__bench: Record<string, unknown>}).__bench.setPlaying = (p: boolean) => playHandler(p);
+  (window as unknown as {__bench: Record<string, unknown>}).__bench.setVolumeScale =
+    (v: VolumeScale) => scaleHandler(VOLUME_SCALE_LABELS[v]);
 
   ui.setReadout('volume', `${meta.field}, ${meta.dims.join(' x ')} nodes (${(frames[0].length / 1e6).toFixed(2)}M), `
     + `${frames.length} frames${seriesName === 'shipped' ? '' : `, ?fields=${seriesName}`}`);
   ui.setReadout('mode', mode);
+  ui.setReadout('volume resolution', `${volumeChoice} (${VOLUME_SCALE_LABELS[volumeScale]} of the canvas)`);
   ui.setReadout('GPU', describeGpu(gl));
   ui.setReadout('triangles', probe.counts.triangles);
   ui.setReadout('camera radius m', Math.round(orbit.radius));

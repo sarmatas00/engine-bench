@@ -1565,3 +1565,64 @@ measured on these pages.
 **A trap retracted.** The stale texture-hash rebuild noted for page 19 does not
 happen: 0 allocations in every playback run here, including 100 swaps with ~500
 non-swap renders in between.
+
+## Volume resolution: the fix for Retina playback (2026-10-03)
+
+Both pages gain a **Volume resolution** control: `auto` (the default), `full`,
+`1/2`, `1/4` of the canvas per axis. Only the volume is scaled; the city stays
+at full resolution. `auto` is half the window's CSS resolution: 1/2 of the
+canvas at pixel ratio 1, 1/4 on a Retina screen. **The benchmark always draws
+at full resolution**, so every published benchmark number keeps its meaning.
+
+**How each renderer does it.**
+
+- **vtk.js** has it built in, `volumeMapper.setImageSampleDistance(n)`, but
+  vtk.js 36.12.1 applies it **only while its interactor is animating**
+  (OpenGL `VolumeMapper.renderPieceStart`: a smaller viewport is used only if
+  `rwi.isAnimating()` and the scale is over 1.5). Rendered on demand, vtk.js
+  always draws the volume at full resolution. So page 19 holds an animation
+  request on the interactor while playing, and vtk.js's own loop draws every
+  display frame. It also sets `autoAdjustSampleDistances(false)`,
+  `initialInteractionScale = n^2` and `interactionSampleDistanceFactor = 1`.
+  vtk.js's default, auto-adjust ON, retunes the resolution about once a second
+  while dragging to hold 30 FPS, then snaps back to full on release: very
+  likely the "jumps" reported on page 19.
+- **Three.js** has nothing for it. Page 20 marches into a render target
+  1/n the size, cleared to transparent, then composites it over the city with
+  a full-screen quad and the same premultiplied blend. A few dozen more lines we
+  would own. To behave like vtk.js it draws reduced while moving (playing or
+  dragging) and one full-resolution frame at rest.
+
+**Result** (M4, 1512x945 window at pixel ratio 2 = 3024x1559 canvas, stream
+mode, orbiting, 10 s per run, 2 runs):
+
+~~~
+                     vtk.js (19)                  Three.js (20)
+full                 19-24 FPS, 72-97% late       23-24 FPS, 97% late
+1/2                  44-49 FPS, 22-31% late       50-51 FPS, 19-20% late
+1/4 (auto here)      60 FPS, 0% late              60 FPS, 0% late
+  preloaded at 1/4   55-56 FPS, worst 717-833 ms  60 FPS, 0% late
+~~~
+
+At pixel ratio 1 (1512x779 canvas), `auto` (1/2) holds 60 FPS on both, every
+mode. vtk.js preloaded at 1/4 on Retina has one 0.7-0.8 s stall per run, in
+both runs; not investigated. Raw: `.cache/sessions/2026-10-03-playback-volume-scale-metal.jsonl`.
+
+**What it looks like.** At 1/4 on Retina the volume is indistinguishable from
+full by eye in screenshots (it is soft to begin with), and the buildings are
+unchanged. No visible halo at building edges at this view; a close-up camera
+would be the place to look for one.
+
+**A bug of ours, caught by counting draws.** The first page-19 version shared
+one animation token between live playback and the playback test. The live
+timer's sync released the test's request, vtk.js stopped drawing, and the test
+reported a perfect 60 FPS: 25 draws in 181 frames. Two tokens fixed it. A
+playback test can be fooled by a renderer that is not drawing; counting GL
+draw calls is the check.
+
+**The machine was slow during part of this**, the same ~1.8x state seen on
+2026-10-02 (another process was loading it). An interleaved A/B of the pages
+before and after this change gave the same benchmark times (vtk.js static
+23.6-24.0 against 23.6-23.7 ms, Three.js 18.0-18.4 against 18.0-18.5), so the
+change does not touch the benchmark. The playback numbers above are
+refresh-bound or GPU-bound and match yesterday's full-resolution figures.

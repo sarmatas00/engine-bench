@@ -1,7 +1,7 @@
 import {describe, expect, test} from 'bun:test';
 import {readFileSync, statSync} from 'node:fs';
 import {resolve} from 'node:path';
-import {PLAYBACK_FPS, benchmarkFrame, checkSeriesJson, runPlayback, seriesBox, seriesFromQuery, summarisePlayback, type FieldSeriesJson} from '@lib/flagship-fields';
+import {PLAYBACK_FPS, benchmarkFrame, resolveVolumeScale, checkSeriesJson, runPlayback, seriesBox, seriesFromQuery, summarisePlayback, type FieldSeriesJson} from '@lib/flagship-fields';
 
 const dir = resolve(import.meta.dirname, '../../public/data/fields');
 const shipped = JSON.parse(readFileSync(resolve(dir, 'pressure.json'), 'utf8')) as FieldSeriesJson;
@@ -70,5 +70,14 @@ describe('flagship fields (animation axis)', () => {
     const s = summarisePlayback(r.gapsMs, 1000 / 60);
     expect(s.missed).toBe(1);
     expect(s.worst).toBeCloseTo(100, 5);
+  });
+
+  test('volume resolution: auto is half the CSS resolution, explicit choices are fixed', () => {
+    expect(resolveVolumeScale('auto', 1)).toBe(2);
+    expect(resolveVolumeScale('auto', 2)).toBe(4);
+    expect(resolveVolumeScale('auto', 3)).toBe(4);
+    expect(resolveVolumeScale('full', 2)).toBe(1);
+    expect(resolveVolumeScale('1/2', 2)).toBe(2);
+    expect(resolveVolumeScale('1/4', 1)).toBe(4);
   });
 });
