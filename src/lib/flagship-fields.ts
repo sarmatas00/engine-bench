@@ -93,6 +93,13 @@ export type AnimationProbe = Omit<GeometryProbe, 'axis' | 'volumeField' | 'selec
     uploads: VolumeUploadCounts;
     /** The last benchmark run's share of `uploads`, warm-up frames included. */
     benchmarkUploads?: VolumeUploadCounts & {drawnFrames: number; mode: SwapMode};
+    /** The last playback test (runPlayback), without its raw gaps. */
+    playback?: ReturnType<typeof summarisePlayback> & {
+      refreshMs: number; mode: SwapMode; displayedFrames: number; dataSwaps: number; orbit: boolean;
+      /** Drawing-buffer size the test ran at, so a result is never read without it. */
+      surface: [number, number];
+      uploads: VolumeUploadCounts;
+    };
   };
 };
 
@@ -198,4 +205,86 @@ export function countVolumeUploads(gl: WebGL2RenderingContext): VolumeUploadCoun
   // texSubImage3D(target, level, x, y, z, w, h, d, format, type, pixels)
   target.texSubImage3D = (...args) => { counts.calls++; counts.bytes += bytesOf(args[10]); return sub(...args); };
   return counts;
+}
+
+/**
+ * Playback smoothness, which the benchmark cannot see.
+ *
+ * The benchmark draws on demand, one frame after another, and reports how long
+ * each draw took. A user watching playback sees something else: the display
+ * refreshing on requestAnimationFrame, the data frame changing on its own clock
+ * (PLAYBACK_FPS), and every draw in between that is NOT a swap. A renderer can
+ * have a good p95 draw time and still stutter if those in-between draws are
+ * sometimes expensive. This drives exactly that loop and records the gap
+ * between consecutive displayed frames.
+ */
+export type PlaybackOptions = {
+  seconds: number;
+  /** Move the camera every displayed frame, as a user dragging would. */
+  orbit: boolean;
+  frameCount: number;
+  /** Swap to data frame k (the page's own showFrame). */
+  showFrame: (k: number) => void;
+  /** Draw one displayed frame; `turn` is 0..1 around the orbit when orbiting. */
+  draw: (turn: number | null) => void;
+  /** Injected for tests; requestAnimationFrame and performance.now otherwise. */
+  raf?: (cb: (t: number) => void) => void;
+};
+
+export type PlaybackResult = {
+  seconds: number; orbit: boolean;
+  displayedFrames: number; dataSwaps: number;
+  /** Gap between consecutive rAF callbacks that drew, ms. */
+  gapsMs: number[];
+};
+
+export function runPlayback(opts: PlaybackOptions): Promise<PlaybackResult> {
+  const raf = opts.raf ?? (cb => requestAnimationFrame(cb));
+  return new Promise(resolve => {
+    const gapsMs: number[] = [];
+    let start = -1, last = -1, shownData = -1, swaps = 0, displayed = 0;
+    const tick = (now: number) => {
+      if (start < 0) { start = now; last = now; }
+      const elapsed = (now - start) / 1000;
+      if (elapsed >= opts.seconds) {
+        resolve({seconds: opts.seconds, orbit: opts.orbit, displayedFrames: displayed, dataSwaps: swaps, gapsMs});
+        return;
+      }
+      const k = Math.floor(elapsed * PLAYBACK_FPS) % opts.frameCount;
+      if (k !== shownData) { opts.showFrame(k); shownData = k; swaps++; }
+      opts.draw(opts.orbit ? (elapsed / opts.seconds) % 1 : null);
+      if (displayed > 0) gapsMs.push(now - last);
+      last = now;
+      displayed++;
+      raf(tick);
+    };
+    raf(tick);
+  });
+}
+
+/** What a viewer feels: how often a frame was late, and how late the worst was. */
+export function summarisePlayback(gapsMs: number[], refreshMs: number): {
+  p50: number; p95: number; p99: number; worst: number;
+  /** Gaps longer than 1.5 refresh intervals: at least one refresh was missed. */
+  missed: number; missedPct: number;
+} {
+  const s = [...gapsMs].sort((a, b) => a - b);
+  const at = (p: number) => (s.length ? s[Math.min(s.length - 1, Math.floor(p * s.length))] : 0);
+  const missed = gapsMs.filter(g => g > 1.5 * refreshMs).length;
+  return {p50: at(0.5), p95: at(0.95), p99: at(0.99), worst: s.at(-1) ?? 0,
+          missed, missedPct: gapsMs.length ? (100 * missed) / gapsMs.length : 0};
+}
+
+/** The display's refresh interval, from idle rAF callbacks: median of `samples` gaps. */
+export function measureRefreshMs(samples = 30): Promise<number> {
+  return new Promise(resolve => {
+    const t: number[] = [];
+    const tick = (now: number) => {
+      t.push(now);
+      if (t.length <= samples) { requestAnimationFrame(tick); return; }
+      const gaps = t.slice(1).map((v, i) => v - t[i]).sort((a, b) => a - b);
+      resolve(gaps[Math.floor(gaps.length / 2)]);
+    };
+    requestAnimationFrame(tick);
+  });
 }

@@ -22,7 +22,7 @@ import {
 } from '@lib/flagship-geometry';
 import {DEFAULT_OPACITY, VOLUME_MAX_SAMPLES, VOLUME_STEP_M, opacityNodes} from '@lib/flagship-volume';
 import {
-  PLAYBACK_FPS, SWAP_MODES, benchmarkFrame, seriesFromQuery, countVolumeUploads, loadFieldSeries, seriesBox,
+  PLAYBACK_FPS, SWAP_MODES, benchmarkFrame, measureRefreshMs, runPlayback, seriesFromQuery, summarisePlayback, countVolumeUploads, loadFieldSeries, seriesBox,
   type AnimationProbe, type FieldSeries, type SwapMode,
 } from '@lib/flagship-fields';
 import {BLIT_FRAGMENT_GLSL, BLIT_VERTEX_GLSL, VOLUME_FRAGMENT_GLSL, VOLUME_VERTEX_GLSL} from '@lib/threejs-volume';
@@ -37,6 +37,8 @@ const SURFACE = {width: 1280, height: 720} as const;
 let modeHandler: (mode: string) => void = () => {};
 /** Replaced by main() once the scene is up. */
 let playHandler: (playing: boolean) => void = () => {};
+/** Replaced by main() once the scene is up. */
+let playbackHandler: () => Promise<void> = async () => {};
 /** Replaced by main() once the scene is up. */
 let benchmarkHandler: () => Promise<void> =
   async () => { ui.setReadout('benchmark', 'still loading, try again in a moment'); };
@@ -53,8 +55,13 @@ const ui = mountChrome({
     {kind: 'toggle', id: 'play', label: 'Play', value: true, onChange: v => playHandler(v)},
     {kind: 'button', id: 'run-benchmark', label: 'Run benchmark (210 frames)',
      onClick: () => { void benchmarkHandler(); }},
+    {kind: 'button', id: 'run-playback', label: 'Playback test (10 s, orbiting, this window)',
+     onClick: () => { void playbackHandler(); }},
   ],
   findings: [
+    'Playback test: 10 s of real playback (data at 10 frames/s, the display at its own refresh, the camera '
+    + 'orbiting as if dragged), recording the gap between displayed frames. It measures stutter, which the '
+    + 'benchmark cannot: the benchmark times draws one after another, not what a viewer sees.',
     'The field is SYNTHETIC and ignores the buildings: Anders\'s generator says "not a fluid simulation". '
     + 'It is a time series of realistic shape, here to measure playback, not to show a flow.',
     'Bigger series for the size test (?fields=large, ?fields=xl) are generated locally and not published; '
@@ -419,6 +426,70 @@ async function main(): Promise<void> {
     }
   }
 
+
+  /**
+   * The playback test, live timer paused. `surface: 'page'` (the button's
+   * choice) keeps the canvas the viewer actually has, at the screen's pixel
+   * ratio: that is what stutters or not. 'test' pins the benchmark's
+   * 1280x720 at ratio 1, for comparing machines and renderers.
+   */
+  async function runPlaybackTest(opts: {seconds?: number; orbit?: boolean; surface?: 'page' | 'test'} = {}) {
+    const pinned = (opts.surface ?? 'page') === 'test';
+    controls.enabled = false;
+    const rect = ui.canvasHost.getBoundingClientRect();
+    const restore = {w: Math.max(1, Math.floor(rect.width)), h: Math.max(1, Math.floor(rect.height)),
+                     dpr: window.devicePixelRatio || 1};
+    resizeObserver.unobserve(ui.canvasHost);
+    benchmarking = true;
+    if (pinned) applySurface(SURFACE.width, SURFACE.height, 1);
+    const before = {...uploads};
+    try {
+      const refreshMs = await measureRefreshMs();
+      const result = await runPlayback({
+        seconds: opts.seconds ?? 10, orbit: opts.orbit ?? true, frameCount: frames.length,
+        showFrame: (k) => { if (mode !== 'static') showFrame(k); },
+      draw: (turn) => {
+        if (turn !== null) {
+          const pose = flagshipPose(turn * (ORBIT_FLAGSHIP_V1.warmupFrames + ORBIT_FLAGSHIP_V1.forcedFrames), orbit);
+          camera.position.set(pose.eye[0], pose.eye[1], pose.eye[2]);
+          controls.target.set(pose.target[0], pose.target[1], pose.target[2]);
+          camera.lookAt(controls.target);
+          camera.updateMatrixWorld();
+        }
+        // renderScene without its frameSync: a viewer's frames are pipelined.
+        renderer.setRenderTarget(opaqueTarget);
+        renderer.clear();
+        renderer.render(opaque, camera);
+        renderer.setRenderTarget(null);
+        renderer.clear();
+        renderer.render(blitScene, blitCamera);
+        renderer.render(volumeScene, camera);
+      },
+      });
+      const summary = {
+        ...summarisePlayback(result.gapsMs, refreshMs), refreshMs, mode,
+        surface: [gl!.drawingBufferWidth, gl!.drawingBufferHeight] as [number, number],
+        displayedFrames: result.displayedFrames, dataSwaps: result.dataSwaps, orbit: result.orbit,
+        uploads: {calls: uploads.calls - before.calls, bytes: uploads.bytes - before.bytes,
+                  allocations: uploads.allocations - before.allocations},
+      };
+      probe.animation.playback = summary;
+      publish();
+      return {...summary, gapsMs: result.gapsMs};
+    } finally {
+      if (pinned) applySurface(restore.w, restore.h, restore.dpr);
+      resizeObserver.observe(ui.canvasHost);
+      controls.enabled = true;
+      renderFrame(flagshipPose(0, orbit));
+      benchmarking = false;
+    }
+  }
+  playbackHandler = async () => {
+    ui.setReadout('playback', `running 10 s, ${mode}...`);
+    const r = await runPlaybackTest();
+    ui.setReadout('playback', `${mode}: ${r.missedPct.toFixed(1)}% frames late, worst ${r.worst.toFixed(0)} ms, `
+      + `p99 ${r.p99.toFixed(1)} ms (refresh ${r.refreshMs.toFixed(1)} ms) at ${r.surface.join('x')}`);
+  };
   benchmarkHandler = runAndReport;
   modeHandler = (value: string) => {
     mode = value as SwapMode;
@@ -431,6 +502,7 @@ async function main(): Promise<void> {
   playHandler = (value: boolean) => { playing = value; };
 
   (window as unknown as {__bench: Record<string, unknown>}).__bench.runBenchmark = runBenchmark;
+  (window as unknown as {__bench: Record<string, unknown>}).__bench.runPlayback = runPlaybackTest;
   (window as unknown as {__bench: Record<string, unknown>}).__bench.setMode = (m: SwapMode) => modeHandler(m);
   (window as unknown as {__bench: Record<string, unknown>}).__bench.setPlaying = (p: boolean) => playHandler(p);
 
