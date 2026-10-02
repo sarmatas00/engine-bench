@@ -1,0 +1,175 @@
+{
+  "field": "pressure",
+  "unit": "Pa",
+  "dims": [
+    129,
+    129,
+    37
+  ],
+  "origin": [
+    -1000.2223749999976,
+    -1000.2170000000042,
+    -1.0
+  ],
+  "spacing": [
+    15.625,
+    15.625,
+    7.698666666666668
+  ],
+  "order": "x-fastest",
+  "association": "vertex",
+  "frame": "the flagship geometry artifact's local frame (dataset.json origin and z0)",
+  "range": [
+    -278.1243896484375,
+    256.0116271972656
+  ],
+  "periodSeconds": 10.0,
+  "frameStride": 4,
+  "frames": [
+    {
+      "file": "pressure.0000.f32",
+      "snapshot": 0,
+      "timeSeconds": 0.0
+    },
+    {
+      "file": "pressure.0004.f32",
+      "snapshot": 4,
+      "timeSeconds": 0.4
+    },
+    {
+      "file": "pressure.0008.f32",
+      "snapshot": 8,
+      "timeSeconds": 0.8
+    },
+    {
+      "file": "pressure.0012.f32",
+      "snapshot": 12,
+      "timeSeconds": 1.2
+    },
+    {
+      "file": "pressure.0016.f32",
+      "snapshot": 16,
+      "timeSeconds": 1.6
+    },
+    {
+      "file": "pressure.0020.f32",
+      "snapshot": 20,
+      "timeSeconds": 2.0
+    },
+    {
+      "file": "pressure.0024.f32",
+      "snapshot": 24,
+      "timeSeconds": 2.4
+    },
+    {
+      "file": "pressure.0028.f32",
+      "snapshot": 28,
+      "timeSeconds": 2.8000000000000003
+    },
+    {
+      "file": "pressure.0032.f32",
+      "snapshot": 32,
+      "timeSeconds": 3.2
+    },
+    {
+      "file": "pressure.0036.f32",
+      "snapshot": 36,
+      "timeSeconds": 3.5999999999999996
+    },
+    {
+      "file": "pressure.0040.f32",
+      "snapshot": 40,
+      "timeSeconds": 4.0
+    },
+    {
+      "file": "pressure.0044.f32",
+      "snapshot": 44,
+      "timeSeconds": 4.4
+    },
+    {
+      "file": "pressure.0048.f32",
+      "snapshot": 48,
+      "timeSeconds": 4.8
+    },
+    {
+      "file": "pressure.0052.f32",
+      "snapshot": 52,
+      "timeSeconds": 5.2
+    },
+    {
+      "file": "pressure.0056.f32",
+      "snapshot": 56,
+      "timeSeconds": 5.6000000000000005
+    },
+    {
+      "file": "pressure.0060.f32",
+      "snapshot": 60,
+      "timeSeconds": 6.0
+    },
+    {
+      "file": "pressure.0064.f32",
+      "snapshot": 64,
+      "timeSeconds": 6.4
+    },
+    {
+      "file": "pressure.0068.f32",
+      "snapshot": 68,
+      "timeSeconds": 6.800000000000001
+    },
+    {
+      "file": "pressure.0072.f32",
+      "snapshot": 72,
+      "timeSeconds": 7.199999999999999
+    },
+    {
+      "file": "pressure.0076.f32",
+      "snapshot": 76,
+      "timeSeconds": 7.6
+    },
+    {
+      "file": "pressure.0080.f32",
+      "snapshot": 80,
+      "timeSeconds": 8.0
+    },
+    {
+      "file": "pressure.0084.f32",
+      "snapshot": 84,
+      "timeSeconds": 8.4
+    },
+    {
+      "file": "pressure.0088.f32",
+      "snapshot": 88,
+      "timeSeconds": 8.8
+    },
+    {
+      "file": "pressure.0092.f32",
+      "snapshot": 92,
+      "timeSeconds": 9.200000000000001
+    },
+    {
+      "file": "pressure.0096.f32",
+      "snapshot": 96,
+      "timeSeconds": 9.6
+    }
+  ],
+  "seamCheck": {
+    "snapshot": 100,
+    "maxDifferenceOfPeakFromSnapshot0": 1.055235502976386e-16
+  },
+  "orderCheck": {
+    "maxErrorOfPeak": 0.0,
+    "maxErrorOfPeakIfXYSwapped": 1.2342,
+    "atSeconds": 0.0
+  },
+  "synthetic": true,
+  "source": {
+    "file": "fields.zip",
+    "sha256": "639af1f5b1050c075d264f3f8d7123d3da0102a40c978477d6f6a498d16beed0",
+    "series": "fields/fields-series.json",
+    "generator": "dtcc-core scripts/generate_fields.py",
+    "generatorCommit": "897faf6"
+  },
+  "stages": {
+    "extract": "2026-10-01T21:34:32.778522+00:00"
+  }
+}
