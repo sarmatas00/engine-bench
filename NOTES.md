@@ -1482,10 +1482,13 @@ GPU, or the vtk.js path needs work on its upload.
 
 - **vtk.js `setUpdatedExtents` before the first render throws**: the mapper
   looks up a texture that does not exist yet. Page 19 renders once first.
-- **After an in-place update, vtk.js's texture-cache hash is stale**, so the
-  next render WITHOUT extents rebuilds the texture once. Harmless in the
-  benchmark (every frame sets extents), visible as one allocation if you drag
-  the camera mid-playback.
+- **After an in-place update, vtk.js's texture-cache hash is stale** (it is
+  only refreshed on a full rebuild). Read from the source, this looked like it
+  would rebuild the texture on the next render without extents. MEASURED, it
+  does not: 10 s of orbiting playback, 100 swaps and ~500 renders without one,
+  made 0 allocations. A render that changes nothing never reaches the texture
+  code (`getNeedToRebuildBufferObjects` is false). It would only matter if
+  something else, such as a transfer-function edit, forced that path.
 - **Each benchmark run adds 2 textures on page 19**: the known vtk.js
   per-resize leak (the run resizes to 1280x720 and back), not the swap.
   Five seconds of stream playback (52 uploads) without resizing held the count
