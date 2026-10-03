@@ -20,10 +20,13 @@ import {
   ORBIT_FLAGSHIP_V1, FLAGSHIP_FOV_DEG, createFpsMeter, createGpuTimer, describeGpu, flagshipPose,
   instrumentGlObjects, loadFlagshipGeometry, makeFrameSync, percentile, type FlagshipBundle,
 } from '@lib/flagship-geometry';
-import {DEFAULT_OPACITY, VOLUME_MAX_SAMPLES, VOLUME_STEP_M, opacityNodes} from '@lib/flagship-volume';
+import {
+  DEFAULT_OPACITY, STREAMLINE_COLOUR, STREAMLINE_MAX_STEPS, STREAMLINE_STEP_S, VOLUME_MAX_SAMPLES, VOLUME_STEP_M,
+  opacityNodes, traceStreamlines, type TracedLines, type VelocityGrid,
+} from '@lib/flagship-volume';
 import {
   DEFAULT_VOLUME_SCALE_CHOICE, PLAYBACK_FPS, SWAP_MODES, VOLUME_SCALE_CHOICES, VOLUME_SCALE_LABELS, benchmarkFrame, resolveVolumeScale, measureRefreshMs, runPlayback, seriesFromQuery, summarisePlayback, countVolumeUploads, loadFieldSeries, seriesBox,
-  type AnimationProbe, type FieldSeries, type SwapMode, type VolumeScale,
+  STREAMLINE_MODES, type AnimationProbe, type FieldSeries, type StreamlineMode, type SwapMode, type VolumeScale,
 } from '@lib/flagship-fields';
 import {BLIT_FRAGMENT_GLSL, BLIT_VERTEX_GLSL, VOLUME_FRAGMENT_GLSL, VOLUME_VERTEX_GLSL} from '@lib/threejs-volume';
 import {attachContextLoss, createBenchmarkDriver, type CameraPose} from '@lib/scientific-probes';
@@ -35,6 +38,8 @@ const SURFACE = {width: 1280, height: 720} as const;
 
 /** Replaced by main() once the scene is up. */
 let modeHandler: (mode: string) => void = () => {};
+/** Replaced by main() once the scene is up. */
+let streamlineHandler: (mode: string) => void = () => {};
 /** Replaced by main() once the scene is up. */
 let scaleHandler: (label: string) => void = () => {};
 /** Replaced by main() once the scene is up. */
@@ -54,6 +59,8 @@ const ui = mountChrome({
     + 'streamed into one texture or preloaded as one texture per frame.',
   controls: [
     {kind: 'select', id: 'mode', label: 'Swap', options: SWAP_MODES, value: 'stream', onChange: v => modeHandler(v)},
+    {kind: 'select', id: 'streamlines', label: 'Streamlines', options: STREAMLINE_MODES, value: 'precomputed',
+     onChange: v => streamlineHandler(v)},
     {kind: 'select', id: 'volume-scale', label: 'Volume resolution',
      options: VOLUME_SCALE_CHOICES, value: DEFAULT_VOLUME_SCALE_CHOICE,
      onChange: v => scaleHandler(v)},
@@ -64,6 +71,9 @@ const ui = mountChrome({
      onClick: () => { void playbackHandler(); }},
   ],
   findings: [
+    'Streamlines come from the field\'s velocity (every 2nd vertex, 65x65x19), 100 seeds at a quarter of the box '
+    + 'height, traced by traceStreamlines, page 18\'s port of vtkImageStreamline. Precomputed traces all 25 frames '
+    + 'at load and swaps the lines; live traces again on every data change, inside the drawn frame.',
     'Volume resolution (default auto: half the window\'s CSS resolution, so 1/4 of the canvas on Retina) ray-marches the volume on a smaller target and scales it up over the '
     + 'full-resolution city: our own code here, vtk.js\'s imageSampleDistance on page 19. The benchmark always '
     + 'draws at full resolution, so its numbers compare with pages 17/18; the playback test uses the setting.',
@@ -139,6 +149,58 @@ async function main(): Promise<void> {
 
   const opaque = new THREE.Scene();
   opaque.add(new THREE.Mesh(geometry, material));
+  // --- streamlines: our port of vtkImageStreamline, page 18's drawing ----------
+  // Opaque and in the city pass, like page 18, so the volume stops at a line.
+  const velocity = series.velocity;
+  let streamMode: StreamlineMode = velocity ? 'precomputed' : 'off';
+  const lineMaterial = new THREE.LineBasicMaterial();
+  lineMaterial.color.setRGB(...STREAMLINE_COLOUR);
+  const emptyLines = new THREE.BufferGeometry();
+  const lineMesh = new THREE.LineSegments(emptyLines, lineMaterial);
+  lineMesh.frustumCulled = false;
+  opaque.add(lineMesh);
+  const traceMs: number[] = [];
+  let lineStats = {lines: 0, points: 0};
+  const traceFrame = (k: number): TracedLines => {
+    const grid = {meta: velocity!.meta, data: velocity!.frames[k]} as unknown as VelocityGrid;
+    const t0 = performance.now();
+    const traced = traceStreamlines(grid, velocity!.meta.seeds, STREAMLINE_STEP_S, STREAMLINE_MAX_STEPS);
+    traceMs.push(performance.now() - t0);
+    return traced;
+  };
+  const toGeometry = (t: TracedLines): THREE.BufferGeometry => {
+    const index: number[] = [];
+    for (let l = 0; l + 1 < t.lineStarts.length; l++) {
+      for (let q = t.lineStarts[l]; q + 1 < t.lineStarts[l + 1]; q++) index.push(q, q + 1);
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(t.positions, 3));
+    g.setIndex(index);
+    g.userData = {lines: t.lineStarts.length - 1, points: t.positions.length / 3};
+    return g;
+  };
+  let precomputedLines: THREE.BufferGeometry[] | null = null;
+  let precomputeMs = 0;
+  function showLines(k: number): void {
+    lineMesh.visible = streamMode !== 'off';
+    if (streamMode === 'off') return;
+    let next: THREE.BufferGeometry;
+    if (streamMode === 'precomputed') {
+      if (!precomputedLines) {
+        const t0 = performance.now();
+        precomputedLines = velocity!.frames.map((_, i) => toGeometry(traceFrame(i)));
+        precomputeMs = performance.now() - t0;
+      }
+      next = precomputedLines[k];
+    } else {
+      next = toGeometry(traceFrame(k));
+    }
+    const old = lineMesh.geometry;
+    lineMesh.geometry = next;
+    if (old !== emptyLines && !precomputedLines?.includes(old)) old.dispose();
+    lineStats = next.userData as {lines: number; points: number};
+  }
+
   opaque.add(camera);
   opaque.add(new THREE.AmbientLight(0xffffff, 0.9));
 
@@ -246,6 +308,7 @@ async function main(): Promise<void> {
 
   let mode: SwapMode = 'stream';
   let shown = 0;
+  let shownLines = -1;
   function showFrame(k: number): void {
     if (mode === 'preloaded') {
       uData.value = preloaded![k];
@@ -258,6 +321,9 @@ async function main(): Promise<void> {
         streamTexture.needsUpdate = true;
       }
     }
+    // Lines follow the volume's frame. Live retraces on every call that moves
+    // the data (static stays on frame 0 and never retraces).
+    if (mode !== 'static' || shownLines !== k) { showLines(k); shownLines = k; }
     shown = k;
   }
 
@@ -351,6 +417,12 @@ async function main(): Promise<void> {
   };
 
   const volumeTextures = () => (preloaded ? 1 + preloaded.length : 1);
+  const streamlineStats = () => ({
+    mode: streamMode, seeds: velocity?.meta.seeds.length ?? 0, lines: streamMode === 'off' ? 0 : lineStats.lines,
+    points: streamMode === 'off' ? 0 : lineStats.points, traces: traceMs.length,
+    traceMsP50: traceMs.length ? percentile(traceMs, 0.5) : null,
+    traceMsMax: traceMs.length ? Math.max(...traceMs) : null,
+  });
   const probe: AnimationProbe = {
     renderer: 'threejs',
     status: 'ready',
@@ -371,7 +443,7 @@ async function main(): Promise<void> {
     },
     animation: {
       series: seriesName, mode, frames: frames.length, bytesPerFrame: frames[0].byteLength,
-      volumeTextures: volumeTextures(), uploads: {...uploads},
+      volumeTextures: volumeTextures(), uploads: {...uploads}, streamlines: streamlineStats(),
     },
     resources: {
       buffers: counts.buffers, textures: counts.textures,
@@ -412,6 +484,7 @@ async function main(): Promise<void> {
       material.dispose(); geometry.dispose();
       volumeMaterial.dispose(); boxGeometry.dispose(); streamTexture.dispose();
       preloaded?.forEach(t => t.dispose());
+      lineMesh.geometry.dispose(); precomputedLines?.forEach(g => g.dispose()); lineMaterial.dispose();
       blitMaterial.dispose(); blitGeometry.dispose(); opaqueTarget.dispose();
       compositeMaterial.dispose(); compositeGeometry.dispose(); volumeTarget.dispose();
       renderer.dispose();
@@ -423,7 +496,8 @@ async function main(): Promise<void> {
   });
 
   function publish(): void {
-    probe.animation = {...probe.animation, mode, volumeTextures: volumeTextures(), uploads: {...uploads}};
+    probe.animation = {...probe.animation, mode, volumeTextures: volumeTextures(), uploads: {...uploads},
+                       streamlines: streamlineStats()};
     probe.lens = {fovDeg: camera.fov, aspect: camera.aspect,
                   surface: [gl.drawingBufferWidth, gl.drawingBufferHeight]};
     probe.resources = {
@@ -450,7 +524,10 @@ async function main(): Promise<void> {
       const b = probe.animation.benchmarkUploads!;
       ui.setReadout('uploads/frame', `${(b.calls / b.drawnFrames).toFixed(2)} (${(b.bytes / b.drawnFrames / 1e6).toFixed(2)} MB), `
         + `${b.allocations} allocations`);
-      ui.setReadout('benchmark', `done, ${mode}, ${cpu.length} measured frames`);
+      const st = probe.animation.streamlines;
+      ui.setReadout('trace ms', st.traceMsP50 === null ? 'no retraces'
+        : `p50 ${st.traceMsP50.toFixed(1)}, max ${st.traceMsMax!.toFixed(1)} (${st.traces} traces, ${st.mode})`);
+      ui.setReadout('benchmark', `done, ${mode}, streamlines ${streamMode}, ${cpu.length} measured frames`);
     } catch (err) {
       ui.setReadout('benchmark', `failed: ${(err as Error).message}`);
     }
@@ -468,6 +545,7 @@ async function main(): Promise<void> {
     fps.reset();
     applySurface(SURFACE.width, SURFACE.height, 1);
     const before = {...uploads};
+    traceMs.length = 0;
     try {
       const result = await driver.runBenchmark();
       probe.benchmark = result;
@@ -506,6 +584,7 @@ async function main(): Promise<void> {
     benchmarking = true;
     if (pinned) applySurface(SURFACE.width, SURFACE.height, 1);
     const before = {...uploads};
+    traceMs.length = 0;
     try {
       const refreshMs = await measureRefreshMs();
       const result = await runPlayback({
@@ -559,6 +638,15 @@ async function main(): Promise<void> {
   };
   // Pausing redraws at rest, so a still picture is full resolution.
   playHandler = (value: boolean) => { playing = value; renderScene(); };
+  streamlineHandler = (value: string) => {
+    if (!velocity && value !== 'off') { ui.setReadout('streamlines', 'no velocity in this series'); return; }
+    streamMode = value as StreamlineMode;
+    showLines(shown);
+    if (streamMode === 'precomputed') ui.setReadout('precompute ms', Math.round(precomputeMs));
+    ui.setReadout('streamlines', `${streamMode}${streamMode === 'off' ? '' : ` (${lineStats.lines} lines, ${lineStats.points} points)`}`);
+    renderScene();
+    publish();
+  };
   scaleHandler = (label: string) => {
     volumeChoice = label;
     volumeScale = resolveVolumeScale(label, window.devicePixelRatio || 1);
@@ -571,12 +659,14 @@ async function main(): Promise<void> {
   (window as unknown as {__bench: Record<string, unknown>}).__bench.runPlayback = runPlaybackTest;
   (window as unknown as {__bench: Record<string, unknown>}).__bench.setMode = (m: SwapMode) => modeHandler(m);
   (window as unknown as {__bench: Record<string, unknown>}).__bench.setPlaying = (p: boolean) => playHandler(p);
+  (window as unknown as {__bench: Record<string, unknown>}).__bench.setStreamlines = (m: StreamlineMode) => streamlineHandler(m);
   (window as unknown as {__bench: Record<string, unknown>}).__bench.setVolumeScale =
     (v: VolumeScale) => scaleHandler(VOLUME_SCALE_LABELS[v]);
 
   ui.setReadout('volume', `${meta.field}, ${meta.dims.join(' x ')} nodes (${(frames[0].length / 1e6).toFixed(2)}M), `
     + `${frames.length} frames${seriesName === 'shipped' ? '' : `, ?fields=${seriesName}`}`);
   ui.setReadout('mode', mode);
+  streamlineHandler(streamMode);
   ui.setReadout('volume resolution', `${volumeChoice} (${VOLUME_SCALE_LABELS[volumeScale]} of the canvas)`);
   ui.setReadout('GPU', describeGpu(gl));
   ui.setReadout('triangles', probe.counts.triangles);

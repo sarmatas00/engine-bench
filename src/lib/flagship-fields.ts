@@ -41,11 +41,43 @@ export type FieldSeriesJson = {
   source: {file: string; sha256: string; generator: string; generatorCommit: string};
 };
 
+export type VelocitySeriesJson = {
+  /** Every strideVertices-th vertex of the pressure grid, per axis. */
+  dims: [number, number, number];
+  origin: [number, number, number];
+  spacing: [number, number, number];
+  order: 'x-fastest';
+  components: 3;
+  strideVertices: number;
+  frames: {file: string; snapshot: number; timeSeconds: number}[];
+  /** Streamline seeds in the local frame, the same for every frame. */
+  seeds: [number, number, number][];
+  maxSpeed: number;
+  orderCheck: {maxErrorOfPeak: number; maxErrorOfPeakIfXYSwapped: number; atSeconds: number};
+};
+
 export type FieldSeries = {
   meta: FieldSeriesJson;
   /** One x-fastest float32 volume per shipped frame, in meta.frames order. */
   frames: Float32Array[];
+  /**
+   * Velocity for streamlines, one grid per pressure frame, three components
+   * per node. Only the shipped series has it; the local size-test series do not.
+   */
+  velocity: {meta: VelocitySeriesJson; frames: Float32Array[]} | null;
 };
+
+/**
+ * Streamlines on the animated field.
+ *  - off: none drawn.
+ *  - precomputed: every frame traced once at load, the lines swapped with the
+ *    volume. What shipping results to a Twin would look like.
+ *  - live: traced again every time the data frame changes, inside the drawn
+ *    frame. The stress test Anders asked for: the tracer's speed shows up as
+ *    frame time.
+ */
+export type StreamlineMode = 'off' | 'precomputed' | 'live';
+export const STREAMLINE_MODES: StreamlineMode[] = ['off', 'precomputed', 'live'];
 
 /**
  * How the volume changes between drawn frames.
@@ -120,6 +152,9 @@ export type AnimationProbe = Omit<GeometryProbe, 'axis' | 'volumeField' | 'selec
     uploads: VolumeUploadCounts;
     /** The last benchmark run's share of `uploads`, warm-up frames included. */
     benchmarkUploads?: VolumeUploadCounts & {drawnFrames: number; mode: SwapMode};
+    /** Streamlines as drawn now; traceMs are the last run's per-trace times. */
+    streamlines: {mode: StreamlineMode; seeds: number; lines: number; points: number;
+                  traces: number; traceMsP50: number | null; traceMsMax: number | null};
     /** The last playback test (runPlayback), without its raw gaps. */
     playback?: ReturnType<typeof summarisePlayback> & {
       refreshMs: number; mode: SwapMode; displayedFrames: number; dataSwaps: number; orbit: boolean;
@@ -192,7 +227,26 @@ export async function loadFieldSeries(name: SeriesName = 'shipped'): Promise<Fie
     return bytes;
   }));
   checkSeriesJson(meta, bins.map(b => b.byteLength));
-  return {meta, frames: bins.map(b => new Float32Array(b.buffer, b.byteOffset, b.byteLength / 4))};
+  const asFloats = (b: Uint8Array) => new Float32Array(b.buffer, b.byteOffset, b.byteLength / 4);
+  let velocity: FieldSeries['velocity'] = null;
+  const velName = (manifest as {velocity?: string}).velocity;
+  if (velName) {
+    const velBytes = await fetchBytes(assetUrl(`${DATA}/${velName}`));
+    await verified(velBytes, manifest.files[velName], `fields ${velName}`);
+    const velMeta = JSON.parse(new TextDecoder().decode(velBytes)) as VelocitySeriesJson;
+    const need = velMeta.dims[0] * velMeta.dims[1] * velMeta.dims[2] * 3 * 4;
+    if (velMeta.order !== 'x-fastest' || velMeta.frames.length !== meta.frames.length) {
+      throw new Error(`velocity: order ${velMeta.order}, ${velMeta.frames.length} frames for ${meta.frames.length} pressure frames`);
+    }
+    const velBins = await Promise.all(velMeta.frames.map(async ({file}) => {
+      const bytes = await fetchBytes(assetUrl(`${DATA}/${file}`));
+      await verified(bytes, manifest.files[file], `fields ${file}`);
+      if (bytes.byteLength !== need) throw new Error(`velocity ${file}: needs ${need} bytes, has ${bytes.byteLength}`);
+      return bytes;
+    }));
+    velocity = {meta: velMeta, frames: velBins.map(asFloats)};
+  }
+  return {meta, frames: bins.map(asFloats), velocity};
 }
 
 /** The volume's node box in the local frame: first to last vertex. */

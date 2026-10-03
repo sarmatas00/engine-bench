@@ -1626,3 +1626,62 @@ before and after this change gave the same benchmark times (vtk.js static
 23.6-24.0 against 23.6-23.7 ms, Three.js 18.0-18.4 against 18.0-18.5), so the
 change does not touch the benchmark. The playback numbers above are
 refresh-bound or GPU-bound and match yesterday's full-resolution figures.
+
+## Streamlines on the animated field, pages 19/20 (2026-10-03)
+
+Anders asked for streamlines on the animated field "for even more stress
+testing". Both pages gain a **Streamlines** control: `off`, `precomputed`
+(default) and `live`.
+
+**Data.** `extract_fields.py` now also writes the series' `velocity`, every
+2nd vertex per axis: 65x65x19 at 31 m / 15 m spacing, ~1 MB a frame, 20 MB for
+the 25 frames (full resolution would be 7.4 MB a frame). Its order is proved
+the same way as pressure: equal to `sample_fields()` exactly (error 0.0), x/y
+swapped 80% off. The pressure frames came out byte-identical. 100 seeds, a
+10x10 lattice at a quarter of the box height, the same every frame.
+
+**Same lines on both.** vtk.js traces with `vtkImageStreamline`, page 20 with
+`traceStreamlines` (page 18's port). `streamline-port.test.ts` now requires
+**identical points on all 25 frames**; frame 0 is 100 lines, 31,845 points on
+both pages.
+
+- **precomputed:** every frame traced once, the lines swapped with the volume.
+  vtk.js needs one filter per frame: a filter reuses its output object
+  (`outData[0]?.initialize()` in ImageStreamline), so 25 traces through one
+  filter would leave 25 references to the last result.
+- **live:** traced again whenever the data frame changes. The benchmark
+  changes it every drawn frame, so it retraces 210 times a run; playback
+  retraces 10 times a second.
+
+**Result.** M4, Metal, stream swap mode, 2 runs each in both page orders.
+Benchmark at 1280x720 (full volume resolution); playback at a 3024x1559 Retina
+window, `auto` volume resolution, orbiting. Raw:
+`.cache/sessions/2026-10-03-animated-streamlines-metal.jsonl`.
+
+~~~
+                          vtk.js (19)                  Three.js (20)
+benchmark cpu p50
+  off                     15.2-17.5 ms                 12.0-12.4 ms
+  precomputed             15.9-16.6 ms                 12.0 ms
+  live                    83.5-84.8 ms                 17.0 ms
+  one trace, p50          67.7-69.3 ms                 5.5-6.0 ms
+precompute all 25         1.6 s                        0.15 s
+playback, Retina
+  precomputed             60 FPS, 0% late              60 FPS, 0% late
+  live                    33 FPS, 32% late, 83 ms      60 FPS, 0-0.2% late
+~~~
+
+- **Precomputed lines cost nothing per frame on either renderer.** Swapping a
+  line geometry is cheap; the cost is at load (1.6 s on vtk.js).
+- **Live tracing is where vtk.js falls over: 12x slower per trace** (68 vs 5.5
+  ms, same points). Each retrace is a visible hitch in playback. This is the
+  same gap page 17 showed (109-138 against 12-13 ms for its 92 lines). It is a
+  property of `vtkImageStreamline` (it allocates an array per sample), not of
+  vtk.js rendering, and it would need our own tracer to fix, which is exactly
+  what page 20 already has.
+- The baselines here sit 1-2 ms above the cleanest runs of 2026-10-02; the
+  comparison that matters is within each run.
+
+For a Twin: ship streamlines precomputed from the simulation side (or trace
+them in a worker) on either renderer. Live in-browser tracing is only viable
+with a fast tracer of our own.

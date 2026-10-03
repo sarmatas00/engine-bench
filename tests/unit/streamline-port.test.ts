@@ -57,4 +57,20 @@ describe('traceStreamlines is vtkImageStreamline, ported', () => {
     expect(ours.positions.length).toBe(theirs.points.length);
     expect([...ours.positions]).toEqual([...theirs.points]);
   });
+
+  test('same points on every frame of the animated velocity series (pages 19/20)', () => {
+    const dir = resolve(import.meta.dirname, '../../public/data/fields');
+    const meta = JSON.parse(readFileSync(resolve(dir, 'velocity.json'), 'utf8')) as
+      {dims: [number, number, number]; origin: number[]; spacing: number[]; seeds: number[][]; frames: {file: string}[]};
+    expect(meta.frames.length).toBe(25);
+    for (const {file} of meta.frames) {
+      const bytes = readFileSync(resolve(dir, file));
+      const grid = {meta: meta as unknown as VelocityGridJson, data: new Float32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 4)};
+      const ours = traceStreamlines(grid, meta.seeds, STREAMLINE_STEP_S, STREAMLINE_MAX_STEPS);
+      const theirs = vtkTrace(grid, meta.seeds, STREAMLINE_STEP_S, STREAMLINE_MAX_STEPS);
+      expect(ours.lineStarts.length - 1, file).toBe(theirs.lines);
+      expect(ours.positions.length, file).toBe(theirs.points.length);
+      expect([...ours.positions], file).toEqual([...theirs.points]);
+    }
+  });
 });
