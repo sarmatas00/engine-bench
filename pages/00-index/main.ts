@@ -20,6 +20,8 @@ const rows: [string, string, string, string, string][] = [
   ['16-threejs-flagship', 'Three.js Delft city', 'The same district in Three.js.', 'Geometry axis, Three.js.', 'Three.js is about twice as fast here, and both are far past any display refresh.'],
   ['17-vtkjs-flagship-volume', 'VTK.js Delft volume', 'The Delft district with a synthetic 250x250x139 wind-speed volume around it.', 'Volume axis, vtk.js.', 'Whether either renderer struggles with an 8.7M-cell volume drawn with the city. Compare with page 18.'],
   ['18-threejs-flagship-volume', 'Three.js Delft volume', 'The same scene in Three.js, with a ray marcher we would own.', 'Volume axis, Three.js.', 'The second measurement of page 17\'s scene.'],
+  ['19-vtkjs-flagship-animation', 'VTK.js Delft animation', 'The Delft district inside a synthetic pressure field that changes over time, 25 frames in a loop.', 'Animation axis, vtk.js.', 'Whether frame rate holds while the volume is replaced every frame, streamed or preloaded. Compare with page 20.'],
+  ['20-threejs-flagship-animation', 'Three.js Delft animation', 'The same playback in Three.js, on page 18\'s ray marcher.', 'Animation axis, Three.js.', 'The second measurement of page 19\'s playback.'],
 ];
 
 /**
@@ -27,7 +29,8 @@ const rows: [string, string, string, string, string][] = [
  * must never carry the dataset query the matrix pages take.
  */
 const COMBINED = new Set(['13-vtkjs-scientific', '14-threejs-scientific', '15-vtkjs-flagship',
-  '16-threejs-flagship', '17-vtkjs-flagship-volume', '18-threejs-flagship-volume']);
+  '16-threejs-flagship', '17-vtkjs-flagship-volume', '18-threejs-flagship-volume',
+  '19-vtkjs-flagship-animation', '20-threejs-flagship-animation']);
 
 // The briefing's own argument order, so the index reads as the case rather than a file listing.
 const sections: Record<string, string> = {

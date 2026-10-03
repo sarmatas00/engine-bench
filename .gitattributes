@@ -31,3 +31,6 @@ public/data/scientific/*.bin   -diff binary
 public/data/flagship/*.bin          -diff binary
 public/data/flagship/*.mesh.json    -diff
 public/data/flagship/volume/*.f32   -diff binary
+
+# Animation axis (pages 19-20): 25 frames of float32 pressure, 2.4 MiB each.
+public/data/fields/*.f32   -diff binary

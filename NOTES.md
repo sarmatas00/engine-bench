@@ -1341,3 +1341,162 @@ inside the published volume-only range (9.20-11.40), so it is not separable
 from run-to-run spread with these runs. Three.js shows no difference. Lines
 are one pixel wide on both pages, because WebGL implementations may ignore
 any other width.
+
+## The animation axis: flagship, pages 19 and 20 (2026-10-02)
+
+Pages 17/18 upload one volume and draw it 210 times. A Twin playing back a
+simulation replaces the volume while it draws. Anders generated a time series
+for this (dtcc-core `scripts/generate_fields.py`, `897faf6`): a VolumeGrid over
+flagship's bounds, `velocity` and `pressure` on the **vertices**, 101 snapshots
+over one 10 s period, shared as `fields.zip` (6.4 GB; grid and tet `.dtcc` plus
+`.vtu` per step). Its manifest: "Analytic visualization fixtures; not a fluid
+simulation". The field ignores the buildings and fills the whole box.
+
+~~~
+                      flagship volume (17/18)   fields (19/20)
+grid                       250x250x139 cells    128x128x36 cells
+values                          cell centres    129x129x37 vertices
+values per frame                   8,687,500    615,717 (2.46 MB float32)
+box height                             139 m    277 m (Anders doubled it)
+~~~
+
+The grid is **128x128x36**, the script's default, not the 256x256x36 the Slack
+message said. The tet files are each grid cube split into six tets on the same
+vertices, so they do not exercise mesh-to-grid projection.
+
+**Extraction.** `scripts/fields/extract_fields.py`, run with the Core develop
+env (LinkML), reads the zip directly and writes `public/data/fields/`: the
+`pressure` field, **25 frames** (snapshots 0, 4, ..., 96), 61.6 MB. Two checks
+before writing:
+
+- **Order, proved against the generator.** The file flattens vertices (y, x, z)
+  with z fastest. After the transpose to x-fastest, frame 0 equals the
+  generator's own analytic function at x-fastest node coordinates **exactly**
+  (max error 0.0); read with x and y swapped it is off by 123% of the peak.
+- **Seam.** Snapshot 100 equals snapshot 0 (1e-16 of peak), so 25 frames loop
+  without a jump. All 101 would be 249 MB in git and gh-pages; the frame count
+  does not change what one swap costs, only how much preloading holds.
+
+One colour range over all 25 frames (-278.1 to 256.0 Pa). Opacity, step,
+sample cap and per-sample opacity matching are pages 17/18's.
+
+### Three modes, and what each renderer does
+
+- **static**: frame 0 throughout. The baseline.
+- **stream**: one texture, overwritten before every drawn frame. vtk.js:
+  `scalars.setData(next)` plus `volumeProperty.setUpdatedExtents([whole grid])`.
+  Without the extents vtk.js builds a **new texture** on every swap. Three.js:
+  point `Data3DTexture.image.data` at the next frame and set `needsUpdate`; it
+  allocates once (`texStorage3D`) and then only calls `texSubImage3D`.
+- **preloaded**: one texture per frame, all uploaded when the mode is chosen.
+  vtk.js needs **one vtkVolume per frame**, one visible: switching one mapper's
+  input frees the old texture as soon as its last user lets go
+  (`unregisterGraphicsResourceUser`), so it would upload every frame anyway.
+  Three.js: one `Data3DTexture` per frame and a uniform switch.
+
+The benchmark advances one data frame per drawn frame, harder than real
+playback. **Each mode is checked at the GL call**, not trusted:
+`countVolumeUploads` wraps `texImage3D`/`texSubImage3D`/`texStorage3D`. In all
+36 runs, stream made exactly 210 uploads (2.46 MB each) per 210 drawn frames
+with **0 allocations**, and static and preloaded made **0**.
+
+### Frame time: preloading is free, streaming costs vtk.js more
+
+Apple M4, ANGLE Metal, 180 measured frames at 1280x720, 6 runs per cell
+(3 rounds in each page order), ranges are the union. Raw:
+`.cache/sessions/2026-10-02-animation-19-20-metal.jsonl`.
+
+~~~
+                     vtk.js (19)                          Three.js (20)
+             cpu p50      cpu p95      gpu p50     cpu p50     cpu p95     gpu p50
+static     12.5 - 13.2  14.0 - 14.7  11.31-11.68   9.9 - 10.2  11.0 - 11.5  8.77-9.07
+stream     14.3 - 15.5  16.8 - 18.9  11.34-11.79  10.3 - 11.4  11.4 - 14.2  8.82-9.24
+preloaded  13.0 - 13.5  14.2 - 15.2  11.39-11.70   9.9 - 10.3  11.0 - 11.2  8.73-9.10
+~~~
+
+- **Preloaded costs nothing measurable on either renderer.** 25 frames are
+  62 MB of GPU memory; that, not frame time, is its limit.
+- **Streaming costs vtk.js ~2 ms CPU per frame (static to stream, disjoint
+  ranges), Three.js ~0.5-1 ms.** GPU time does not move on either, so the cost
+  is on the CPU side of the upload. Not yet profiled. A likely part on vtk.js
+  is its per-upload `getRange()` scan and texture parameter checks, but that
+  is unverified.
+- **Three.js is faster in every mode (~1.3x), the same order as page 17/18.**
+  Every p95 is under 19 ms: both hold 50+ FPS while replacing 2.46 MB every
+  frame.
+
+**What this does not cover.** Real data: the field is analytic and ignores the
+buildings, and the tet files are split grid cubes, so neither mesh-to-grid
+projection nor a real solver result is tested. Size is covered below.
+
+### Size: streaming is where the renderers part
+
+`scripts/fields/generate_large.py` calls the generator's own `sample_fields()`
+at a bigger grid's vertices instead of running `generate_fields.py`, which
+would also write a tet `.dtcc` and two `.vtu` per step (tens of GB unused).
+Proof it is the same field: at 128x128x36 it reproduces the 25 shipped frames
+exactly (max difference 0.0, 8e-17 of peak on frame 0). The series are
+**local only** (gitignored; 460 MB and 1.8 GB), loaded with `?fields=large`
+or `?fields=xl`; on the published site those queries fail to load.
+
+~~~
+                 subdivisions   vertices      per frame   25 frames preloaded
+shipped          128x128x36       615,717       2.5 MB        62 MB
+large            256x256x72     4,821,577      19.3 MB       482 MB
+xl               512x512x72    19,211,337      76.8 MB       1.9 GB
+(page 17 volume, for scale: 8,687,500 cells, 34.8 MB)
+~~~
+
+Same protocol, 3 rounds in each page order per size, 24 runs. **The first 9
+runs were slow across the board**: every page and mode, static included, ran
+~1.8x slower (Three.js static 18-19 ms against 10-11 ms later), so it was the
+machine, not a renderer. One rule, applied to all runs: a run whose static
+baseline is over 1.5x that page's fastest static is dropped. 15 of 24 kept.
+Raw, all 24: `.cache/sessions/2026-10-02-animation-size-19-20-metal.jsonl`.
+
+~~~
+cpu p50 ms            vtk.js (19)                        Three.js (20)
+             static      stream      preloaded   static      stream      preloaded
+large      13.3-14.4   24.1-28.5   13.5-16.0   10.1-11.1   13.0-15.7   10.1-10.8
+xl         14.5-18.7   59.0-65.3   15.0-26.8   10.9-12.9   22.5-26.8   10.8-13.5
+~~~
+
+- **Streaming is the axis that separates them.** Per frame, over static:
+  vtk.js +11-14 ms at large and **+44 ms at xl (~16 FPS)**; Three.js +3-5 ms
+  and +12 ms (~40 FPS). The same bytes cross on both (counted: 210 uploads,
+  0 allocations), and GPU time rises only 1-3 ms, so vtk.js's extra cost is
+  CPU work around the upload, growing with the volume. Not profiled; the
+  per-upload `getRange()` scan over 19M values is a candidate, unverified.
+- **Preloading stays free on Three.js at every size.** On vtk.js it is free at
+  large but **erratic at xl**: 15.0, 20.1, 25.4, 26.8 ms across the four kept
+  runs, with GPU time moving the same way, while static held 14.5-18.7. 1.9 GB
+  of preloaded volume is where that starts. Cause not established.
+- **Static: Three.js ahead at every size.** An early single xl run had vtk.js
+  ahead (15.5 vs 19.0); it was one of the slow-machine runs and does not hold.
+
+What this means for a Twin: on Apple silicon, playing back up to ~5M-node
+frames works on both renderers in either mode. Past that, keep frames on the
+GPU, or the vtk.js path needs work on its upload.
+
+### Traps on this axis
+
+- **vtk.js `setUpdatedExtents` before the first render throws**: the mapper
+  looks up a texture that does not exist yet. Page 19 renders once first.
+- **After an in-place update, vtk.js's texture-cache hash is stale** (it is
+  only refreshed on a full rebuild). Read from the source, this looked like it
+  would rebuild the texture on the next render without extents. MEASURED, it
+  does not: 10 s of orbiting playback, 100 swaps and ~500 renders without one,
+  made 0 allocations. A render that changes nothing never reaches the texture
+  code (`getNeedToRebuildBufferObjects` is false). It would only matter if
+  something else, such as a transfer-function edit, forced that path.
+- **Each benchmark run adds 2 textures on page 19**: the known vtk.js
+  per-resize leak (the run resizes to 1280x720 and back), not the swap.
+  Five seconds of stream playback (52 uploads) without resizing held the count
+  constant; a longer soak is not done.
+- **The benchmark flag must be owned by `runBenchmark`**, not the button
+  handler: the first version left playback frozen after a scripted run, which
+  only a frame-to-frame pixel diff caught.
+
+Page 18's ray-march shader moved to `src/lib/threejs-volume.ts` so page 20
+marches the identical code; page 18 re-measured inside its published range
+(cpu p50 7.00 ms) after the move.
