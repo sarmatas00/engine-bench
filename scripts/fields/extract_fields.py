@@ -4,7 +4,8 @@
     <python with dtcc-core develop>/bin/python scripts/fields/extract_fields.py \
         <fields.zip> --generator <dtcc-core>/scripts/generate_fields.py
 
-Writes public/data/fields/{pressure.NNNN.f32, pressure.json, manifest.json}.
+Writes public/data/fields/{pressure.NNNN.f32, pressure.json, velocity.NNNN.f32,
+velocity.json, manifest.json}.
 
 THE SOURCE. dtcc-core's scripts/generate_fields.py (Anders, 2026-10-01): a
 VolumeGrid over flagship's bounds, 101 snapshots over one 10 s period, with
@@ -47,6 +48,12 @@ GEOMETRY = REPO / "public" / "data" / "flagship"
 OUT = REPO / "public" / "data" / "fields"
 FIELD = "pressure"
 FRAME_STRIDE = 4
+# Velocity for streamlines, every 2nd vertex per axis: 65x65x19 at 31 m / 15 m,
+# ~1 MB a frame instead of 7.4 MB. The field is a smooth analytic one, so the
+# coarser trace grid changes the lines little; pages 17/18 made the same trade.
+VELOCITY_STRIDE = 2
+SEED_GRID = 10              # 10 x 10 seeds across the box
+SEED_HEIGHT_FRACTION = 0.25  # at a quarter of the box height, ~56 m up
 
 
 def load_generator(path: Path):
@@ -66,19 +73,22 @@ def node_coordinates(bounds, dims) -> np.ndarray:
     return np.column_stack([x.ravel(), y.ravel(), z.ravel()])
 
 
-def check_order(frame_xyz: np.ndarray, gen, bounds, dims, seconds: float, period: float) -> dict:
+def check_order(frame_xyz: np.ndarray, gen, bounds, dims, seconds: float, period: float,
+                field: str = FIELD) -> dict:
     """The transposed frame against the generator's analytic field at the same nodes.
 
     The control evaluates at x and y swapped: the field is not symmetric in
-    them, so a wrong transpose cannot pass both.
+    them, so a wrong transpose cannot pass both. Works for the vector field
+    too: rows are nodes, so the swap acts on rows and leaves components alone.
     """
     xyz = node_coordinates(bounds, dims)
     origin = np.array([bounds["xmin"], bounds["ymin"], bounds["zmin"]])
     lengths = np.array([bounds["xmax"], bounds["ymax"], bounds["zmax"]]) - origin
     sample = 2 * np.pi * ((xyz - origin) / lengths - .5)
     by_name = {f.name: f for f in gen.sample_fields(sample, seconds, period)}
-    expected = np.asarray(by_name[FIELD].values, dtype=np.float32)
-    swapped = expected.reshape(dims[2], dims[1], dims[0]).transpose(0, 2, 1).ravel()
+    expected = np.asarray(by_name[field].values, dtype=np.float32)
+    rest = expected.shape[1:]
+    swapped = expected.reshape(dims[2], dims[1], dims[0], *rest).swapaxes(1, 2).reshape(expected.shape)
     scale = float(np.abs(expected).max())
     err = float(np.abs(frame_xyz - expected).max()) / scale
     err_swapped = float(np.abs(frame_xyz - swapped).max()) / scale
@@ -116,35 +126,45 @@ def main() -> None:
         dims = (sub["nx"] + 1, sub["ny"] + 1, sub["nz"] + 1)
         nodes = dims[0] * dims[1] * dims[2]
 
-        def read(index: int) -> np.ndarray:
+        def read(index: int) -> tuple[np.ndarray, np.ndarray]:
             name = f"fields/{frames[index]['grid']['dtcc']}"
             path = Path(zf.extract(name, tmp))
             grid = io.load_model(str(path))
             path.unlink()
             if (grid.width, grid.height, grid.depth) != (sub["nx"], sub["ny"], sub["nz"]):
                 raise SystemExit(f"{name}: grid {grid.width}x{grid.height}x{grid.depth}, series says {sub}")
-            field = {f.name: f for f in grid.fields}[FIELD]
-            if field.association != "vertex":
-                raise SystemExit(f"{name}: {FIELD} on {field.association}, expected vertex")
-            values = np.asarray(field.values, dtype=np.float32)
-            if values.shape != (nodes,):
-                raise SystemExit(f"{name}: {values.shape}, expected one value per vertex ({nodes})")
+            by_name = {f.name: f for f in grid.fields}
+            for wanted, shape in ((FIELD, (nodes,)), ("velocity", (nodes, 3))):
+                f = by_name[wanted]
+                if f.association != "vertex" or np.shape(f.values) != shape:
+                    raise SystemExit(f"{name}: {wanted} is {f.association} {np.shape(f.values)}, expected vertex {shape}")
+            values = np.asarray(by_name[FIELD].values, dtype=np.float32)
+            vel = np.asarray(by_name["velocity"].values, dtype=np.float32)
             # Generator order: (y, x, z), z fastest. Textures want x fastest, then y, then z.
-            return np.ascontiguousarray(values.reshape(dims[1], dims[0], dims[2]).transpose(2, 0, 1)).ravel()
+            scalar = np.ascontiguousarray(values.reshape(dims[1], dims[0], dims[2]).transpose(2, 0, 1)).ravel()
+            vector = np.ascontiguousarray(vel.reshape(dims[1], dims[0], dims[2], 3).transpose(2, 0, 1, 3))
+            return scalar, vector
 
         last = len(frames) - 1
         picked = list(range(0, last, FRAME_STRIDE))
         if last % FRAME_STRIDE:
             raise SystemExit(f"{len(frames)} frames do not split into a seamless loop at stride {FRAME_STRIDE}")
-        first = read(0)
-        seam = float(np.abs(read(last) - first).max()) / float(np.abs(first).max())
+        first, first_vel = read(0)
+        seam = float(np.abs(read(last)[0] - first).max()) / float(np.abs(first).max())
         if seam > 1e-5:
             raise SystemExit(f"snapshot {last} differs from 0 by {seam:.2e} of peak: the series is not one period")
         order = check_order(first, gen, bounds, dims, frames[0]["time_seconds"], period)
+        velocity_order = check_order(first_vel.reshape(-1, 3), gen, bounds, dims,
+                                     frames[0]["time_seconds"], period, field="velocity")
 
+        s = VELOCITY_STRIDE
+        if any((n - 1) % s for n in dims):
+            raise SystemExit(f"dims {dims} do not thin evenly at stride {s}")
         data = {0: first}
+        vel_data = {0: first_vel[::s, ::s, ::s]}
         for index in picked[1:]:
-            data[index] = read(index)
+            data[index], v = read(index)
+            vel_data[index] = v[::s, ::s, ::s]
             print(f"  frame {index}/{last}", flush=True)
         # One range for every frame, so a colour means the same pressure all loop long.
         lo = float(min(a.min() for a in data.values()))
@@ -158,7 +178,7 @@ def main() -> None:
     spacing = [(bounds[f"{a}max"] - bounds[f"{a}min"]) / (dims[i] - 1) for i, a in enumerate("xyz")]
 
     args.out.mkdir(parents=True, exist_ok=True)
-    for old in args.out.glob(f"{FIELD}.*.f32"):
+    for old in [*args.out.glob(f"{FIELD}.*.f32"), *args.out.glob("velocity.*.f32")]:
         old.unlink()
     files = []
     for index in picked:
@@ -193,6 +213,40 @@ def main() -> None:
     }
     (args.out / f"{FIELD}.json").write_text(json.dumps(meta, indent=2) + "\n")
 
+    s = VELOCITY_STRIDE
+    vel_dims = [(n - 1) // s + 1 for n in dims]
+    vel_spacing = [d * s for d in spacing]
+    vel_files = []
+    speeds = []
+    for index in picked:
+        name = f"velocity.{index:04d}.f32"
+        v = np.ascontiguousarray(vel_data[index], dtype="<f4")
+        (args.out / name).write_bytes(v.tobytes())
+        speeds.append(float(np.linalg.norm(v, axis=-1).max()))
+        vel_files.append({"file": name, "snapshot": index, "timeSeconds": frames[index]["time_seconds"]})
+    # Seeds: a SEED_GRID x SEED_GRID lattice, each in the middle of its cell of
+    # the box, at SEED_HEIGHT_FRACTION of the height. Same seeds every frame,
+    # so a change in the lines is the field changing.
+    box_max = [origin[a] + vel_spacing[a] * (vel_dims[a] - 1) for a in range(3)]
+    frac = (np.arange(SEED_GRID) + 0.5) / SEED_GRID
+    seeds = [[round(origin[0] + fx * (box_max[0] - origin[0]), 3),
+              round(origin[1] + fy * (box_max[1] - origin[1]), 3),
+              round(origin[2] + SEED_HEIGHT_FRACTION * (box_max[2] - origin[2]), 3)]
+             for fy in frac for fx in frac]
+    vel_meta = {
+        "dims": vel_dims,
+        "origin": origin,
+        "spacing": vel_spacing,
+        "order": "x-fastest",
+        "components": 3,
+        "strideVertices": s,
+        "frames": vel_files,
+        "seeds": seeds,
+        "maxSpeed": max(speeds),
+        "orderCheck": velocity_order,
+    }
+    (args.out / "velocity.json").write_text(json.dumps(vel_meta, indent=2) + "\n")
+
     def verified(name: str) -> dict:
         blob = (args.out / name).read_bytes()
         return {"byteLength": len(blob), "sha256": hashlib.sha256(blob).hexdigest()}
@@ -200,11 +254,14 @@ def main() -> None:
     manifest = {
         "axis": "animation",
         "grid": f"{FIELD}.json",
-        "files": {name: verified(name) for name in [f"{FIELD}.json", *(f["file"] for f in files)]},
+        "velocity": "velocity.json",
+        "files": {name: verified(name) for name in
+                  [f"{FIELD}.json", *(f["file"] for f in files), "velocity.json", *(f["file"] for f in vel_files)]},
     }
     (args.out / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     print(json.dumps({k: meta[k] for k in ("dims", "origin", "spacing", "range", "seamCheck", "orderCheck")}
-                     | {"frames": len(files)}, indent=2))
+                     | {"frames": len(files), "velocity": {k: vel_meta[k] for k in ("dims", "spacing", "maxSpeed", "orderCheck")}},
+                     indent=2))
 
 
 if __name__ == "__main__":

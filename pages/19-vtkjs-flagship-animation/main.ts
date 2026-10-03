@@ -30,6 +30,7 @@ import vtkVolumeMapper from '@kitware/vtk.js/Rendering/Core/VolumeMapper';
 import vtkVolumeProperty from '@kitware/vtk.js/Rendering/Core/VolumeProperty';
 import vtkColorTransferFunction from '@kitware/vtk.js/Rendering/Core/ColorTransferFunction';
 import vtkPiecewiseFunction from '@kitware/vtk.js/Common/DataModel/PiecewiseFunction';
+import vtkImageStreamline from '@kitware/vtk.js/Filters/General/ImageStreamline';
 
 import {mountChrome} from '@lib/chrome';
 import {colormap} from '@lib/colormap';
@@ -37,10 +38,13 @@ import {
   FLAGSHIP_FOV_DEG, ORBIT_FLAGSHIP_V1, createFpsMeter, createGpuTimer, describeGpu, flagshipPose,
   instrumentGlObjects, makeFrameSync, percentile, loadFlagshipGeometry, type FlagshipBundle,
 } from '@lib/flagship-geometry';
-import {DEFAULT_OPACITY, VOLUME_MAX_SAMPLES, VOLUME_STEP_M, opacityNodes} from '@lib/flagship-volume';
+import {
+  DEFAULT_OPACITY, STREAMLINE_COLOUR, STREAMLINE_MAX_STEPS, STREAMLINE_STEP_S, VOLUME_MAX_SAMPLES, VOLUME_STEP_M,
+  opacityNodes,
+} from '@lib/flagship-volume';
 import {
   DEFAULT_VOLUME_SCALE_CHOICE, PLAYBACK_FPS, SWAP_MODES, VOLUME_SCALE_CHOICES, VOLUME_SCALE_LABELS, benchmarkFrame, resolveVolumeScale, measureRefreshMs, runPlayback, seriesFromQuery, summarisePlayback, countVolumeUploads, loadFieldSeries,
-  type AnimationProbe, type FieldSeries, type SwapMode, type VolumeScale,
+  STREAMLINE_MODES, type AnimationProbe, type FieldSeries, type StreamlineMode, type SwapMode, type VolumeScale,
 } from '@lib/flagship-fields';
 import {attachContextLoss, createBenchmarkDriver, type CameraPose} from '@lib/scientific-probes';
 
@@ -62,6 +66,8 @@ function triangleCells(indices: Uint32Array): Uint32Array {
 /** Replaced by main() once the scene is up. */
 let modeHandler: (mode: string) => void = () => {};
 /** Replaced by main() once the scene is up. */
+let streamlineHandler: (mode: string) => void = () => {};
+/** Replaced by main() once the scene is up. */
 let scaleHandler: (label: string) => void = () => {};
 /** Replaced by main() once the scene is up. */
 let playHandler: (playing: boolean) => void = () => {};
@@ -80,6 +86,8 @@ const ui = mountChrome({
     + 'streamed into one texture or preloaded as one texture per frame.',
   controls: [
     {kind: 'select', id: 'mode', label: 'Swap', options: SWAP_MODES, value: 'stream', onChange: v => modeHandler(v)},
+    {kind: 'select', id: 'streamlines', label: 'Streamlines', options: STREAMLINE_MODES, value: 'precomputed',
+     onChange: v => streamlineHandler(v)},
     {kind: 'select', id: 'volume-scale', label: 'Volume resolution',
      options: VOLUME_SCALE_CHOICES, value: DEFAULT_VOLUME_SCALE_CHOICE,
      onChange: v => scaleHandler(v)},
@@ -90,6 +98,9 @@ const ui = mountChrome({
      onClick: () => { void playbackHandler(); }},
   ],
   findings: [
+    'Streamlines come from the field\'s velocity (every 2nd vertex, 65x65x19), 100 seeds at a quarter of the box '
+    + 'height, traced by vtk.js\'s own vtkImageStreamline. Precomputed traces all 25 frames at load (one filter per '
+    + 'frame: vtk.js reuses a filter\'s output object) and swaps the lines; live traces again on every data change.',
     'Volume resolution (default auto: half the window\'s CSS resolution, so 1/4 of the canvas on Retina) uses vtk.js\'s imageSampleDistance, which vtk.js 36 applies ONLY while its '
     + 'interactor is animating. So while playing, the page keeps vtk.js\'s own animation loop running and lets it '
     + 'draw every frame; paused and still, vtk.js draws full resolution. Auto-adjust is off: by default vtk.js '
@@ -191,6 +202,68 @@ async function main(): Promise<void> {
   actor.getProperty().setColor(0.72, 0.77, 0.81);
   renderer.addActor(actor);
 
+  // --- streamlines: vtk.js's own tracer, page 17's drawing ---------------------
+  const velocity = series.velocity;
+  let streamMode: StreamlineMode = velocity ? 'precomputed' : 'off';
+  const makeTracer = (k: number) => {
+    const image = vtkImageData.newInstance();
+    image.setDimensions(velocity!.meta.dims);
+    image.setOrigin(velocity!.meta.origin);
+    image.setSpacing(velocity!.meta.spacing);
+    image.getPointData().setVectors(vtkDataArray.newInstance({
+      name: 'velocity', values: velocity!.frames[k], numberOfComponents: 3,
+    }));
+    const seeds = vtkPolyData.newInstance();
+    seeds.getPoints().setData(Float32Array.from(velocity!.meta.seeds.flat()), 3);
+    const tracer = vtkImageStreamline.newInstance();
+    tracer.setIntegrationStep(STREAMLINE_STEP_S);
+    tracer.setMaximumNumberOfSteps(STREAMLINE_MAX_STEPS);
+    tracer.setInputData(image, 0);
+    tracer.setInputData(seeds, 1);
+    return {image, seeds, tracer};
+  };
+  const lineMapper = vtkMapper.newInstance();
+  lineMapper.setScalarVisibility(false);
+  const lineActor = vtkActor.newInstance();
+  lineActor.setMapper(lineMapper);
+  lineActor.getProperty().setColor(...STREAMLINE_COLOUR);
+  lineActor.getProperty().setLighting(false);
+  lineActor.setVisibility(false);
+  renderer.addActor(lineActor);
+  const traceMs: number[] = [];
+  const timedTrace = (t: ReturnType<typeof makeTracer>) => {
+    const t0 = performance.now();
+    const out = t.tracer.getOutputData();
+    traceMs.push(performance.now() - t0);
+    return out;
+  };
+  // Live: one filter, its vectors pointed at the next frame and marked modified,
+  // so the next getOutputData() traces again.
+  const live = velocity ? makeTracer(0) : null;
+  let precomputed: {tracers: ReturnType<typeof makeTracer>[]; lines: ReturnType<typeof timedTrace>[]} | null = null;
+  let precomputeMs = 0;
+  let lineStats = {lines: 0, points: 0};
+  function showLines(k: number): void {
+    lineActor.setVisibility(streamMode !== 'off');
+    if (streamMode === 'off') return;
+    let lines;
+    if (streamMode === 'precomputed') {
+      if (!precomputed) {
+        const t0 = performance.now();
+        const tracers = velocity!.frames.map((_, i) => makeTracer(i));
+        precomputed = {tracers, lines: tracers.map(timedTrace)};
+        precomputeMs = performance.now() - t0;
+      }
+      lines = precomputed.lines[k];
+    } else {
+      live!.image.getPointData().getVectors().setData(velocity!.frames[k], 3);
+      live!.image.modified();
+      lines = timedTrace(live!);
+    }
+    lineMapper.setInputData(lines);
+    lineStats = {lines: lines.getNumberOfLines(), points: lines.getNumberOfPoints()};
+  }
+
   // --- shared transfer functions -------------------------------------------
   const [lo, hi] = meta.range;
   const ctf = vtkColorTransferFunction.newInstance();
@@ -285,6 +358,7 @@ async function main(): Promise<void> {
   // updatedExtents must not be set before that: vtk.js 36.12.1 then looks up a
   // texture that does not exist yet and throws.
   let shown = 0;
+  let shownLines = -1;
   function showFrame(k: number): void {
     if (mode === 'preloaded') {
       stream.volume.setVisibility(false);
@@ -299,6 +373,9 @@ async function main(): Promise<void> {
         streamProperty.setUpdatedExtents([WHOLE]);
       }
     }
+    // Lines follow the volume's frame. Live retraces on every call that moves
+    // the data (static stays on frame 0 and never retraces).
+    if (mode !== 'static' || shownLines !== k) { showLines(k); shownLines = k; }
     shown = k;
   }
 
@@ -316,6 +393,12 @@ async function main(): Promise<void> {
   };
 
   const volumeTextures = () => (preloaded ? 1 + preloaded.length : 1);
+  const streamlineStats = () => ({
+    mode: streamMode, seeds: velocity?.meta.seeds.length ?? 0, lines: streamMode === 'off' ? 0 : lineStats.lines,
+    points: streamMode === 'off' ? 0 : lineStats.points, traces: traceMs.length,
+    traceMsP50: traceMs.length ? percentile(traceMs, 0.5) : null,
+    traceMsMax: traceMs.length ? Math.max(...traceMs) : null,
+  });
   const probe: AnimationProbe = {
     renderer: 'vtkjs',
     status: 'ready',
@@ -340,7 +423,7 @@ async function main(): Promise<void> {
     },
     animation: {
       series: seriesName, mode, frames: frames.length, bytesPerFrame: frames[0].byteLength,
-      volumeTextures: volumeTextures(), uploads: {...uploads},
+      volumeTextures: volumeTextures(), uploads: {...uploads}, streamlines: streamlineStats(),
     },
     resources: {
       buffers: counts.buffers, textures: counts.textures,
@@ -350,7 +433,8 @@ async function main(): Promise<void> {
   };
 
   function publish(): void {
-    probe.animation = {...probe.animation, mode, volumeTextures: volumeTextures(), uploads: {...uploads}};
+    probe.animation = {...probe.animation, mode, volumeTextures: volumeTextures(), uploads: {...uploads},
+                       streamlines: streamlineStats()};
     probe.lens = {fovDeg: renderer.getActiveCamera().getViewAngle(),
                   aspect: gl!.drawingBufferWidth / gl!.drawingBufferHeight,
                   surface: [gl!.drawingBufferWidth, gl!.drawingBufferHeight]};
@@ -396,6 +480,10 @@ async function main(): Promise<void> {
       resizeObserver.disconnect();
       mapper.delete(); actor.delete(); polyData.delete();
       for (const v of [stream, ...(preloaded ?? [])]) { v.volumeMapper.delete(); v.volume.delete(); v.image.delete(); }
+      for (const t of [...(live ? [live] : []), ...(precomputed?.tracers ?? [])]) {
+        t.tracer.delete(); t.seeds.delete(); t.image.delete();
+      }
+      lineMapper.delete(); lineActor.delete();
     },
     onLost: () => {
       publish();
@@ -420,7 +508,10 @@ async function main(): Promise<void> {
       const b = probe.animation.benchmarkUploads!;
       ui.setReadout('uploads/frame', `${(b.calls / b.drawnFrames).toFixed(2)} (${(b.bytes / b.drawnFrames / 1e6).toFixed(2)} MB), `
         + `${b.allocations} allocations`);
-      ui.setReadout('benchmark', `done, ${mode}, ${cpu.length} measured frames`);
+      const st = probe.animation.streamlines;
+      ui.setReadout('trace ms', st.traceMsP50 === null ? 'no retraces'
+        : `p50 ${st.traceMsP50.toFixed(1)}, max ${st.traceMsMax!.toFixed(1)} (${st.traces} traces, ${st.mode})`);
+      ui.setReadout('benchmark', `done, ${mode}, streamlines ${streamMode}, ${cpu.length} measured frames`);
     } catch (err) {
       ui.setReadout('benchmark', `failed: ${(err as Error).message}`);
     }
@@ -441,6 +532,7 @@ async function main(): Promise<void> {
     fps.reset();
     applySurface(SURFACE[0], SURFACE[1]);
     const before = {...uploads};
+    traceMs.length = 0;
     try {
       const result = await driver.runBenchmark();
       probe.benchmark = result;
@@ -480,6 +572,7 @@ async function main(): Promise<void> {
     holdAnimation('live', false);
     if (pinned) applySurface(SURFACE[0], SURFACE[1]);
     const before = {...uploads};
+    traceMs.length = 0;
     try {
       const refreshMs = await measureRefreshMs();
       // vtk.js draws in its own animation loop, the only path where the
@@ -537,6 +630,15 @@ async function main(): Promise<void> {
     publish();
   };
   playHandler = (value: boolean) => { playing = value; syncAnimation(); };
+  streamlineHandler = (value: string) => {
+    if (!velocity && value !== 'off') { ui.setReadout('streamlines', 'no velocity in this series'); return; }
+    streamMode = value as StreamlineMode;
+    showLines(shown);
+    if (streamMode === 'precomputed') ui.setReadout('precompute ms', Math.round(precomputeMs));
+    ui.setReadout('streamlines', `${streamMode}${streamMode === 'off' ? '' : ` (${lineStats.lines} lines, ${lineStats.points} points)`}`);
+    renderWindow.render();
+    publish();
+  };
   scaleHandler = (label: string) => {
     volumeChoice = label;
     volumeScale = resolveVolumeScale(label, window.devicePixelRatio || 1);
@@ -550,12 +652,14 @@ async function main(): Promise<void> {
   (window as unknown as {__bench: Record<string, unknown>}).__bench.runPlayback = runPlaybackTest;
   (window as unknown as {__bench: Record<string, unknown>}).__bench.setMode = (m: SwapMode) => modeHandler(m);
   (window as unknown as {__bench: Record<string, unknown>}).__bench.setPlaying = (p: boolean) => playHandler(p);
+  (window as unknown as {__bench: Record<string, unknown>}).__bench.setStreamlines = (m: StreamlineMode) => streamlineHandler(m);
   (window as unknown as {__bench: Record<string, unknown>}).__bench.setVolumeScale =
     (v: VolumeScale) => scaleHandler(VOLUME_SCALE_LABELS[v]);
 
   ui.setReadout('volume', `${meta.field}, ${meta.dims.join(' x ')} nodes (${(frames[0].length / 1e6).toFixed(2)}M), `
     + `${frames.length} frames${seriesName === 'shipped' ? '' : `, ?fields=${seriesName}`}`);
   ui.setReadout('mode', mode);
+  streamlineHandler(streamMode);
   ui.setReadout('volume resolution', `${volumeChoice} (${VOLUME_SCALE_LABELS[volumeScale]} of the canvas)`);
   ui.setReadout('GPU', describeGpu(gl));
   ui.setReadout('triangles', probe.counts.triangles);
