@@ -1685,3 +1685,83 @@ playback, Retina
 For a Twin: ship streamlines precomputed from the simulation side (or trace
 them in a worker) on either renderer. Live in-browser tracing is only viable
 with a fast tracer of our own.
+
+## Resize leak: root cause, size, and the fix is upstream (2026-10-03)
+
+The per-resize leak recorded since page 13 (+1 texture, +1 framebuffer, +1
+renderbuffer per drawing-buffer resize, never recovered) matters for a Twin only
+if its panels resize. Docked panels with a draggable splitter resize on every
+mouse move, so this measures a drag.
+
+**Root cause, vtk.js 36.12.1.** `Rendering/OpenGL/ForwardPass.js:31-34`: when a
+renderer holds opaque actors AND a volume (pages 13, 15+volume, 17, 19), every
+frame whose drawing-buffer size differs from the pass framebuffer's calls
+`framebuffer.create(w, h)` then `populateFramebuffer()`. In
+`Rendering/OpenGL/Framebuffer.js`, `create()` (line 45) assigns a new
+`gl.createFramebuffer()` over the old one without deleting it, and
+`populateFramebuffer()` (line 107) makes a new RGBA8 colour texture (line 114)
+and a new DEPTH_COMPONENT16 renderbuffer (line 126) without releasing the
+previous pair. Captured with creation stack traces of every object alive after
+10 resizes and not before: exactly 10 of each, all from that one call site.
+
+**Fixed upstream in vtk.js 37.0.2** (2026-09-16): `create()` now calls
+`releaseGraphicsResources()`, which releases the attachments
+(`releaseAttachments`) and deletes the framebuffer. Bisected on the published
+tarballs: 37.0.1 leaks, 37.0.2 does not; 37.4.0 (latest) does not. No upstream
+issue to file.
+
+**The soak.** `scripts/resize-soak.ts`: a docked panel dragged 600 to 1280 px
+and back in 17 px steps, one resize per animation frame plus 16 ms, GL objects
+counted by an init-script witness on the WebGL2 prototype (independent of the
+pages' own counters). M4, Metal. Raw:
+`.cache/sessions/2026-10-03-resize-leak-metal.jsonl`.
+
+~~~
+page 17 (vtk.js), pixel ratio 1      resizes  tex   fb   rb   leaked GPU memory
+vtk.js 36.12.1                         600     600  600  600  ~2.1 GB (0.60 MPx mean)
+vtk.js 36.12.1, pixel ratio 2          200     200  200  200  ~2.9 GB (2.39 MPx mean)
+vtk.js 37.4.0                          600       0    0    0  0
+page 18 (Three.js 0.185.1)             600       0    0    0  0
+~~~
+
+The leak is exact (1.000 framebuffers per resize in every run) and the size is
+the drawing buffer's: about 6 bytes per pixel, so ~3.6 MB per resize at 1 MPx
+and ~14 MB per resize on a Retina panel. **One continuous drag of a few
+seconds strands hundreds of MB to GBs of GPU memory** on 36.x. Nothing ever
+frees it short of losing the context. For a Twin with resizable panels on
+36.x this is a real defect, not a curiosity.
+
+**Mitigations, measured the same way.**
+
+~~~
+page 17, vtk.js 36.12.1, 600 resizes                     fb leaked   GPU memory
+none, one long drag                                          600     ~2.1 GB
+none, 10 drags of 60 steps                                   600     ~2.1 GB
+(a) resize only when the panel settles (150 ms debounce)      10     ~38 MB
+(b) vtk.js 37.4.0                                              0     0
+(c) page-side shim on vtk.js's Framebuffer factory             0     0
+~~~
+
+- **(a) Debounce** cuts the leak to one set per settled drag (CSS stretches the
+  old buffer meanwhile). It still leaks, just slowly.
+- **(b) Upgrade to vtk.js >= 37.0.2** removes it. Not done in this branch: it
+  trips two Playwright tripwires that were written to fail exactly when vtk.js
+  fixes this ("If this is now 0, vtk.js has been fixed and NOTES.md is out of
+  date", tests/scientific.spec.ts:767) and the context-loss teardown
+  (vtk.js now frees its buffers, 9 -> 1, :910), and it would put every
+  published vtk.js frame time under a different library version. It belongs
+  in its own PR that flips those tripwires and re-measures 13/15/17/19.
+  Everything else passed on 37.4.0 (206 unit tests, `tsc`, build, the rest of
+  Playwright; three timeouts under machine load passed on rerun).
+- **(c) A shim** that wraps `vtkFramebuffer.newInstance` and frees the old
+  framebuffer, colour texture and depth renderbuffer before `create()`
+  removes it on 36.12.1. vtk.js freezes `publicAPI`, so instance methods cannot
+  be patched; the factory can. Not committed: (b) is the real fix.
+
+**Frame times were not compared**: page 17 cpu p50 read 16.6-20.7 ms on 36.12.1
+and 20.6-21.3 on 37.4.0 under outside machine load, overlapping; page 19's
+playback likewise varied run to run (38-74% late on 36.12.1, 33% on 37.4.0 at
+1/4 on Retina). Counts are the result here, times are not.
+
+**Recommendation:** upgrade vtk.js to 37.x before any Twin integration with
+resizable panels, in a dedicated PR. Until then, debounce resizes.
