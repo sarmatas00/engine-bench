@@ -1,7 +1,7 @@
 import {describe, expect, test} from 'bun:test';
 import {readFileSync, statSync} from 'node:fs';
 import {resolve} from 'node:path';
-import {benchmarkFrame, checkSeriesJson, seriesBox, seriesFromQuery, type FieldSeriesJson} from '@lib/flagship-fields';
+import {PLAYBACK_FPS, benchmarkFrame, resolveVolumeScale, checkSeriesJson, runPlayback, seriesBox, seriesFromQuery, summarisePlayback, type FieldSeriesJson} from '@lib/flagship-fields';
 
 const dir = resolve(import.meta.dirname, '../../public/data/fields');
 const shipped = JSON.parse(readFileSync(resolve(dir, 'pressure.json'), 'utf8')) as FieldSeriesJson;
@@ -49,5 +49,35 @@ describe('flagship fields (animation axis)', () => {
     expect(max[0] - min[0]).toBeCloseTo(2000, 3);
     expect(max[1] - min[1]).toBeCloseTo(2000, 3);
     expect(min).toEqual(shipped.origin);
+  });
+
+  test('playback swaps on the data clock and records one gap per displayed frame after the first', async () => {
+    // A 60 Hz display with one 100 ms hitch after the 30th refresh.
+    const times: number[] = [];
+    for (let k = 0, t = 0; t <= 2000; k++) { times.push(t); t += k === 30 ? 100 : 1000 / 60; }
+    let i = 0;
+    const raf = (cb: (t: number) => void) => { const t = times[i++]; if (t !== undefined) queueMicrotask(() => cb(t)); };
+    const shown: number[] = [];
+    let draws = 0;
+    const r = await runPlayback({seconds: 1, orbit: true, frameCount: 25, raf,
+      showFrame: k => shown.push(k), draw: () => { draws++; }});
+    expect(r.displayedFrames).toBe(draws);
+    expect(r.gapsMs.length).toBe(draws - 1);
+    // One swap per data frame that came due, in order, never two for the same frame.
+    expect(shown).toEqual([...new Set(shown)]);
+    expect(shown[0]).toBe(0);
+    expect(shown.at(-1)!).toBeLessThan(PLAYBACK_FPS);
+    const s = summarisePlayback(r.gapsMs, 1000 / 60);
+    expect(s.missed).toBe(1);
+    expect(s.worst).toBeCloseTo(100, 5);
+  });
+
+  test('volume resolution: auto is half the CSS resolution, explicit choices are fixed', () => {
+    expect(resolveVolumeScale('auto', 1)).toBe(2);
+    expect(resolveVolumeScale('auto', 2)).toBe(4);
+    expect(resolveVolumeScale('auto', 3)).toBe(4);
+    expect(resolveVolumeScale('full', 2)).toBe(1);
+    expect(resolveVolumeScale('1/2', 2)).toBe(2);
+    expect(resolveVolumeScale('1/4', 1)).toBe(4);
   });
 });

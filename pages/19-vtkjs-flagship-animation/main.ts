@@ -39,8 +39,8 @@ import {
 } from '@lib/flagship-geometry';
 import {DEFAULT_OPACITY, VOLUME_MAX_SAMPLES, VOLUME_STEP_M, opacityNodes} from '@lib/flagship-volume';
 import {
-  PLAYBACK_FPS, SWAP_MODES, benchmarkFrame, seriesFromQuery, countVolumeUploads, loadFieldSeries,
-  type AnimationProbe, type FieldSeries, type SwapMode,
+  DEFAULT_VOLUME_SCALE_CHOICE, PLAYBACK_FPS, SWAP_MODES, VOLUME_SCALE_CHOICES, VOLUME_SCALE_LABELS, benchmarkFrame, resolveVolumeScale, measureRefreshMs, runPlayback, seriesFromQuery, summarisePlayback, countVolumeUploads, loadFieldSeries,
+  type AnimationProbe, type FieldSeries, type SwapMode, type VolumeScale,
 } from '@lib/flagship-fields';
 import {attachContextLoss, createBenchmarkDriver, type CameraPose} from '@lib/scientific-probes';
 
@@ -62,7 +62,11 @@ function triangleCells(indices: Uint32Array): Uint32Array {
 /** Replaced by main() once the scene is up. */
 let modeHandler: (mode: string) => void = () => {};
 /** Replaced by main() once the scene is up. */
+let scaleHandler: (label: string) => void = () => {};
+/** Replaced by main() once the scene is up. */
 let playHandler: (playing: boolean) => void = () => {};
+/** Replaced by main() once the scene is up. */
+let playbackHandler: () => Promise<void> = async () => {};
 /** Replaced by main() once the scene is up. */
 let benchmarkHandler: () => Promise<void> =
   async () => { ui.setReadout('benchmark', 'still loading, try again in a moment'); };
@@ -76,11 +80,23 @@ const ui = mountChrome({
     + 'streamed into one texture or preloaded as one texture per frame.',
   controls: [
     {kind: 'select', id: 'mode', label: 'Swap', options: SWAP_MODES, value: 'stream', onChange: v => modeHandler(v)},
+    {kind: 'select', id: 'volume-scale', label: 'Volume resolution',
+     options: VOLUME_SCALE_CHOICES, value: DEFAULT_VOLUME_SCALE_CHOICE,
+     onChange: v => scaleHandler(v)},
     {kind: 'toggle', id: 'play', label: 'Play', value: true, onChange: v => playHandler(v)},
     {kind: 'button', id: 'run-benchmark', label: 'Run benchmark (210 frames)',
      onClick: () => { void benchmarkHandler(); }},
+    {kind: 'button', id: 'run-playback', label: 'Playback test (10 s, orbiting, this window)',
+     onClick: () => { void playbackHandler(); }},
   ],
   findings: [
+    'Volume resolution (default auto: half the window\'s CSS resolution, so 1/4 of the canvas on Retina) uses vtk.js\'s imageSampleDistance, which vtk.js 36 applies ONLY while its '
+    + 'interactor is animating. So while playing, the page keeps vtk.js\'s own animation loop running and lets it '
+    + 'draw every frame; paused and still, vtk.js draws full resolution. Auto-adjust is off: by default vtk.js '
+    + 'changes the volume resolution about once a second while you drag, then snaps back, the "jumps".',
+    'Playback test: 10 s of real playback (data at 10 frames/s, the display at its own refresh, the camera '
+    + 'orbiting as if dragged), recording the gap between displayed frames. It measures stutter, which the '
+    + 'benchmark cannot: the benchmark times draws one after another, not what a viewer sees.',
     'The field is SYNTHETIC and ignores the buildings: Anders\'s generator says "not a fluid simulation". '
     + 'It is a time series of realistic shape, here to measure playback, not to show a flow.',
     'Bigger series for the size test (?fields=large, ?fields=xl) are generated locally and not published; '
@@ -147,6 +163,8 @@ async function main(): Promise<void> {
   }
 
   const resizeObserver = new ResizeObserver(() => {
+    // 'auto' depends on the pixel ratio, which changes when the window moves screens.
+    scaleHandler(volumeChoice);
     const rect = ui.canvasHost.getBoundingClientRect();
     const dpr = window.devicePixelRatio || 1;
     if (rect.width > 0 && rect.height > 0) {
@@ -204,12 +222,43 @@ async function main(): Promise<void> {
     volumeMapper.setInputData(image);
     volumeMapper.setSampleDistance(VOLUME_STEP_M);
     volumeMapper.setMaximumSamplesPerRay(VOLUME_MAX_SAMPLES);
+    applyScale(volumeMapper, volumeScale);
     const volume = vtkVolume.newInstance();
     volume.setMapper(volumeMapper);
     volume.setProperty(property);
     renderer.addVolume(volume);
     return {image, volumeMapper, volume};
   };
+
+  // --- volume resolution ------------------------------------------------------
+  // vtk.js 36 draws the volume on a smaller viewport only while the interactor
+  // is animating (OpenGL VolumeMapper renderPieceStart: isAnimating() and a
+  // scale over 1.5), at 1/sqrt(scale) per axis. The scale starts at
+  // initialInteractionScale and, with auto-adjust off, is reset to
+  // imageSampleDistance^2 on each frame-rate update (about once a second of
+  // animation). Setting both keeps it fixed from the first frame. Auto-adjust
+  // ON is vtk.js's default: it retunes the scale every second to hold 30 FPS,
+  // which is the resolution jumping while you drag.
+  let volumeChoice: string = DEFAULT_VOLUME_SCALE_CHOICE;
+  let volumeScale: VolumeScale = resolveVolumeScale(volumeChoice, window.devicePixelRatio || 1);
+  function applyScale(m: ReturnType<typeof vtkVolumeMapper.newInstance>, scale: VolumeScale): void {
+    m.setAutoAdjustSampleDistances(false);
+    m.setImageSampleDistance(scale);
+    m.setInitialInteractionScale(scale * scale);
+    // The ray step must not change while animating, or the comparison with page 20 breaks.
+    m.setInteractionSampleDistanceFactor(1);
+  }
+  // While any token holds an animation request, vtk.js's loop draws every
+  // display frame itself (RenderWindowInteractor.handleAnimation). Two tokens,
+  // because live playback and the playback test start and stop independently:
+  // with one, the live timer's sync cancelled the test's request mid-run and
+  // vtk.js drew 25 times in 181 frames (measured, then fixed).
+  const held = new Set<'live' | 'test'>();
+  function holdAnimation(who: 'live' | 'test', on: boolean): void {
+    const interactor = renderWindow.getInteractor();
+    if (on && !held.has(who)) { interactor.requestAnimation(who); held.add(who); }
+    if (!on && held.has(who)) { interactor.cancelAnimation(who, true); held.delete(who); }
+  }
 
   // --- stream (and static): one volume, overwritten in place ----------------
   // Its own property, because updatedExtents lives on the property and the
@@ -326,11 +375,14 @@ async function main(): Promise<void> {
   // --- live playback ---------------------------------------------------------
   let playing = true;
   let playFrame = 0;
+  // Playing = vtk.js's animation loop running (so the volume scale applies);
+  // the timer only changes the data, the loop draws it on the next frame.
+  const syncAnimation = () => holdAnimation('live', playing && !benchmarking && mode !== 'static');
   const timer = window.setInterval(() => {
+    syncAnimation();
     if (!playing || benchmarking || mode === 'static') return;
     playFrame = (playFrame + 1) % frames.length;
     showFrame(playFrame);
-    renderWindow.render();
     tickFps();
     ui.setReadout('frame', `${playFrame + 1}/${frames.length}, t=${meta.frames[playFrame].timeSeconds.toFixed(1)} s`);
   }, 1000 / PLAYBACK_FPS);
@@ -340,6 +392,7 @@ async function main(): Promise<void> {
     stopBenchmark: () => driver.stop(),
     disposeGpuResources: () => {
       window.clearInterval(timer);
+      holdAnimation('live', false); holdAnimation('test', false);
       resizeObserver.disconnect();
       mapper.delete(); actor.delete(); polyData.delete();
       for (const v of [stream, ...(preloaded ?? [])]) { v.volumeMapper.delete(); v.volume.delete(); v.image.delete(); }
@@ -380,6 +433,8 @@ async function main(): Promise<void> {
     interactor?.setInteractorStyle(null);
     const restore = apiRenderWindow.getSize() as [number, number];
     resizeObserver.unobserve(ui.canvasHost);
+    // Full resolution and no second render loop: vtk.js's animation is released.
+    holdAnimation('live', false);
     // Set and cleared HERE, not in runAndReport: __bench.runBenchmark is
     // called directly too, and a flag left set would freeze playback.
     benchmarking = true;
@@ -407,6 +462,71 @@ async function main(): Promise<void> {
     }
   }
 
+
+  /**
+   * The playback test, live timer paused. `surface: 'page'` (the button's
+   * choice) keeps the canvas the viewer actually has, at the screen's pixel
+   * ratio: that is what stutters or not. 'test' pins the benchmark's
+   * 1280x720 at ratio 1, for comparing machines and renderers.
+   */
+  async function runPlaybackTest(opts: {seconds?: number; orbit?: boolean; surface?: 'page' | 'test'} = {}) {
+    const pinned = (opts.surface ?? 'page') === 'test';
+    const interactor = renderWindow.getInteractor();
+    const style = interactor?.getInteractorStyle();
+    interactor?.setInteractorStyle(null);
+    const restore = apiRenderWindow.getSize() as [number, number];
+    resizeObserver.unobserve(ui.canvasHost);
+    benchmarking = true;
+    holdAnimation('live', false);
+    if (pinned) applySurface(SURFACE[0], SURFACE[1]);
+    const before = {...uploads};
+    try {
+      const refreshMs = await measureRefreshMs();
+      // vtk.js draws in its own animation loop, the only path where the
+      // volume scale applies; draw() below only moves the camera.
+      holdAnimation('test', true);
+      const result = await runPlayback({
+        seconds: opts.seconds ?? 10, orbit: opts.orbit ?? true, frameCount: frames.length,
+        showFrame: (k) => { if (mode !== 'static') showFrame(k); },
+      draw: (turn) => {
+        if (turn !== null) {
+          const pose = flagshipPose(turn * (ORBIT_FLAGSHIP_V1.warmupFrames + ORBIT_FLAGSHIP_V1.forcedFrames), orbit);
+          const camera = renderer.getActiveCamera();
+          camera.setPosition(pose.eye[0], pose.eye[1], pose.eye[2]);
+          camera.setFocalPoint(pose.target[0], pose.target[1], pose.target[2]);
+          camera.setViewUp(0, 0, 1);
+          renderer.resetCameraClippingRange();
+        }
+        // vtk.js's animation loop renders this frame; no explicit render, or
+        // every frame would be drawn twice.
+      },
+      });
+      const summary = {
+        ...summarisePlayback(result.gapsMs, refreshMs), refreshMs, mode, volumeScale,
+        surface: [gl!.drawingBufferWidth, gl!.drawingBufferHeight] as [number, number],
+        displayedFrames: result.displayedFrames, dataSwaps: result.dataSwaps, orbit: result.orbit,
+        uploads: {calls: uploads.calls - before.calls, bytes: uploads.bytes - before.bytes,
+                  allocations: uploads.allocations - before.allocations},
+      };
+      probe.animation.playback = summary;
+      publish();
+      return {...summary, gapsMs: result.gapsMs};
+    } finally {
+      holdAnimation('test', false);
+      if (pinned) applySurface(restore[0], restore[1]);
+      resizeObserver.observe(ui.canvasHost);
+      if (style) interactor?.setInteractorStyle(style);
+      renderFrame(flagshipPose(0, orbit));
+      benchmarking = false;
+    }
+  }
+  playbackHandler = async () => {
+    ui.setReadout('playback', `running 10 s, ${mode}...`);
+    const r = await runPlaybackTest();
+    ui.setReadout('playback', `${mode}: ${r.missedPct.toFixed(1)}% frames late, worst ${r.worst.toFixed(0)} ms, `
+      + `p99 ${r.p99.toFixed(1)} ms (refresh ${r.refreshMs.toFixed(1)} ms) at ${r.surface.join('x')}, `
+      + `volume ${VOLUME_SCALE_LABELS[r.volumeScale]}`);
+  };
   benchmarkHandler = runAndReport;
   modeHandler = (value: string) => {
     mode = value as SwapMode;
@@ -416,15 +536,27 @@ async function main(): Promise<void> {
     ui.setReadout('mode', mode);
     publish();
   };
-  playHandler = (value: boolean) => { playing = value; };
+  playHandler = (value: boolean) => { playing = value; syncAnimation(); };
+  scaleHandler = (label: string) => {
+    volumeChoice = label;
+    volumeScale = resolveVolumeScale(label, window.devicePixelRatio || 1);
+    for (const v of [stream, ...(preloaded ?? [])]) applyScale(v.volumeMapper, volumeScale);
+    renderWindow.render();
+    ui.setReadout('volume resolution', `${volumeChoice} (${VOLUME_SCALE_LABELS[volumeScale]} of the canvas)`);
+    publish();
+  };
 
   (window as unknown as {__bench: Record<string, unknown>}).__bench.runBenchmark = runBenchmark;
+  (window as unknown as {__bench: Record<string, unknown>}).__bench.runPlayback = runPlaybackTest;
   (window as unknown as {__bench: Record<string, unknown>}).__bench.setMode = (m: SwapMode) => modeHandler(m);
   (window as unknown as {__bench: Record<string, unknown>}).__bench.setPlaying = (p: boolean) => playHandler(p);
+  (window as unknown as {__bench: Record<string, unknown>}).__bench.setVolumeScale =
+    (v: VolumeScale) => scaleHandler(VOLUME_SCALE_LABELS[v]);
 
   ui.setReadout('volume', `${meta.field}, ${meta.dims.join(' x ')} nodes (${(frames[0].length / 1e6).toFixed(2)}M), `
     + `${frames.length} frames${seriesName === 'shipped' ? '' : `, ?fields=${seriesName}`}`);
   ui.setReadout('mode', mode);
+  ui.setReadout('volume resolution', `${volumeChoice} (${VOLUME_SCALE_LABELS[volumeScale]} of the canvas)`);
   ui.setReadout('GPU', describeGpu(gl));
   ui.setReadout('triangles', probe.counts.triangles);
   ui.setReadout('camera radius m', Math.round(orbit.radius));
