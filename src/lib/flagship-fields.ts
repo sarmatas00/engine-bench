@@ -80,6 +80,43 @@ export type StreamlineMode = 'off' | 'precomputed' | 'live';
 export const STREAMLINE_MODES: StreamlineMode[] = ['off', 'precomputed', 'live'];
 
 /**
+ * Isosurface of pressure, same three modes as streamlines: off, every frame
+ * extracted once at load (precomputed), or extracted again on every data change
+ * (live). vtk.js's vtkImageMarchingCubes on page 19, its port (marching-cubes.ts)
+ * on page 20, normals from the field's gradient, points not merged (vtk.js's
+ * default). The level cuts the low-pressure vortex cores.
+ */
+export type IsoMode = StreamlineMode;
+export const ISO_MODES: IsoMode[] = ['off', 'precomputed', 'live'];
+export const ISO_LEVEL_PA = -100;
+/** Linear RGB, the same on both pages. */
+export const ISO_COLOUR: [number, number, number] = [0.95, 0.62, 0.25];
+
+/**
+ * A vertical slice through the pressure field, across x (west to east), coloured
+ * with the volume's colour map at full opacity. 'fixed' sits at the box centre;
+ * 'sweep' crosses the whole box once per benchmark run, one position per drawn
+ * frame, and during playback once every SLICE_SWEEP_SECONDS. It always shows the
+ * current data frame.
+ */
+export type SliceMode = 'off' | 'fixed' | 'sweep';
+export const SLICE_MODES: SliceMode[] = ['off', 'fixed', 'sweep'];
+export const SLICE_SWEEP_SECONDS = 8;
+
+/** Slice x for a sweep fraction t in [0, 1): ping-pong across the node box. */
+export function sliceX(box: {min: readonly number[]; max: readonly number[]}, mode: SliceMode, t: number): number {
+  const mid = (box.min[0] + box.max[0]) / 2;
+  if (mode !== 'sweep') return mid;
+  const u = 1 - Math.abs(2 * (t - Math.floor(t)) - 1);   // 0 -> 1 -> 0
+  // Inset half a percent so the plane is never exactly on the box face.
+  const lo = box.min[0] + 0.005 * (box.max[0] - box.min[0]);
+  const hi = box.max[0] - 0.005 * (box.max[0] - box.min[0]);
+  return lo + u * (hi - lo);
+}
+
+export type ExtractStats = {mode: StreamlineMode; runs: number; msP50: number | null; msMax: number | null};
+
+/**
  * How the volume changes between drawn frames.
  *
  *  - static: no change, frame 0 drawn every time. The baseline, the same work
@@ -152,6 +189,10 @@ export type AnimationProbe = Omit<GeometryProbe, 'axis' | 'volumeField' | 'selec
     uploads: VolumeUploadCounts;
     /** The last benchmark run's share of `uploads`, warm-up frames included. */
     benchmarkUploads?: VolumeUploadCounts & {drawnFrames: number; mode: SwapMode};
+    /** Isosurface as drawn now; runs/ms cover extractions since the last benchmark started. */
+    iso: ExtractStats & {level: number; triangles: number};
+    slice: {mode: SliceMode; x: number};
+    volumeVisible: boolean;
     /** Streamlines as drawn now; traceMs are the last run's per-trace times. */
     streamlines: {mode: StreamlineMode; seeds: number; lines: number; points: number;
                   traces: number; traceMsP50: number | null; traceMsMax: number | null};

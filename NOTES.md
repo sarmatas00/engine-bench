@@ -1765,3 +1765,82 @@ playback likewise varied run to run (38-74% late on 36.12.1, 33% on 37.4.0 at
 
 **Recommendation:** upgrade vtk.js to 37.x before any Twin integration with
 resizable panels, in a dedicated PR. Until then, debounce resizes.
+
+## Isosurfaces and slicing on the animated field, pages 19/20 (2026-10-03)
+
+Two more controls on both animation pages, plus a **Volume** toggle so each can
+be seen on its own.
+
+**Isosurface** (`off` / `precomputed` / `live`, same meaning as streamlines):
+pressure = -100 Pa, the low-pressure vortex cores, normals from the field's
+gradient. vtk.js uses `vtkImageMarchingCubes`. Three.js has none, so
+`src/lib/marching-cubes.ts` ports it line for line, with the 256-case table
+copied as data (`marching-cubes-tables.ts`). `tests/unit/marching-cubes.test.ts`
+requires the port to equal vtk.js exactly (points, triangles, normals) on an
+analytic field in all four option combinations, and on shipped frames 0 and 12.
+Both pages draw 16,692 triangles on frame 0.
+
+**Slice** (`off` / `fixed` / `sweep`): a plane across x, coloured with the
+volume's colour map. `sweep` crosses the box once per benchmark run, one
+position per drawn frame. vtk.js uses `vtkImageResliceMapper` on the same
+`vtkImageData` the volume draws. Three.js uses a shader that samples the
+volume's own 3D texture, a few dozen lines.
+
+### Results
+
+M4, Metal, stream swap mode, streamlines off, 2 runs in each page order.
+Benchmark at 1280x720 (full volume resolution); playback at a 3024x1559
+Retina window, `auto` volume resolution, orbiting. Raw:
+`.cache/sessions/2026-10-03-iso-slice-metal.jsonl`.
+
+~~~
+benchmark cpu p50          vtk.js (19)        Three.js (20)
+  baseline                 17.1-19.5 ms       12.5-13.8 ms
+  iso precomputed          18.4-20.0 ms       12.0-12.9 ms
+  iso live                 57.0-59.3 ms       24.3-29.0 ms
+    one extraction p50     36.7-40.1 ms       11.5-15.9 ms
+  slice fixed              19.8-20.2 ms       11.8-13.3 ms
+  slice sweep              19.0-20.4 ms       11.8-12.9 ms
+uploads per 210 frames
+  slice, stream mode       420 (2 per frame)  210 (1 per frame)
+playback, Retina
+  iso precomputed          59-60 FPS          58-60 FPS
+  iso live                 45-47 FPS, 22% late   59-60 FPS, 0-3% late
+  slice fixed / sweep      60 FPS, 0% late    60 FPS, 0% late
+~~~
+
+- **Precomputed isosurfaces and slices of any kind cost about a millisecond
+  on either renderer.**
+- **Live isosurfaces: our port is ~3x faster than vtk.js** (11.5-15.9 vs
+  36.7-40.1 ms per extraction, same output). Each live extraction is a hitch
+  on vtk.js playback (22% late frames); Three.js absorbs it. The gap is smaller
+  than for streamlines (12x): `vtkImageMarchingCubes` allocates little per
+  voxel, it just copies (`slice()`) eight-element arrays per triangle edge.
+- **vtk.js's slice sends the data twice.** The volume and the reslice mapper
+  each update their texture in place, so a stream frame is two 2.46 MB uploads.
+  Page 20's slice samples the volume's own texture and costs no upload.
+
+### A vtk.js texture leak, found and worked around
+
+The first page-19 slice leaked **one GPU texture per data swap**: 8 to 280
+live textures over one benchmark run, and 8 to 69 in 6 s of playback, with no
+resize involved. Creation stacks put every leaked texture in
+`ImageResliceMapper.buildBufferObjects` -> `create2DFromRaw`: the **opacity**
+lookup texture. With no piecewise function on the `vtkImageProperty` (the
+default for an opaque slice) the mapper has no cache key, so every rebuild,
+which happens on every image change, creates a new opacity texture and drops
+the old one without releasing it. **Workaround:** set an explicit constant
+opacity function. The count then stays flat (8 -> 9 after a full run). Still
+present in vtk.js 37.4.0 (that block is unchanged); an upstream issue is
+drafted in `messages/upstream-vtkjs-reslice-opacity-texture-leak.md`.
+
+Two wrong guesses came first and are recorded so nobody repeats them: setting
+`updatedExtents` on the slice's property, and giving the slice its own colour
+transfer function, both left the leak at exactly the same rate. Setting
+`updatedExtents` on the slice did fix something else: without it the reslice
+mapper reallocated the shared 3D texture on every swap (210 allocations a
+run); with it, 0.
+
+**Also:** `src/vtkjs-untyped.d.ts` declares the two vtk.js modules that ship
+without types (`ImageMarchingCubes` and its case table), which retires page 11's
+`@ts-expect-error`.

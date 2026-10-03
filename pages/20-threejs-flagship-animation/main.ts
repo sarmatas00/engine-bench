@@ -26,9 +26,12 @@ import {
 } from '@lib/flagship-volume';
 import {
   DEFAULT_VOLUME_SCALE_CHOICE, PLAYBACK_FPS, SWAP_MODES, VOLUME_SCALE_CHOICES, VOLUME_SCALE_LABELS, benchmarkFrame, resolveVolumeScale, measureRefreshMs, runPlayback, seriesFromQuery, summarisePlayback, countVolumeUploads, loadFieldSeries, seriesBox,
-  STREAMLINE_MODES, type AnimationProbe, type FieldSeries, type StreamlineMode, type SwapMode, type VolumeScale,
+  ISO_COLOUR, ISO_LEVEL_PA, ISO_MODES, SLICE_MODES, SLICE_SWEEP_SECONDS, STREAMLINE_MODES, sliceX,
+  type AnimationProbe, type FieldSeries, type IsoMode, type SliceMode, type StreamlineMode, type SwapMode, type VolumeScale,
 } from '@lib/flagship-fields';
 import {BLIT_FRAGMENT_GLSL, BLIT_VERTEX_GLSL, VOLUME_FRAGMENT_GLSL, VOLUME_VERTEX_GLSL} from '@lib/threejs-volume';
+import {COLORMAP_GLSL} from '@lib/colormap';
+import {marchingCubes} from '@lib/marching-cubes';
 import {attachContextLoss, createBenchmarkDriver, type CameraPose} from '@lib/scientific-probes';
 
 // Page 16's colour pair, same reason: no sRGB conversion vtk.js does not make.
@@ -40,6 +43,12 @@ const SURFACE = {width: 1280, height: 720} as const;
 let modeHandler: (mode: string) => void = () => {};
 /** Replaced by main() once the scene is up. */
 let streamlineHandler: (mode: string) => void = () => {};
+/** Replaced by main() once the scene is up. */
+let isoHandler: (mode: string) => void = () => {};
+/** Replaced by main() once the scene is up. */
+let sliceHandler: (mode: string) => void = () => {};
+/** Replaced by main() once the scene is up. */
+let volumeHandler: (on: boolean) => void = () => {};
 /** Replaced by main() once the scene is up. */
 let scaleHandler: (label: string) => void = () => {};
 /** Replaced by main() once the scene is up. */
@@ -61,6 +70,9 @@ const ui = mountChrome({
     {kind: 'select', id: 'mode', label: 'Swap', options: SWAP_MODES, value: 'stream', onChange: v => modeHandler(v)},
     {kind: 'select', id: 'streamlines', label: 'Streamlines', options: STREAMLINE_MODES, value: 'precomputed',
      onChange: v => streamlineHandler(v)},
+    {kind: 'select', id: 'iso', label: 'Isosurface', options: ISO_MODES, value: 'off', onChange: v => isoHandler(v)},
+    {kind: 'select', id: 'slice', label: 'Slice', options: SLICE_MODES, value: 'off', onChange: v => sliceHandler(v)},
+    {kind: 'toggle', id: 'volume', label: 'Volume', value: true, onChange: v => volumeHandler(v)},
     {kind: 'select', id: 'volume-scale', label: 'Volume resolution',
      options: VOLUME_SCALE_CHOICES, value: DEFAULT_VOLUME_SCALE_CHOICE,
      onChange: v => scaleHandler(v)},
@@ -71,6 +83,10 @@ const ui = mountChrome({
      onClick: () => { void playbackHandler(); }},
   ],
   findings: [
+    `Isosurface: pressure = ${ISO_LEVEL_PA} Pa, the low-pressure vortex cores, by marchingCubes, a port of `
+    + 'vtkImageMarchingCubes held to its output point for point and normal for normal. Three.js has none.',
+    'Slice: a plane across x drawn by a shader that samples the volume\'s own 3D texture, so it always shows the '
+    + 'current frame and costs no upload. Sweep moves it one position per drawn frame.',
     'Streamlines come from the field\'s velocity (every 2nd vertex, 65x65x19), 100 seeds at a quarter of the box '
     + 'height, traced by traceStreamlines, page 18\'s port of vtkImageStreamline. Precomputed traces all 25 frames '
     + 'at load and swaps the lines; live traces again on every data change, inside the drawn frame.',
@@ -295,6 +311,97 @@ async function main(): Promise<void> {
   volumeMesh.frustumCulled = false;
   const volumeScene = new THREE.Scene();
   volumeScene.add(volumeMesh);
+  let volumeOn = true;
+
+  // --- slice: a plane sampling the volume's texture -----------------------------
+  // Opaque and in the city pass, so the volume stops at it, as vtk.js's image
+  // slice actor does on page 19. Shares the volume's uniforms, so a swap of
+  // uData (preloaded) or of its contents (stream) shows on the slice at once.
+  const u = volumeMaterial.uniforms;
+  const sliceMaterial = new THREE.ShaderMaterial({
+    uniforms: {uData: u.uData, uOrigin: u.uOrigin, uSpacing: u.uSpacing, uSize: u.uSize, uClim: u.uClim},
+    vertexShader: /* glsl */ `
+      varying vec3 vWorld;
+      void main() {
+        vec4 world = modelMatrix * vec4(position, 1.0);
+        vWorld = world.xyz;
+        gl_Position = projectionMatrix * viewMatrix * world;
+      }`,
+    fragmentShader: /* glsl */ `
+      precision highp float;
+      precision highp sampler3D;
+      uniform highp sampler3D uData;
+      uniform vec3 uOrigin;
+      uniform vec3 uSpacing;
+      uniform vec3 uSize;
+      uniform vec2 uClim;
+      varying vec3 vWorld;
+      ${COLORMAP_GLSL}
+      void main() {
+        vec3 index = (vWorld - uOrigin) / uSpacing;
+        float value = texture(uData, (index + 0.5) / uSize).r;
+        gl_FragColor = vec4(benchColormap((value - uClim.x) / (uClim.y - uClim.x)), 1.0);
+      }`,
+    side: THREE.DoubleSide,
+  });
+  // Plane in its own xy; turned so its normal is +x: its x runs along world -z, its y along world y.
+  const sliceGeometry = new THREE.PlaneGeometry(span[2], span[1]);
+  sliceGeometry.rotateY(Math.PI / 2);
+  const sliceMesh = new THREE.Mesh(sliceGeometry, sliceMaterial);
+  sliceMesh.frustumCulled = false;
+  sliceMesh.visible = false;
+  opaque.add(sliceMesh);
+  let sliceMode: SliceMode = 'off';
+  const placeSlice = (t: number) => {
+    sliceMesh.position.set(sliceX(box, sliceMode, t), box.min[1] + span[1] / 2, box.min[2] + span[2] / 2);
+    sliceMesh.updateMatrixWorld();
+  };
+  placeSlice(0);
+
+  // --- isosurface: our port of vtkImageMarchingCubes --------------------------------
+  const isoMaterial = new THREE.MeshLambertMaterial({side: THREE.DoubleSide});
+  isoMaterial.color.setRGB(...ISO_COLOUR);
+  const emptyIso = new THREE.BufferGeometry();
+  const isoMesh = new THREE.Mesh(emptyIso, isoMaterial);
+  isoMesh.frustumCulled = false;
+  isoMesh.visible = false;
+  opaque.add(isoMesh);
+  let isoMode: IsoMode = 'off';
+  const isoMs: number[] = [];
+  let isoTriangles = 0;
+  const extractIso = (k: number): THREE.BufferGeometry => {
+    const t0 = performance.now();
+    const surf = marchingCubes({dims: meta.dims, origin: meta.origin, spacing: meta.spacing, scalars: frames[k]},
+                               ISO_LEVEL_PA, {computeNormals: true});
+    isoMs.push(performance.now() - t0);
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(surf.positions, 3));
+    g.setAttribute('normal', new THREE.BufferAttribute(surf.normals!, 3));
+    g.setIndex(new THREE.BufferAttribute(surf.triangles, 1));
+    g.userData = {triangles: surf.triangles.length / 3};
+    return g;
+  };
+  let precomputedIso: THREE.BufferGeometry[] | null = null;
+  let isoPrecomputeMs = 0;
+  function showIso(k: number): void {
+    isoMesh.visible = isoMode !== 'off';
+    if (isoMode === 'off') return;
+    let next: THREE.BufferGeometry;
+    if (isoMode === 'precomputed') {
+      if (!precomputedIso) {
+        const t0 = performance.now();
+        precomputedIso = frames.map((_, i) => extractIso(i));
+        isoPrecomputeMs = performance.now() - t0;
+      }
+      next = precomputedIso[k];
+    } else {
+      next = extractIso(k);
+    }
+    const old = isoMesh.geometry;
+    isoMesh.geometry = next;
+    if (old !== emptyIso && !precomputedIso?.includes(old)) old.dispose();
+    isoTriangles = (next.userData as {triangles: number}).triangles;
+  }
 
   const blitGeometry = new THREE.PlaneGeometry(2, 2);
   const blitMaterial = new THREE.ShaderMaterial({
@@ -323,7 +430,7 @@ async function main(): Promise<void> {
     }
     // Lines follow the volume's frame. Live retraces on every call that moves
     // the data (static stays on frame 0 and never retraces).
-    if (mode !== 'static' || shownLines !== k) { showLines(k); shownLines = k; }
+    if (mode !== 'static' || shownLines !== k) { showLines(k); showIso(k); shownLines = k; }
     shown = k;
   }
 
@@ -348,6 +455,7 @@ async function main(): Promise<void> {
     renderer.setRenderTarget(null);
     renderer.clear();
     renderer.render(blitScene, blitCamera);
+    if (!volumeOn) return;
     if (scale === 1) {
       uResolution.value.copy(bufferSize);
       renderer.render(volumeScene, camera);
@@ -407,7 +515,10 @@ async function main(): Promise<void> {
   const observers = 1;
 
   const renderFrame = (pose: CameraPose & {eye?: [number, number, number]; drawIndex?: number}) => {
-    if (pose.drawIndex !== undefined) showFrame(benchmarkFrame(pose.drawIndex, frames.length, mode));
+    if (pose.drawIndex !== undefined) {
+      showFrame(benchmarkFrame(pose.drawIndex, frames.length, mode));
+      if (sliceMode === 'sweep') placeSlice(pose.drawIndex / (ORBIT_FLAGSHIP_V1.warmupFrames + ORBIT_FLAGSHIP_V1.forcedFrames));
+    }
     const eye = pose.eye!;
     camera.position.set(eye[0], eye[1], eye[2]);
     controls.target.set(pose.target[0], pose.target[1], pose.target[2]);
@@ -417,6 +528,10 @@ async function main(): Promise<void> {
   };
 
   const volumeTextures = () => (preloaded ? 1 + preloaded.length : 1);
+  const isoStats = () => ({
+    mode: isoMode, level: ISO_LEVEL_PA, triangles: isoMode === 'off' ? 0 : isoTriangles, runs: isoMs.length,
+    msP50: isoMs.length ? percentile(isoMs, 0.5) : null, msMax: isoMs.length ? Math.max(...isoMs) : null,
+  });
   const streamlineStats = () => ({
     mode: streamMode, seeds: velocity?.meta.seeds.length ?? 0, lines: streamMode === 'off' ? 0 : lineStats.lines,
     points: streamMode === 'off' ? 0 : lineStats.points, traces: traceMs.length,
@@ -444,6 +559,7 @@ async function main(): Promise<void> {
     animation: {
       series: seriesName, mode, frames: frames.length, bytesPerFrame: frames[0].byteLength,
       volumeTextures: volumeTextures(), uploads: {...uploads}, streamlines: streamlineStats(),
+      iso: isoStats(), slice: {mode: sliceMode, x: sliceMesh.position.x}, volumeVisible: volumeOn,
     },
     resources: {
       buffers: counts.buffers, textures: counts.textures,
@@ -471,6 +587,7 @@ async function main(): Promise<void> {
     if (!playing || benchmarking || mode === 'static') return;
     playFrame = (playFrame + 1) % frames.length;
     showFrame(playFrame);
+    if (sliceMode === 'sweep') placeSlice(performance.now() / 1000 / SLICE_SWEEP_SECONDS);
     renderScene();
     ui.setReadout('frame', `${playFrame + 1}/${frames.length}, t=${meta.frames[playFrame].timeSeconds.toFixed(1)} s`);
   }, 1000 / PLAYBACK_FPS);
@@ -485,6 +602,8 @@ async function main(): Promise<void> {
       volumeMaterial.dispose(); boxGeometry.dispose(); streamTexture.dispose();
       preloaded?.forEach(t => t.dispose());
       lineMesh.geometry.dispose(); precomputedLines?.forEach(g => g.dispose()); lineMaterial.dispose();
+      isoMesh.geometry.dispose(); precomputedIso?.forEach(g => g.dispose()); isoMaterial.dispose();
+      sliceGeometry.dispose(); sliceMaterial.dispose();
       blitMaterial.dispose(); blitGeometry.dispose(); opaqueTarget.dispose();
       compositeMaterial.dispose(); compositeGeometry.dispose(); volumeTarget.dispose();
       renderer.dispose();
@@ -497,7 +616,8 @@ async function main(): Promise<void> {
 
   function publish(): void {
     probe.animation = {...probe.animation, mode, volumeTextures: volumeTextures(), uploads: {...uploads},
-                       streamlines: streamlineStats()};
+                       streamlines: streamlineStats(), iso: isoStats(),
+                       slice: {mode: sliceMode, x: sliceMesh.position.x}, volumeVisible: volumeOn};
     probe.lens = {fovDeg: camera.fov, aspect: camera.aspect,
                   surface: [gl.drawingBufferWidth, gl.drawingBufferHeight]};
     probe.resources = {
@@ -524,6 +644,11 @@ async function main(): Promise<void> {
       const b = probe.animation.benchmarkUploads!;
       ui.setReadout('uploads/frame', `${(b.calls / b.drawnFrames).toFixed(2)} (${(b.bytes / b.drawnFrames / 1e6).toFixed(2)} MB), `
         + `${b.allocations} allocations`);
+      const iso = probe.animation.iso;
+      if (iso.mode !== 'off') {
+        ui.setReadout('iso ms', iso.msP50 === null ? 'no extractions'
+          : `p50 ${iso.msP50.toFixed(1)}, max ${iso.msMax!.toFixed(1)} (${iso.runs} extractions, ${iso.mode})`);
+      }
       const st = probe.animation.streamlines;
       ui.setReadout('trace ms', st.traceMsP50 === null ? 'no retraces'
         : `p50 ${st.traceMsP50.toFixed(1)}, max ${st.traceMsMax!.toFixed(1)} (${st.traces} traces, ${st.mode})`);
@@ -546,6 +671,7 @@ async function main(): Promise<void> {
     applySurface(SURFACE.width, SURFACE.height, 1);
     const before = {...uploads};
     traceMs.length = 0;
+    isoMs.length = 0;
     try {
       const result = await driver.runBenchmark();
       probe.benchmark = result;
@@ -585,12 +711,14 @@ async function main(): Promise<void> {
     if (pinned) applySurface(SURFACE.width, SURFACE.height, 1);
     const before = {...uploads};
     traceMs.length = 0;
+    isoMs.length = 0;
     try {
       const refreshMs = await measureRefreshMs();
       const result = await runPlayback({
         seconds: opts.seconds ?? 10, orbit: opts.orbit ?? true, frameCount: frames.length,
         showFrame: (k) => { if (mode !== 'static') showFrame(k); },
       draw: (turn) => {
+        if (sliceMode === 'sweep') placeSlice(performance.now() / 1000 / SLICE_SWEEP_SECONDS);
         if (turn !== null) {
           const pose = flagshipPose(turn * (ORBIT_FLAGSHIP_V1.warmupFrames + ORBIT_FLAGSHIP_V1.forcedFrames), orbit);
           camera.position.set(pose.eye[0], pose.eye[1], pose.eye[2]);
@@ -638,6 +766,23 @@ async function main(): Promise<void> {
   };
   // Pausing redraws at rest, so a still picture is full resolution.
   playHandler = (value: boolean) => { playing = value; renderScene(); };
+  isoHandler = (value: string) => {
+    isoMode = value as IsoMode;
+    showIso(shown);
+    if (isoMode === 'precomputed') ui.setReadout('iso precompute ms', Math.round(isoPrecomputeMs));
+    ui.setReadout('isosurface', isoMode === 'off' ? 'off' : `${isoMode}, ${ISO_LEVEL_PA} Pa (${isoTriangles} triangles)`);
+    renderScene();
+    publish();
+  };
+  sliceHandler = (value: string) => {
+    sliceMode = value as SliceMode;
+    sliceMesh.visible = sliceMode !== 'off';
+    placeSlice(0);
+    ui.setReadout('slice', sliceMode);
+    renderScene();
+    publish();
+  };
+  volumeHandler = (on: boolean) => { volumeOn = on; renderScene(); publish(); };
   streamlineHandler = (value: string) => {
     if (!velocity && value !== 'off') { ui.setReadout('streamlines', 'no velocity in this series'); return; }
     streamMode = value as StreamlineMode;
@@ -660,6 +805,9 @@ async function main(): Promise<void> {
   (window as unknown as {__bench: Record<string, unknown>}).__bench.setMode = (m: SwapMode) => modeHandler(m);
   (window as unknown as {__bench: Record<string, unknown>}).__bench.setPlaying = (p: boolean) => playHandler(p);
   (window as unknown as {__bench: Record<string, unknown>}).__bench.setStreamlines = (m: StreamlineMode) => streamlineHandler(m);
+  (window as unknown as {__bench: Record<string, unknown>}).__bench.setIso = (m: IsoMode) => isoHandler(m);
+  (window as unknown as {__bench: Record<string, unknown>}).__bench.setSlice = (m: SliceMode) => sliceHandler(m);
+  (window as unknown as {__bench: Record<string, unknown>}).__bench.setVolume = (on: boolean) => volumeHandler(on);
   (window as unknown as {__bench: Record<string, unknown>}).__bench.setVolumeScale =
     (v: VolumeScale) => scaleHandler(VOLUME_SCALE_LABELS[v]);
 

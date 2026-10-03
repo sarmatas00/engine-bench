@@ -1,7 +1,7 @@
 import {describe, expect, test} from 'bun:test';
 import {readFileSync, statSync} from 'node:fs';
 import {resolve} from 'node:path';
-import {PLAYBACK_FPS, benchmarkFrame, resolveVolumeScale, checkSeriesJson, runPlayback, seriesBox, seriesFromQuery, summarisePlayback, type FieldSeriesJson} from '@lib/flagship-fields';
+import {PLAYBACK_FPS, benchmarkFrame, resolveVolumeScale, sliceX, checkSeriesJson, runPlayback, seriesBox, seriesFromQuery, summarisePlayback, type FieldSeriesJson} from '@lib/flagship-fields';
 
 const dir = resolve(import.meta.dirname, '../../public/data/fields');
 const shipped = JSON.parse(readFileSync(resolve(dir, 'pressure.json'), 'utf8')) as FieldSeriesJson;
@@ -79,5 +79,18 @@ describe('flagship fields (animation axis)', () => {
     expect(resolveVolumeScale('full', 2)).toBe(1);
     expect(resolveVolumeScale('1/2', 2)).toBe(2);
     expect(resolveVolumeScale('1/4', 1)).toBe(4);
+  });
+
+  test('slice: fixed sits at the box centre; sweep goes edge to edge and back, inside the box', () => {
+    const box = {min: [-1000, 0, 0], max: [1000, 10, 10]};
+    expect(sliceX(box, 'fixed', 0.37)).toBe(0);
+    expect(sliceX(box, 'sweep', 0)).toBeCloseTo(-990, 6);
+    expect(sliceX(box, 'sweep', 0.5)).toBeCloseTo(990, 6);
+    expect(sliceX(box, 'sweep', 0.25)).toBeCloseTo(0, 6);
+    expect(sliceX(box, 'sweep', 1.25)).toBeCloseTo(sliceX(box, 'sweep', 0.25), 6);
+    for (let t = 0; t < 2; t += 0.01) {
+      const x = sliceX(box, 'sweep', t);
+      expect(x).toBeGreaterThan(box.min[0]); expect(x).toBeLessThan(box.max[0]);
+    }
   });
 });

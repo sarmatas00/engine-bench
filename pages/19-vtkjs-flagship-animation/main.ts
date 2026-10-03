@@ -31,6 +31,10 @@ import vtkVolumeProperty from '@kitware/vtk.js/Rendering/Core/VolumeProperty';
 import vtkColorTransferFunction from '@kitware/vtk.js/Rendering/Core/ColorTransferFunction';
 import vtkPiecewiseFunction from '@kitware/vtk.js/Common/DataModel/PiecewiseFunction';
 import vtkImageStreamline from '@kitware/vtk.js/Filters/General/ImageStreamline';
+import vtkImageMarchingCubes from '@kitware/vtk.js/Filters/General/ImageMarchingCubes';
+import vtkImageResliceMapper from '@kitware/vtk.js/Rendering/Core/ImageResliceMapper';
+import vtkImageSlice from '@kitware/vtk.js/Rendering/Core/ImageSlice';
+import vtkPlane from '@kitware/vtk.js/Common/DataModel/Plane';
 
 import {mountChrome} from '@lib/chrome';
 import {colormap} from '@lib/colormap';
@@ -44,7 +48,8 @@ import {
 } from '@lib/flagship-volume';
 import {
   DEFAULT_VOLUME_SCALE_CHOICE, PLAYBACK_FPS, SWAP_MODES, VOLUME_SCALE_CHOICES, VOLUME_SCALE_LABELS, benchmarkFrame, resolveVolumeScale, measureRefreshMs, runPlayback, seriesFromQuery, summarisePlayback, countVolumeUploads, loadFieldSeries,
-  STREAMLINE_MODES, type AnimationProbe, type FieldSeries, type StreamlineMode, type SwapMode, type VolumeScale,
+  ISO_COLOUR, ISO_LEVEL_PA, ISO_MODES, SLICE_MODES, SLICE_SWEEP_SECONDS, STREAMLINE_MODES, seriesBox, sliceX,
+  type AnimationProbe, type FieldSeries, type IsoMode, type SliceMode, type StreamlineMode, type SwapMode, type VolumeScale,
 } from '@lib/flagship-fields';
 import {attachContextLoss, createBenchmarkDriver, type CameraPose} from '@lib/scientific-probes';
 
@@ -68,6 +73,12 @@ let modeHandler: (mode: string) => void = () => {};
 /** Replaced by main() once the scene is up. */
 let streamlineHandler: (mode: string) => void = () => {};
 /** Replaced by main() once the scene is up. */
+let isoHandler: (mode: string) => void = () => {};
+/** Replaced by main() once the scene is up. */
+let sliceHandler: (mode: string) => void = () => {};
+/** Replaced by main() once the scene is up. */
+let volumeHandler: (on: boolean) => void = () => {};
+/** Replaced by main() once the scene is up. */
 let scaleHandler: (label: string) => void = () => {};
 /** Replaced by main() once the scene is up. */
 let playHandler: (playing: boolean) => void = () => {};
@@ -88,6 +99,9 @@ const ui = mountChrome({
     {kind: 'select', id: 'mode', label: 'Swap', options: SWAP_MODES, value: 'stream', onChange: v => modeHandler(v)},
     {kind: 'select', id: 'streamlines', label: 'Streamlines', options: STREAMLINE_MODES, value: 'precomputed',
      onChange: v => streamlineHandler(v)},
+    {kind: 'select', id: 'iso', label: 'Isosurface', options: ISO_MODES, value: 'off', onChange: v => isoHandler(v)},
+    {kind: 'select', id: 'slice', label: 'Slice', options: SLICE_MODES, value: 'off', onChange: v => sliceHandler(v)},
+    {kind: 'toggle', id: 'volume', label: 'Volume', value: true, onChange: v => volumeHandler(v)},
     {kind: 'select', id: 'volume-scale', label: 'Volume resolution',
      options: VOLUME_SCALE_CHOICES, value: DEFAULT_VOLUME_SCALE_CHOICE,
      onChange: v => scaleHandler(v)},
@@ -98,6 +112,9 @@ const ui = mountChrome({
      onClick: () => { void playbackHandler(); }},
   ],
   findings: [
+    `Isosurface: pressure = ${ISO_LEVEL_PA} Pa, the low-pressure vortex cores, by vtk.js's own `
+    + 'vtkImageMarchingCubes with normals. Page 20 runs a port held to the same output point for point.',
+    'Slice: vtk.js\'s vtkImageResliceMapper on the same image data the volume draws, so it shows the current frame.',
     'Streamlines come from the field\'s velocity (every 2nd vertex, 65x65x19), 100 seeds at a quarter of the box '
     + 'height, traced by vtk.js\'s own vtkImageStreamline. Precomputed traces all 25 frames at load (one filter per '
     + 'frame: vtk.js reuses a filter\'s output object) and swaps the lines; live traces again on every data change.',
@@ -353,6 +370,89 @@ async function main(): Promise<void> {
     for (const p of preloaded) { p.volume.setVisibility(true); renderWindow.render(); p.volume.setVisibility(false); }
   }
 
+  // --- isosurface: vtk.js's own marching cubes ---------------------------------
+  const makeIsoFilter = (k: number) => {
+    const image = vtkImageData.newInstance();
+    image.setDimensions(meta.dims);
+    image.setOrigin(meta.origin);
+    image.setSpacing(meta.spacing);
+    image.getPointData().setScalars(vtkDataArray.newInstance({name: meta.field, values: frames[k], numberOfComponents: 1}));
+    const filter = vtkImageMarchingCubes.newInstance({contourValue: ISO_LEVEL_PA, computeNormals: true, mergePoints: false});
+    filter.setInputData(image);
+    return {image, filter};
+  };
+  const isoMapper = vtkMapper.newInstance();
+  isoMapper.setScalarVisibility(false);
+  const isoActor = vtkActor.newInstance();
+  isoActor.setMapper(isoMapper);
+  isoActor.getProperty().setColor(...ISO_COLOUR);
+  isoActor.setVisibility(false);
+  renderer.addActor(isoActor);
+  let isoMode: IsoMode = 'off';
+  const isoMs: number[] = [];
+  let isoTriangles = 0;
+  const timedIso = (f: ReturnType<typeof makeIsoFilter>) => {
+    const t0 = performance.now();
+    const out = f.filter.getOutputData();
+    isoMs.push(performance.now() - t0);
+    return out;
+  };
+  const liveIso = makeIsoFilter(0);
+  // One filter per frame when precomputed: like vtkImageStreamline, the filter
+  // reuses its output object (outData[0]?.initialize()).
+  let precomputedIso: {filters: ReturnType<typeof makeIsoFilter>[]; out: ReturnType<typeof timedIso>[]} | null = null;
+  let isoPrecomputeMs = 0;
+  function showIso(k: number): void {
+    isoActor.setVisibility(isoMode !== 'off');
+    if (isoMode === 'off') return;
+    let out;
+    if (isoMode === 'precomputed') {
+      if (!precomputedIso) {
+        const t0 = performance.now();
+        const filters = frames.map((_, i) => makeIsoFilter(i));
+        precomputedIso = {filters, out: filters.map(timedIso)};
+        isoPrecomputeMs = performance.now() - t0;
+      }
+      out = precomputedIso.out[k];
+    } else {
+      liveIso.image.getPointData().getScalars().setData(frames[k], 1);
+      liveIso.image.modified();
+      out = timedIso(liveIso);
+    }
+    isoMapper.setInputData(out);
+    isoTriangles = out.getNumberOfPolys();
+  }
+
+  // --- slice: vtk.js's reslice mapper on the image the volume draws --------------
+  const box = seriesBox(meta);
+  const slicePlane = vtkPlane.newInstance();
+  slicePlane.setNormal(1, 0, 0);
+  const sliceMapper = vtkImageResliceMapper.newInstance();
+  sliceMapper.setSlicePlane(slicePlane);
+  const sliceActor = vtkImageSlice.newInstance();
+  sliceActor.setMapper(sliceMapper);
+  sliceActor.getProperty().setRGBTransferFunction(0, ctf);
+  // An explicit, fully opaque opacity function. NOT optional in vtk.js 36.12.1:
+  // OpenGL ImageResliceMapper.buildBufferObjects caches the opacity texture
+  // keyed by this function; with none set, every rebuild (every data swap or
+  // image change) creates a new opacity texture, skips the cache write for lack
+  // of a key, and never frees the previous one. MEASURED without it: +1 live
+  // texture per swap, 8 -> 280 textures in one benchmark run.
+  const sliceOpacity = vtkPiecewiseFunction.newInstance();
+  sliceOpacity.addPoint(lo, 1);
+  sliceOpacity.addPoint(hi, 1);
+  sliceActor.getProperty().setPiecewiseFunction(0, sliceOpacity);
+  sliceActor.getProperty().setUseLookupTableScalarRange(true);
+  sliceActor.getProperty().setInterpolationTypeToLinear();
+  sliceActor.setVisibility(false);
+  renderer.addActor(sliceActor);
+  let sliceMode: SliceMode = 'off';
+  const placeSlice = (t: number) => {
+    slicePlane.setOrigin(sliceX(box, sliceMode, t), (box.min[1] + box.max[1]) / 2, (box.min[2] + box.max[2]) / 2);
+  };
+  placeSlice(0);
+  let volumeOn = true;
+
   let mode: SwapMode = 'stream';
   // Frame 0 is already in the stream texture once the first render has run.
   // updatedExtents must not be set before that: vtk.js 36.12.1 then looks up a
@@ -362,25 +462,35 @@ async function main(): Promise<void> {
   function showFrame(k: number): void {
     if (mode === 'preloaded') {
       stream.volume.setVisibility(false);
-      preloaded!.forEach((p, i) => p.volume.setVisibility(i === k));
+      preloaded!.forEach((p, i) => p.volume.setVisibility(volumeOn && i === k));
+      // The slice reads the image this frame's volume draws, sharing its texture.
+      sliceMapper.setInputData(preloaded![k].image);
     } else {
       preloaded?.forEach(p => p.volume.setVisibility(false));
-      stream.volume.setVisibility(true);
+      stream.volume.setVisibility(volumeOn);
+      sliceMapper.setInputData(stream.image);
       // Stream swaps on every call, even to the frame it holds, so a benchmark
       // frame is always one upload. Static uploads only to get back to frame 0.
       if (mode === 'stream' || shown !== k) {
         streamScalars.setData(frames[k], 1);
         streamProperty.setUpdatedExtents([WHOLE]);
+        // The slice's mapper reads updatedExtents from its own property. Set it
+        // only while the slice is drawn: extents left on a hidden slice would
+        // apply to whatever it draws next.
+        if (sliceMode !== 'off') sliceActor.getProperty().setUpdatedExtents([WHOLE]);
       }
     }
     // Lines follow the volume's frame. Live retraces on every call that moves
     // the data (static stays on frame 0 and never retraces).
-    if (mode !== 'static' || shownLines !== k) { showLines(k); shownLines = k; }
+    if (mode !== 'static' || shownLines !== k) { showLines(k); showIso(k); shownLines = k; }
     shown = k;
   }
 
   const renderFrame = (pose: CameraPose & {eye?: [number, number, number]; drawIndex?: number}) => {
-    if (pose.drawIndex !== undefined) showFrame(benchmarkFrame(pose.drawIndex, frames.length, mode));
+    if (pose.drawIndex !== undefined) {
+      showFrame(benchmarkFrame(pose.drawIndex, frames.length, mode));
+      if (sliceMode === 'sweep') placeSlice(pose.drawIndex / (ORBIT_FLAGSHIP_V1.warmupFrames + ORBIT_FLAGSHIP_V1.forcedFrames));
+    }
     const eye = pose.eye!;
     const camera = renderer.getActiveCamera();
     camera.setPosition(eye[0], eye[1], eye[2]);
@@ -393,6 +503,10 @@ async function main(): Promise<void> {
   };
 
   const volumeTextures = () => (preloaded ? 1 + preloaded.length : 1);
+  const isoStats = () => ({
+    mode: isoMode, level: ISO_LEVEL_PA, triangles: isoMode === 'off' ? 0 : isoTriangles, runs: isoMs.length,
+    msP50: isoMs.length ? percentile(isoMs, 0.5) : null, msMax: isoMs.length ? Math.max(...isoMs) : null,
+  });
   const streamlineStats = () => ({
     mode: streamMode, seeds: velocity?.meta.seeds.length ?? 0, lines: streamMode === 'off' ? 0 : lineStats.lines,
     points: streamMode === 'off' ? 0 : lineStats.points, traces: traceMs.length,
@@ -424,6 +538,7 @@ async function main(): Promise<void> {
     animation: {
       series: seriesName, mode, frames: frames.length, bytesPerFrame: frames[0].byteLength,
       volumeTextures: volumeTextures(), uploads: {...uploads}, streamlines: streamlineStats(),
+      iso: isoStats(), slice: {mode: sliceMode, x: slicePlane.getOrigin()[0]}, volumeVisible: volumeOn,
     },
     resources: {
       buffers: counts.buffers, textures: counts.textures,
@@ -434,7 +549,8 @@ async function main(): Promise<void> {
 
   function publish(): void {
     probe.animation = {...probe.animation, mode, volumeTextures: volumeTextures(), uploads: {...uploads},
-                       streamlines: streamlineStats()};
+                       streamlines: streamlineStats(), iso: isoStats(),
+                       slice: {mode: sliceMode, x: slicePlane.getOrigin()[0]}, volumeVisible: volumeOn};
     probe.lens = {fovDeg: renderer.getActiveCamera().getViewAngle(),
                   aspect: gl!.drawingBufferWidth / gl!.drawingBufferHeight,
                   surface: [gl!.drawingBufferWidth, gl!.drawingBufferHeight]};
@@ -467,6 +583,7 @@ async function main(): Promise<void> {
     if (!playing || benchmarking || mode === 'static') return;
     playFrame = (playFrame + 1) % frames.length;
     showFrame(playFrame);
+    if (sliceMode === 'sweep') placeSlice(performance.now() / 1000 / SLICE_SWEEP_SECONDS);
     tickFps();
     ui.setReadout('frame', `${playFrame + 1}/${frames.length}, t=${meta.frames[playFrame].timeSeconds.toFixed(1)} s`);
   }, 1000 / PLAYBACK_FPS);
@@ -484,6 +601,8 @@ async function main(): Promise<void> {
         t.tracer.delete(); t.seeds.delete(); t.image.delete();
       }
       lineMapper.delete(); lineActor.delete();
+      for (const f of [liveIso, ...(precomputedIso?.filters ?? [])]) { f.filter.delete(); f.image.delete(); }
+      isoMapper.delete(); isoActor.delete(); sliceMapper.delete(); sliceActor.delete();
     },
     onLost: () => {
       publish();
@@ -508,6 +627,11 @@ async function main(): Promise<void> {
       const b = probe.animation.benchmarkUploads!;
       ui.setReadout('uploads/frame', `${(b.calls / b.drawnFrames).toFixed(2)} (${(b.bytes / b.drawnFrames / 1e6).toFixed(2)} MB), `
         + `${b.allocations} allocations`);
+      const iso = probe.animation.iso;
+      if (iso.mode !== 'off') {
+        ui.setReadout('iso ms', iso.msP50 === null ? 'no extractions'
+          : `p50 ${iso.msP50.toFixed(1)}, max ${iso.msMax!.toFixed(1)} (${iso.runs} extractions, ${iso.mode})`);
+      }
       const st = probe.animation.streamlines;
       ui.setReadout('trace ms', st.traceMsP50 === null ? 'no retraces'
         : `p50 ${st.traceMsP50.toFixed(1)}, max ${st.traceMsMax!.toFixed(1)} (${st.traces} traces, ${st.mode})`);
@@ -533,6 +657,7 @@ async function main(): Promise<void> {
     applySurface(SURFACE[0], SURFACE[1]);
     const before = {...uploads};
     traceMs.length = 0;
+    isoMs.length = 0;
     try {
       const result = await driver.runBenchmark();
       probe.benchmark = result;
@@ -573,6 +698,7 @@ async function main(): Promise<void> {
     if (pinned) applySurface(SURFACE[0], SURFACE[1]);
     const before = {...uploads};
     traceMs.length = 0;
+    isoMs.length = 0;
     try {
       const refreshMs = await measureRefreshMs();
       // vtk.js draws in its own animation loop, the only path where the
@@ -582,6 +708,7 @@ async function main(): Promise<void> {
         seconds: opts.seconds ?? 10, orbit: opts.orbit ?? true, frameCount: frames.length,
         showFrame: (k) => { if (mode !== 'static') showFrame(k); },
       draw: (turn) => {
+        if (sliceMode === 'sweep') placeSlice(performance.now() / 1000 / SLICE_SWEEP_SECONDS);
         if (turn !== null) {
           const pose = flagshipPose(turn * (ORBIT_FLAGSHIP_V1.warmupFrames + ORBIT_FLAGSHIP_V1.forcedFrames), orbit);
           const camera = renderer.getActiveCamera();
@@ -630,6 +757,23 @@ async function main(): Promise<void> {
     publish();
   };
   playHandler = (value: boolean) => { playing = value; syncAnimation(); };
+  isoHandler = (value: string) => {
+    isoMode = value as IsoMode;
+    showIso(shown);
+    if (isoMode === 'precomputed') ui.setReadout('iso precompute ms', Math.round(isoPrecomputeMs));
+    ui.setReadout('isosurface', isoMode === 'off' ? 'off' : `${isoMode}, ${ISO_LEVEL_PA} Pa (${isoTriangles} triangles)`);
+    renderWindow.render();
+    publish();
+  };
+  sliceHandler = (value: string) => {
+    sliceMode = value as SliceMode;
+    sliceActor.setVisibility(sliceMode !== 'off');
+    placeSlice(0);
+    ui.setReadout('slice', sliceMode);
+    renderWindow.render();
+    publish();
+  };
+  volumeHandler = (on: boolean) => { volumeOn = on; showFrame(shown); renderWindow.render(); publish(); };
   streamlineHandler = (value: string) => {
     if (!velocity && value !== 'off') { ui.setReadout('streamlines', 'no velocity in this series'); return; }
     streamMode = value as StreamlineMode;
@@ -653,6 +797,9 @@ async function main(): Promise<void> {
   (window as unknown as {__bench: Record<string, unknown>}).__bench.setMode = (m: SwapMode) => modeHandler(m);
   (window as unknown as {__bench: Record<string, unknown>}).__bench.setPlaying = (p: boolean) => playHandler(p);
   (window as unknown as {__bench: Record<string, unknown>}).__bench.setStreamlines = (m: StreamlineMode) => streamlineHandler(m);
+  (window as unknown as {__bench: Record<string, unknown>}).__bench.setIso = (m: IsoMode) => isoHandler(m);
+  (window as unknown as {__bench: Record<string, unknown>}).__bench.setSlice = (m: SliceMode) => sliceHandler(m);
+  (window as unknown as {__bench: Record<string, unknown>}).__bench.setVolume = (on: boolean) => volumeHandler(on);
   (window as unknown as {__bench: Record<string, unknown>}).__bench.setVolumeScale =
     (v: VolumeScale) => scaleHandler(VOLUME_SCALE_LABELS[v]);
 
