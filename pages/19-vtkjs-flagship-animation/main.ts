@@ -118,7 +118,7 @@ const ui = mountChrome({
     'Streamlines come from the field\'s velocity (every 2nd vertex, 65x65x19), 100 seeds at a quarter of the box '
     + 'height, traced by vtk.js\'s own vtkImageStreamline. Precomputed traces all 25 frames at load (one filter per '
     + 'frame: vtk.js reuses a filter\'s output object) and swaps the lines; live traces again on every data change.',
-    'Volume resolution (default auto: half the window\'s CSS resolution, so 1/4 of the canvas on Retina) uses vtk.js\'s imageSampleDistance, which vtk.js 36 applies ONLY while its '
+    'Volume resolution (default auto: half the window\'s CSS resolution, so 1/4 of the canvas on Retina) uses vtk.js\'s imageSampleDistance, which vtk.js (36 and 37) applies ONLY while its '
     + 'interactor is animating. So while playing, the page keeps vtk.js\'s own animation loop running and lets it '
     + 'draw every frame; paused and still, vtk.js draws full resolution. Auto-adjust is off: by default vtk.js '
     + 'changes the volume resolution about once a second while you drag, then snaps back, the "jumps".',
@@ -321,7 +321,7 @@ async function main(): Promise<void> {
   };
 
   // --- volume resolution ------------------------------------------------------
-  // vtk.js 36 draws the volume on a smaller viewport only while the interactor
+  // vtk.js 36 and 37 draw the volume on a smaller viewport only while the interactor
   // is animating (OpenGL VolumeMapper renderPieceStart: isAnimating() and a
   // scale over 1.5), at 1/sqrt(scale) per axis. The scale starts at
   // initialInteractionScale and, with auto-adjust off, is reset to
@@ -432,12 +432,13 @@ async function main(): Promise<void> {
   const sliceActor = vtkImageSlice.newInstance();
   sliceActor.setMapper(sliceMapper);
   sliceActor.getProperty().setRGBTransferFunction(0, ctf);
-  // An explicit, fully opaque opacity function. NOT optional in vtk.js 36.12.1:
+  // An explicit, fully opaque opacity function. NOT optional in vtk.js 36.12.1 or 37.4.0:
   // OpenGL ImageResliceMapper.buildBufferObjects caches the opacity texture
   // keyed by this function; with none set, every rebuild (every data swap or
   // image change) creates a new opacity texture, skips the cache write for lack
   // of a key, and never frees the previous one. MEASURED without it: +1 live
-  // texture per swap, 8 -> 280 textures in one benchmark run.
+  // texture per swap, 8 -> 280 textures in one benchmark run on 36.12.1, and
+  // +210 over a 210-frame run on 37.4.0 (with it: +0).
   const sliceOpacity = vtkPiecewiseFunction.newInstance();
   sliceOpacity.addPoint(lo, 1);
   sliceOpacity.addPoint(hi, 1);
@@ -455,7 +456,7 @@ async function main(): Promise<void> {
 
   let mode: SwapMode = 'stream';
   // Frame 0 is already in the stream texture once the first render has run.
-  // updatedExtents must not be set before that: vtk.js 36.12.1 then looks up a
+  // updatedExtents must not be set before that: vtk.js (36.12.1, 37.4.0) looks up a
   // texture that does not exist yet and throws.
   let shown = 0;
   let shownLines = -1;

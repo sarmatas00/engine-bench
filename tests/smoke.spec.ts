@@ -214,26 +214,13 @@ function scientificPageChecks(renderer: 'vtkjs' | 'threejs') {
     expect((await readScientific(page)).benchmark, 'runBenchmark must publish into the probe').toMatchObject(
       {cameraPath: 'orbit-v1', forcedFrames: 180});
     // The resource counts are live GL object counts on both pages, so this is a
-    // real gate rather than a comparison of two constants. On page 13 what it
-    // finds is a vtk.js 36.12.1 defect, bounded here rather than hidden:
-    // vtkOpenGLRenderWindow leaks up to one texture and one framebuffer per
-    // drawing-buffer resize and never deletes them, and a benchmark run resizes
-    // twice (pin the surface, restore it). Page 14 is measured against the same
-    // bound so Task 7 can say whether Three.js does the same — deliberately not
-    // pinned to an exact delta, which would encode vtk.js's defect as the
-    // contract. The bound is what matters: growth must scale with resizes, not
-    // with the 210 forced frames. A per-frame leak would land here two orders of
-    // magnitude out.
-    const RESIZES_PER_RUN = 2;
-    // The bound is per RENDERER, set by what that renderer was measured to do,
-    // not one bound for both. vtk.js leaks up to one texture and one
-    // framebuffer per drawing-buffer resize and a run resizes twice, so its
-    // bound is 2. Three.js was measured to leak nothing at all, so its bound
-    // is 0 — leaving it at 2 would encode vtk.js's defect as the contract for
-    // the page whose headline finding is that it has no such defect, and a
-    // future Three.js regression of exactly one leaked object per resize would
-    // land at 2 and pass.
-    const MAX_GROWTH = renderer === 'vtkjs' ? RESIZES_PER_RUN : 0;
+    // real gate rather than a comparison of two constants. A benchmark run
+    // resizes the drawing buffer twice (pin the surface, restore it). vtk.js
+    // 36.12.1 leaked one texture, one framebuffer and one renderbuffer per
+    // resize, so this bound used to be 2 on page 13; 37.0.2 fixed that upstream
+    // and 37.4.0 was measured at 0, as Three.js always was. The bound is now 0
+    // on both, so a vtk.js upgrade that brings the resize leak back fails here.
+    const MAX_GROWTH = 0;
     const resourcesAfter = (await readScientific(page)).resources;
     // Read from glObjects, not resources: ScientificProbe.resources carries the
     // five keys src/lib declares, so renderbuffers -- the fourth GL type, and

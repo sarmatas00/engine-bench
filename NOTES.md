@@ -1764,7 +1764,8 @@ playback likewise varied run to run (38-74% late on 36.12.1, 33% on 37.4.0 at
 1/4 on Retina). Counts are the result here, times are not.
 
 **Recommendation:** upgrade vtk.js to 37.x before any Twin integration with
-resizable panels, in a dedicated PR. Until then, debounce resizes.
+resizable panels, in a dedicated PR. Until then, debounce resizes. **Done
+2026-10-04:** the bench now runs 37.4.0; see the next-but-one section.
 
 ## Isosurfaces and slicing on the animated field, pages 19/20 (2026-10-03)
 
@@ -1844,3 +1845,63 @@ run); with it, 0.
 **Also:** `src/vtkjs-untyped.d.ts` declares the two vtk.js modules that ship
 without types (`ImageMarchingCubes` and its case table), which retires page 11's
 `@ts-expect-error`.
+
+## vtk.js 37.4.0: upgraded, re-measured, no frame-time change (2026-10-04)
+
+`@kitware/vtk.js` 36.12.1 -> 37.4.0 (pages 11, 13, 15, 17, 19). The reason is
+the resize leak above, fixed upstream in 37.0.2.
+
+**Leaks, counted.** Resize soak on page 17, 600 resizes, pixel ratio 1:
+0 textures, 0 framebuffers, 0 renderbuffers, 0 buffers leaked (36.12.1: 600 of
+each, ~2.1 GB). Raw: `.cache/sessions/2026-10-04-vtkjs37-resize-soak-metal.jsonl`.
+The two Playwright tripwires written to fail when vtk.js fixed this now assert
+the fixed behaviour: `resource behaviour over 100 control cycles` bounds GL
+growth at 0 on BOTH renderers (and asserts the resizes happened, so a 0 is
+evidence), and the smoke benchmark bound on page 13 drops from 2 to 0.
+Context-loss teardown: vtk.js now frees its buffers (9 -> 1, was 9 -> 9), and
+its textures, framebuffers and renderbuffers too (8/1/1 -> 0/0/0). Three.js
+keeps 4-6 textures there, so on teardown vtk.js has gone from worst to best.
+
+**The page-19 workarounds are all still needed on 37.4.0.** Source diff of the
+two published tarballs: `Rendering/OpenGL/ImageResliceMapper.js`,
+`Rendering/OpenGL/Texture.js`, `Filters/General/ImageStreamline.js` and
+`ImageMarchingCubes.js` are byte-identical; `Rendering/OpenGL/VolumeMapper.js`
+only gains `releaseGraphicsResources`.
+- Slice opacity texture: **counted**. Without the explicit opacity function,
+  37.4.0 leaks +210 textures over a 210-frame stream run (one per swap); with
+  it, +0. The upstream issue draft still applies.
+- `setUpdatedExtents` before the first render: the branch still reads
+  `tex.oglObject` with no texture yet (source).
+- `imageSampleDistance` only while animating: the small-viewport path is still
+  gated on `rwi.isAnimating()` (source).
+- One `ImageStreamline` / `ImageMarchingCubes` per precomputed frame: both
+  filters still reuse their output object (source); the ports' point-for-point
+  unit tests pass unchanged against 37.4.0.
+
+**Frame times: no measurable change.** A/B, not absolute: 36.12.1 (a worktree
+of main) and 37.4.0 served side by side, every case run on both in the same
+round, first side alternated, 6 rounds, 180 measured frames each, Apple M4,
+ANGLE Metal, 1280x800 viewport. Machine under outside load (load average
+3.6-4.7), which is why the absolute values sit above the published tables and
+why those tables are NOT replaced. Raw:
+`.cache/sessions/2026-10-04-vtkjs37-ab-metal.jsonl`.
+
+~~~
+                       cpu p50 (ms)                  gpu p50 (ms)
+case               36.12.1      37.4.0   paired   36.12.1      37.4.0   paired
+13 scientific      4.5- 5.8    4.4- 5.3   -0.15    3.92-5.30   3.96-5.40  +0.04
+15 geometry        3.7- 4.5    3.9- 4.5   +0.20    2.35-2.74   2.46-2.96  +0.16
+17 volume          9.9-11.3   10.2-11.6   +0.05    8.11-8.73   8.35-9.17  +0.16
+19 static         13.5-15.5   13.6-15.0   +0.05   12.02-13.27 11.96-12.82 -0.09
+19 stream         16.1-18.8   16.2-18.6   +0.15   12.07-14.50 12.09-13.64 +0.04
+19 preloaded      14.8-18.5   15.1-18.0   -0.05   12.45-14.30 12.41-14.52 +0.08
+19 live lines     82.9-87.8   82.1-84.6   -1.70   12.31-13.42 12.19-12.61 -0.17
+19 live iso       35.8-36.5   36.3-37.9   +0.40   11.69-12.30 12.04-12.30 +0.16
+19 slice          17.7-18.3   17.6-18.4   -0.05   12.45-12.87 12.57-12.83 +0.04
+~~~
+
+"paired" is the median of (37.4.0 - 36.12.1) within a round. Every range
+overlaps; every paired median is under 0.5 ms except live streamlines (-1.7 ms
+on an 83 ms frame, 2%, still inside the 36.12.1 range). cpu p95 overlaps in
+every case too. **The published vtk.js numbers stand for 37.4.0**, and every
+vtk.js-vs-Three.js conclusion above is unchanged by the upgrade.

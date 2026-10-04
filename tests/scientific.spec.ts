@@ -677,7 +677,7 @@ test.describe('cross-renderer', () => {
     });
   });
 
-  test('resource behaviour over 100 control cycles differs by renderer, as measured', async ({browser}) => {
+  test('resource behaviour over 100 control cycles: neither renderer leaks, as measured', async ({browser}) => {
     test.setTimeout(600_000);
     await withBothPages(browser, async pages => {
       const report: Record<string, any> = {};
@@ -731,25 +731,19 @@ test.describe('cross-renderer', () => {
         // renderedZ === requestedZ against the page's own lattice.
         expect(report[r].parity.sliceRequestedZ, `${r}: the slice control did not store the requested height`)
           .toBeCloseTo(4 + (last * 7) % 72, 6);
-        // The bound is PER RENDERER, set by what that renderer was measured to
-        // do. vtk.js 36.12.1 leaks one texture, one framebuffer AND one
-        // renderbuffer per drawing-buffer resize and never deletes them;
-        // Three.js 0.185.1 leaks none. THAT DIFFERENCE IS A RESULT, not a bug
-        // to normalise away, so it is encoded as two different bounds rather
-        // than one loose one -- a single bound of `resizes` would let a future
-        // Three.js regression of exactly one object per resize pass.
-        const leaky = r === 'vtkjs' ? resizes : 0;
-        // FAILS IF: vtk.js's leak stops tracking resizes (it would have to
-        // become per-frame or per-control to exceed this), or Three.js starts
-        // leaking at all. Read from glObjects, not from probe.resources: the
-        // five keys src/lib declares leave out renderbuffers, the type vtk.js
-        // was measured to leak alongside the other two.
+        // The bound is 0 on BOTH renderers. vtk.js 36.12.1 leaked one texture,
+        // one framebuffer AND one renderbuffer per drawing-buffer resize (a
+        // Framebuffer bug, NOTES.md "Resize leak"); 37.0.2 fixed it upstream and
+        // 37.4.0 was measured at 0, as Three.js 0.185.1 always was.
+        // FAILS IF: either renderer leaks GL objects across control cycles or
+        // resizes -- in particular if a vtk.js upgrade brings the resize leak
+        // back. Read from glObjects, not from probe.resources: the five keys
+        // src/lib declares leave out renderbuffers, the type vtk.js 36.12.1 was
+        // measured to leak alongside the other two.
         for (const key of ['textures', 'renderTargets', 'renderbuffers'] as const) {
           const delta = after[key] - before[key];
           expect(delta, `${r}: ${key} grew by ${delta} over ${CYCLE_BLOCKS * CYCLES_PER_BLOCK} control cycles `
-            + `and ${resizes} resizes`).toBeGreaterThanOrEqual(0);
-          expect(delta, `${r}: ${key} grew by ${delta} over ${resizes} resizes, past the ${leaky} this renderer `
-            + 'was measured to grow by').toBeLessThanOrEqual(leaky);
+            + `and ${resizes} resizes`).toBe(0);
         }
         // FAILS IF: anything the PAGE owns grows. Neither renderer has an
         // excuse here, so the bound is 0 on both.
@@ -758,16 +752,12 @@ test.describe('cross-renderer', () => {
         }
       }
 
-      // FAILS IF: vtk.js stops leaking per resize. Asserted as a POSITIVE
-      // result, not merely bounded: the spike's second headline finding is
-      // that these two renderers differ here, and a gate that only bounds the
-      // leak would go green if the difference quietly vanished -- leaving
-      // Task 8 citing a difference that is no longer there.
-      const vtkGrowth = report.vtkjs.after.textures - report.vtkjs.before.textures;
-      expect(vtkGrowth, `vtk.js grew ${vtkGrowth} textures over ${report.vtkjs.resizes} resizes; the measured `
-        + 'behaviour is one per resize. If this is now 0, vtk.js has been fixed and NOTES.md is out of date.')
-        .toBe(report.vtkjs.resizes);
-      expect(report.threejs.after.textures - report.threejs.before.textures).toBe(0);
+      // FAILS IF: the drawing buffer never actually resized. A 0 bound is only
+      // evidence if resizes happened; vtk.js 36.12.1's leak was one object per
+      // resize, so with none the check above would pass on the leaky version.
+      for (const r of RENDERERS) {
+        expect(report[r].resizes, `${r}: no drawing-buffer resize happened`).toBe(CYCLE_BLOCKS);
+      }
 
       // Chromium exposes performance.memory; firefox does not. Recorded when
       // present, never a reason to fail a browser.
@@ -900,15 +890,15 @@ test.describe('cross-renderer', () => {
     // FAILS IF: either library changes what it tears down.
     expect(after.vtkjs.probe.canvasCount, 'vtk.js used to remove its canvas on teardown').toBe(0);
     expect(after.threejs.probe.canvasCount, 'Three.js used to leave its canvas in the DOM').toBe(1);
-    // FAILS IF: Three.js stops releasing its GL objects on dispose(). The
-    // second measured teardown difference: renderer.dispose() deletes the
-    // buffers it owns, vtk.js's teardown leaves its own allocated. Residual
-    // counts after a lost context are bookkeeping, not live leaks, which is
-    // why this is asserted as a DIFFERENCE and not as a leak on either side.
-    expect(after.threejs.gl.buffers, 'Three.js used to delete every buffer on dispose()')
-      .toBeLessThan(after.threejs.before.buffers);
-    expect(after.vtkjs.gl.buffers, 'vtk.js used to leave its buffers allocated after teardown')
-      .toBe(after.vtkjs.before.buffers);
+    // FAILS IF: either library stops releasing its buffers on teardown.
+    // Three.js's renderer.dispose() always deleted the buffers it owns;
+    // vtk.js 36.12.1's teardown left its own allocated (9 -> 9), 37.4.0 frees
+    // them (9 -> 1). Residual counts after a lost context are bookkeeping, not
+    // live leaks, which is why this is a "fewer than before" bound on both.
+    for (const r of RENDERERS) {
+      expect(after[r].gl.buffers, `${r} used to release buffers on teardown`)
+        .toBeLessThan(after[r].before.buffers);
+    }
     console.log('context-loss teardown, GL objects before -> after: '
       + RENDERERS.map(r => `${r} ${JSON.stringify(after[r].before)} -> ${JSON.stringify(after[r].gl)} `
         + `(via ${after[r].route}, benchmark returned ${JSON.stringify(after[r].run)})`).join('; '));

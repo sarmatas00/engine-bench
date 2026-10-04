@@ -82,7 +82,7 @@ Stage 2 is optional. Without it `dataset.json` has no `stages.stage2`, the six f
 
 ## Scientific visualization: vtk.js against Three.js
 
-Pages **13** (vtk.js 36.12.1) and **14** (Three.js 0.185.1) draw the same scene — the real
+Pages **13** (vtk.js 37.4.0) and **14** (Three.js 0.185.1) draw the same scene — the real
 Gothenburg terrain and buildings, a **synthetic** smoke field as a volume, a slice plane and
 dtcc-core's streamlines, with the volume occluded by the city. Same artifacts, same bundle,
 same shared probe and benchmark code, drawing surface pinned to 1280x720 for every timed frame.
@@ -109,7 +109,7 @@ different hardware from the comparison, and nothing ranked it against the two me
 ## Pinned versions
 
 maplibre-gl 5.24.0 (not 6.x — see NOTES.md), deck.gl/luma.gl 9.4.0, three 0.185.1,
-cesium 1.145.0, @kitware/vtk.js 36.12.1, playcanvas 2.22.0.
+cesium 1.145.0, @kitware/vtk.js 37.4.0, playcanvas 2.22.0.
 
 ## Pages
 
