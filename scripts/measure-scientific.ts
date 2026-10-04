@@ -789,8 +789,8 @@ async function measureOne(
 
     // ---- the resize sweep: a RESULT, not a gate --------------------------
     // vtk.js 36.12.1 was measured to leak one texture, one framebuffer and one
-    // renderbuffer per drawing-buffer resize and Three.js 0.185.1 none. This
-    // reproduces that number; it never rejects a run.
+    // renderbuffer per drawing-buffer resize, 37.4.0 none, and Three.js 0.185.1
+    // none. This reproduces that number; it never rejects a run.
     //
     // RUN BEFORE THE CONTROL CYCLES, for a measured reason, AND THE REASON IS
     // NOT A RENDERER PROPERTY. Taken after the cycles, the FIRST resize takes

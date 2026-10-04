@@ -1056,8 +1056,9 @@ function chromeOptions(bundle?: ScientificBundle) {
       'Measured, and the answer Task 7 needs: Three.js 0.185.1 does NOT leak GL objects per drawing-buffer resize. '
       + 'Live counts hold at 37 buffers / 12 textures / 5 framebuffers / 2 renderbuffers from ready onward — flat '
       + 'across three benchmark runs, 100 control cycles and eight viewport resizes. vtk.js 36.12.1, instrumented '
-      + 'the same way in the same session, goes from 9/8/1 to 9/14/7 across three benchmark runs — one texture, one '
-      + 'framebuffer AND one renderbuffer per resize, never returned.',
+      + 'the same way in the same session, went from 9/8/1 to 9/14/7 across three benchmark runs — one texture, one '
+      + 'framebuffer AND one renderbuffer per resize, never returned. Fixed upstream in vtk.js 37.0.2; page 13 now '
+      + 'runs 37.4.0 and is flat too (2026-10-04).',
     ],
     controls,
   };
@@ -1874,7 +1875,7 @@ function build(ui: Ui, bundle: ScientificBundle, heatValues: Float32Array): void
         || resourcesBefore.renderbuffers !== resourcesAfter.renderbuffers) {
         ui.probe('Three.js 0.185.1 GL-object growth across one benchmark run: '
           + `${JSON.stringify(diffResources(resourcesBefore, resourcesAfter))}. Page 13 measures the same thing the `
-          + 'same way, where vtk.js 36.12.1 leaks up to one texture and one framebuffer per drawing-buffer resize.');
+          + 'same way; it is flat on vtk.js 37.4.0 (36.12.1 leaked one texture and one framebuffer per resize).');
       }
     }
   }
@@ -2194,7 +2195,7 @@ function build(ui: Ui, bundle: ScientificBundle, heatValues: Float32Array): void
           + 'offscreen target, a DepthTexture and a reconstructed view distance. What differs is VENDORED versus '
           + 'HAND-WRITTEN, which is a maintenance-burden fact and not an architectural one.',
           'gpuSampleFloat is non-null here and null on page 13: this page can run its own sampler GLSL against its '
-          + 'own uploaded texture and read the float back, and vtk.js 36.12.1 exposes no supported equivalent. The '
+          + 'own uploaded texture and read the float back, and vtk.js (36.12.1, 37.4.0) exposes no supported equivalent. The '
           + 'GPU evidence the suite compares on BOTH pages is the rendered pixel (parity.pixelAt).',
           'camera.projScaleX/projScaleY are each library\'s OWN projection matrix diagonal, and their absolute '
           + 'scale is NOT comparable between the pages: measured, vtk.js\'s getProjectionMatrix returns an '
@@ -2495,8 +2496,8 @@ function reportMeasurements(
     + 'DOES NOT LEAK PER DRAWING-BUFFER RESIZE. This page holds 37 buffers / 12 textures / 5 framebuffers / 2 '
     + 'renderbuffers from ready onward -- flat across three whole benchmark runs (two surface changes each), flat '
     + 'across 100 control cycles, and flat across eight viewport resizes. vtk.js 36.12.1, measured the same way at '
-    + 'the same time, goes 9/8/1 at ready to 9/14/7 after three benchmark runs, one texture and one framebuffer per '
-    + 'resize, monotonically, never returned.\n'
+    + 'the same time, went 9/8/1 at ready to 9/14/7 after three benchmark runs, one texture and one framebuffer per '
+    + 'resize, monotonically, never returned. vtk.js 37.4.0 (page 13 since 2026-10-04) is flat as well.\n'
     + 'A FOURTH OBJECT TYPE was added after review and it makes vtk.js\'s leak a third larger than first reported: '
     + 'renderbuffers leak per resize as well, so the shape is one texture + one framebuffer + one renderbuffer per '
     + 'resize rather than two objects. This page allocates exactly 2 renderbuffers in total, both belonging to the '

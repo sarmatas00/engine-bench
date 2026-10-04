@@ -1133,15 +1133,15 @@ function build(ui: Ui, bundle: ScientificBundle, heatValues: Float32Array): void
       recordRenderSurface('interactive');
       // After the restore setSize, not before it: the in-try publish() above
       // runs while the surface is still pinned to BENCHMARK_SURFACE, so it
-      // misses the restore's own resize leak and under-reports by one.
+      // misses the restore's resize (36.12.1 leaked on it) and under-reports by one.
       publish();
       const resourcesAfter = {...glCounts, listeners, observers};
       if (!resourcesEqual(resourcesBefore, resourcesAfter)) {
-        ui.probe(`vtk.js 36.12.1 GL-object growth across one benchmark run: `
-          + `${JSON.stringify(diffResources(resourcesBefore, resourcesAfter))}. Measured, monotonic, and NOT this `
-          + 'page\'s doing: every drawing-buffer resize leaks up to one texture and one framebuffer that vtk.js '
-          + 'never deletes. Six viewport resizes take the counts from 8/1 to 14/7; three benchmark runs (two resizes '
-          + 'each) take them to 20/13. Nothing this page allocates grows -- buffers, listeners and observers are flat.');
+        ui.probe(`vtk.js GL-object growth across one benchmark run: `
+          + `${JSON.stringify(diffResources(resourcesBefore, resourcesAfter))}. Not expected on vtk.js 37.4.0, which `
+          + 'was measured flat. vtk.js 36.12.1 leaked one texture, one framebuffer and one renderbuffer per '
+          + 'drawing-buffer resize (fixed upstream in 37.0.2; NOTES.md "Resize leak"), so growth here means that leak '
+          + 'is back or a new one has appeared.');
       }
     }
   }
@@ -1525,7 +1525,7 @@ function build(ui: Ui, bundle: ScientificBundle, heatValues: Float32Array): void
           + 'dists.y)), which is the same mechanism page 14 writes by hand. The difference between the two pages '
           + 'here is VENDORED versus HAND-WRITTEN, which is a maintenance-burden fact, not an architectural one. '
           + 'Assert the null as what it is: this page owns no depth target of its own.',
-          'gpuSampleFloat is null here and non-null on page 14: vtk.js 36.12.1 uploads its volume texture inside '
+          'gpuSampleFloat is null here and non-null on page 14: vtk.js (36.12.1 and 37.4.0) uploads its volume texture inside '
           + 'vtkOpenGLVolumeMapper and exposes no supported way to read a sampled float back. What this page can '
           + 'answer about its own GPU path is the rendered pixel (parity.pixelAt), which is what the suite uses on '
           + 'both pages.',
