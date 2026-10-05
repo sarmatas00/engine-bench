@@ -1,0 +1,919 @@
+diff --git a/apps/atlas/package.json b/apps/atlas/package.json
+index 17e700a..8e11d2c 100644
+--- a/apps/atlas/package.json
++++ b/apps/atlas/package.json
+@@ -15,6 +15,7 @@
+   "dependencies": {
+     "@base-ui/react": "^1.8.0",
+     "@hookform/resolvers": "^5.9.1",
++    "@kitware/vtk.js": "37.3.1",
+     "@repo/contracts": "workspace:*",
+     "@tanstack/react-query": "^5.102.8",
+     "@tanstack/react-query-devtools": "^5.102.8",
+@@ -36,6 +37,7 @@
+     "tailwindcss": "^4.3.3",
+     "terra-draw": "^1.35.0",
+     "terra-draw-maplibre-gl-adapter": "^1.4.1",
++    "three": "0.185.1",
+     "tw-animate-css": "^1.4.0",
+     "zod": "catalog:",
+     "zustand": "^5.0.15"
+@@ -48,6 +50,7 @@
+     "@types/node": "catalog:",
+     "@types/react": "^19.2.18",
+     "@types/react-dom": "^19.2.7",
++    "@types/three": "0.185.0",
+     "@vitejs/plugin-react": "^6.1.1",
+     "eslint": "catalog:",
+     "eslint-plugin-react-hooks": "^7.1.1",
+diff --git a/apps/atlas/src/routeTree.gen.ts b/apps/atlas/src/routeTree.gen.ts
+index e480278..a091b9d 100644
+--- a/apps/atlas/src/routeTree.gen.ts
++++ b/apps/atlas/src/routeTree.gen.ts
+@@ -15,6 +15,7 @@ import { Route as LoginRouteImport } from './routes/login'
+ import { Route as RegisterRouteImport } from './routes/register'
+ import { Route as AuthenticatedItemsRouteImport } from './routes/_authenticated/items'
+ import { Route as AuthenticatedProfileRouteImport } from './routes/_authenticated/profile'
++import { Route as AuthenticatedDev3dRouteImport } from './routes/_authenticated/dev/3d'
+ import { Route as AuthenticatedDevCountersRouteImport } from './routes/_authenticated/dev/counters'
+ import { Route as AuthenticatedDevPlaygroundRouteImport } from './routes/_authenticated/dev/playground'
+ 
+@@ -47,6 +48,11 @@ const AuthenticatedProfileRoute = AuthenticatedProfileRouteImport.update({
+   path: '/profile',
+   getParentRoute: () => AuthenticatedRoute,
+ } as any)
++const AuthenticatedDev3dRoute = AuthenticatedDev3dRouteImport.update({
++  id: '/dev/3d',
++  path: '/dev/3d',
++  getParentRoute: () => AuthenticatedRoute,
++} as any)
+ const AuthenticatedDevCountersRoute =
+   AuthenticatedDevCountersRouteImport.update({
+     id: '/dev/counters',
+@@ -66,6 +72,7 @@ export interface FileRoutesByFullPath {
+   '/register': typeof RegisterRoute
+   '/items': typeof AuthenticatedItemsRoute
+   '/profile': typeof AuthenticatedProfileRoute
++  '/dev/3d': typeof AuthenticatedDev3dRoute
+   '/dev/counters': typeof AuthenticatedDevCountersRoute
+   '/dev/playground': typeof AuthenticatedDevPlaygroundRoute
+ }
+@@ -75,6 +82,7 @@ export interface FileRoutesByTo {
+   '/register': typeof RegisterRoute
+   '/items': typeof AuthenticatedItemsRoute
+   '/profile': typeof AuthenticatedProfileRoute
++  '/dev/3d': typeof AuthenticatedDev3dRoute
+   '/dev/counters': typeof AuthenticatedDevCountersRoute
+   '/dev/playground': typeof AuthenticatedDevPlaygroundRoute
+ }
+@@ -86,6 +94,7 @@ export interface FileRoutesById {
+   '/register': typeof RegisterRoute
+   '/_authenticated/items': typeof AuthenticatedItemsRoute
+   '/_authenticated/profile': typeof AuthenticatedProfileRoute
++  '/_authenticated/dev/3d': typeof AuthenticatedDev3dRoute
+   '/_authenticated/dev/counters': typeof AuthenticatedDevCountersRoute
+   '/_authenticated/dev/playground': typeof AuthenticatedDevPlaygroundRoute
+ }
+@@ -97,6 +106,7 @@ export interface FileRouteTypes {
+     | '/register'
+     | '/items'
+     | '/profile'
++    | '/dev/3d'
+     | '/dev/counters'
+     | '/dev/playground'
+   fileRoutesByTo: FileRoutesByTo
+@@ -106,6 +116,7 @@ export interface FileRouteTypes {
+     | '/register'
+     | '/items'
+     | '/profile'
++    | '/dev/3d'
+     | '/dev/counters'
+     | '/dev/playground'
+   id:
+@@ -116,6 +127,7 @@ export interface FileRouteTypes {
+     | '/register'
+     | '/_authenticated/items'
+     | '/_authenticated/profile'
++    | '/_authenticated/dev/3d'
+     | '/_authenticated/dev/counters'
+     | '/_authenticated/dev/playground'
+   fileRoutesById: FileRoutesById
+@@ -171,6 +183,13 @@ declare module '@tanstack/react-router' {
+       preLoaderRoute: typeof AuthenticatedProfileRouteImport
+       parentRoute: typeof AuthenticatedRoute
+     }
++    '/_authenticated/dev/3d': {
++      id: '/_authenticated/dev/3d'
++      path: '/dev/3d'
++      fullPath: '/dev/3d'
++      preLoaderRoute: typeof AuthenticatedDev3dRouteImport
++      parentRoute: typeof AuthenticatedRoute
++    }
+     '/_authenticated/dev/counters': {
+       id: '/_authenticated/dev/counters'
+       path: '/dev/counters'
+@@ -191,6 +210,7 @@ declare module '@tanstack/react-router' {
+ interface AuthenticatedRouteChildren {
+   AuthenticatedItemsRoute: typeof AuthenticatedItemsRoute
+   AuthenticatedProfileRoute: typeof AuthenticatedProfileRoute
++  AuthenticatedDev3dRoute: typeof AuthenticatedDev3dRoute
+   AuthenticatedDevCountersRoute: typeof AuthenticatedDevCountersRoute
+   AuthenticatedDevPlaygroundRoute: typeof AuthenticatedDevPlaygroundRoute
+ }
+@@ -198,6 +218,7 @@ interface AuthenticatedRouteChildren {
+ const AuthenticatedRouteChildren: AuthenticatedRouteChildren = {
+   AuthenticatedItemsRoute: AuthenticatedItemsRoute,
+   AuthenticatedProfileRoute: AuthenticatedProfileRoute,
++  AuthenticatedDev3dRoute: AuthenticatedDev3dRoute,
+   AuthenticatedDevCountersRoute: AuthenticatedDevCountersRoute,
+   AuthenticatedDevPlaygroundRoute: AuthenticatedDevPlaygroundRoute,
+ }
+diff --git a/apps/atlas/src/features/spike-3d/map-frame.spec.ts b/apps/atlas/src/features/spike-3d/map-frame.spec.ts
+new file mode 100644
+index 0000000..fe624a0
+--- /dev/null
++++ b/apps/atlas/src/features/spike-3d/map-frame.spec.ts
+@@ -0,0 +1,45 @@
++import { MercatorCoordinate } from "maplibre-gl";
++import { describe, expect, it } from "vitest";
++import { sweref } from "@/lib/sweref";
++import { sceneToMercator } from "./map-frame";
++
++// The demo area's centre on the EPSG:3006 grid, which is where the spike's local metres start.
++const origin: [number, number] = [319683, 6398110.5];
++
++function apply(m: Float64Array, [x, y, z]: [number, number, number]) {
++  return [0, 1, 2].map((r) => m[r]! * x + m[4 + r]! * y + m[8 + r]! * z + m[12 + r]!);
++}
++
++/** Where MapLibre itself puts a local point: through proj4 to WGS84, then MercatorCoordinate. */
++function exact([x, y, z]: [number, number, number]) {
++  const [lng, lat] = sweref.inverse([origin[0] + x, origin[1] + y]) as [number, number];
++  const m = MercatorCoordinate.fromLngLat([lng, lat], z);
++  return [m.x, m.y, m.z];
++}
++
++describe("sceneToMercator", () => {
++  const matrix = sceneToMercator(origin);
++  // One mercator unit is the Earth's circumference at the equator; 5 cm of it is the tolerance.
++  const metresPerUnit = 40075016.686;
++
++  it.each<[string, [number, number, number]]>([
++    ["the origin", [0, 0, 0]],
++    ["the south-west corner", [-313, -320.5, 0]],
++    ["the north-east corner", [313, 320.5, 0]],
++    ["a rooftop 36 m up at the north-west corner", [-313, 320.5, 36]],
++  ])("puts %s where proj4 and MapLibre do, to 5 cm", (_, point) => {
++    const got = apply(matrix, point),
++      want = exact(point);
++    for (let axis = 0; axis < 3; axis++) {
++      expect(Math.abs(got[axis]! - want[axis]!) * metresPerUnit).toBeLessThan(0.05);
++    }
++  });
++
++  it("turns grid north away from mercator north, as SWEREF 99 TM does west of 15 E", () => {
++    const [x0, y0] = apply(matrix, [0, 0, 0]),
++      [x1, y1] = apply(matrix, [0, 100, 0]);
++    const degrees = (Math.atan2(x1! - x0!, -(y1! - y0!)) * 180) / Math.PI;
++    expect(degrees).toBeLessThan(-2);
++    expect(degrees).toBeGreaterThan(-3);
++  });
++});
+diff --git a/apps/atlas/src/features/spike-3d/map-frame.ts b/apps/atlas/src/features/spike-3d/map-frame.ts
+new file mode 100644
+index 0000000..4c8fef2
+--- /dev/null
++++ b/apps/atlas/src/features/spike-3d/map-frame.ts
+@@ -0,0 +1,25 @@
++import { MercatorCoordinate } from "maplibre-gl";
++import { sweref } from "@/lib/sweref";
++
++/**
++ * Column-major matrix from the spike's local metres (SWEREF 99 TM axes, origin at `origin`, z up) to MapLibre's
++ * mercator units. Affine, fitted at the origin: over the demo area the projection's curvature is under a millimetre.
++ */
++export function sceneToMercator(origin: [number, number]): Float64Array {
++  const at = (dx: number, dy: number) => {
++    const [lng, lat] = sweref.inverse([origin[0] + dx, origin[1] + dy]) as [number, number];
++    return MercatorCoordinate.fromLngLat([lng, lat]);
++  };
++  // trap: grid north here is ~2.5 degrees off mercator north, so x and y need a full 2x2 fit, not a scale and an offset.
++  const o = at(0, 0),
++    east = at(1, 0),
++    north = at(0, 1);
++  const up = o.meterInMercatorCoordinateUnits();
++  // prettier-ignore
++  return new Float64Array([
++    east.x - o.x, east.y - o.y, 0, 0,
++    north.x - o.x, north.y - o.y, 0, 0,
++    0, 0, up, 0,
++    o.x, o.y, 0, 1,
++  ]);
++}
+diff --git a/apps/atlas/src/features/spike-3d/scene-data.ts b/apps/atlas/src/features/spike-3d/scene-data.ts
+new file mode 100644
+index 0000000..77a8232
+--- /dev/null
++++ b/apps/atlas/src/features/spike-3d/scene-data.ts
+@@ -0,0 +1,124 @@
++// REVIEW: renderer spike, not product code. Everything under features/spike-3d/ and public/dev-3d/ is throwaway.
++import { queryOptions } from "@tanstack/react-query";
++import { ShapeUtils, Vector2 } from "three";
++
++/** One footprint ring in SWEREF 99 TM metres, its LoD1 height, from dtcc-core's `buildings` Dataset. */
++type BuildingsJson = {
++  crs: "EPSG:3006";
++  bounds: [number, number, number, number];
++  buildings: { ring: [number, number][]; height: number }[];
++};
++type FieldJson = {
++  crs: "EPSG:3006";
++  dims: [number, number, number];
++  order: "x-fastest";
++  origin: [number, number, number];
++  spacing: [number, number, number];
++  speed_range: [number, number];
++};
++
++/**
++ * The scene every variant draws, in local metres: x and y along SWEREF 99 TM's east and north axes, measured from the
++ * centre of the demo area, z up from the ground. Buildings sit on z = 0 because the map is flat.
++ */
++export type SpikeScene = {
++  /** The local origin in SWEREF 99 TM metres. */
++  origin: [number, number];
++  buildings: { positions: Float32Array; normals: Float32Array; count: number; triangles: number };
++  field: {
++    dims: [number, number, number];
++    origin: [number, number, number];
++    spacing: [number, number, number];
++    range: [number, number];
++    speed: Float32Array;
++  };
++};
++
++/** Static files copied from the bench's extraction; see public/dev-3d/field.json for their source. */
++export const spikeSceneQuery = queryOptions({
++  queryKey: ["spike-3d", "scene"],
++  staleTime: Infinity,
++  queryFn: async ({ signal }) => {
++    const get = (file: string) =>
++      fetch(`/dev-3d/${file}`, { signal }).then((response) => {
++        if (!response.ok) throw new Error(`/dev-3d/${file}: ${response.status}`);
++        return response;
++      });
++    const [buildings, field, speed] = await Promise.all([
++      get("buildings.json").then((r) => r.json() as Promise<BuildingsJson>),
++      get("field.json").then((r) => r.json() as Promise<FieldJson>),
++      get("speed.f32").then((r) => r.arrayBuffer()),
++    ]);
++    return buildScene(buildings, field, new Float32Array(speed));
++  },
++});
++
++export function buildScene(buildings: BuildingsJson, field: FieldJson, speed: Float32Array): SpikeScene {
++  const [minX, minY, maxX, maxY] = buildings.bounds;
++  const origin: [number, number] = [(minX + maxX) / 2, (minY + maxY) / 2];
++  const [nx, ny, nz] = field.dims;
++  if (speed.length !== nx * ny * nz)
++    throw new Error(`speed.f32 holds ${speed.length} values, field.json says ${nx * ny * nz}`);
++  return {
++    origin,
++    buildings: extrude(buildings.buildings, origin),
++    field: {
++      dims: field.dims,
++      origin: [field.origin[0] - origin[0], field.origin[1] - origin[1], field.origin[2]],
++      spacing: field.spacing,
++      range: field.speed_range,
++      speed,
++    },
++  };
++}
++
++/** Flat-shaded prisms: a roof and one quad per wall, non-indexed so every face keeps its own normal. */
++function extrude(buildings: BuildingsJson["buildings"], [ox, oy]: [number, number]) {
++  const positions: number[] = [];
++  const normals: number[] = [];
++  const push = (x: number, y: number, z: number, n: [number, number, number]) => {
++    positions.push(x, y, z);
++    normals.push(...n);
++  };
++  for (const { ring, height } of buildings) {
++    let points = ring.map(([x, y]) => new Vector2(x - ox, y - oy));
++    const first = points[0],
++      last = points.at(-1);
++    if (first && last && first.equals(last)) points = points.slice(0, -1);
++    if (points.length < 3) continue;
++    if (ShapeUtils.isClockWise(points)) points.reverse();
++    for (const triangle of ShapeUtils.triangulateShape(points, [])) {
++      for (const i of triangle) push(points[i]!.x, points[i]!.y, height, [0, 0, 1]);
++    }
++    for (let i = 0; i < points.length; i++) {
++      const p = points[i]!,
++        q = points[(i + 1) % points.length]!;
++      const length = Math.hypot(q.x - p.x, q.y - p.y) || 1;
++      const n: [number, number, number] = [(q.y - p.y) / length, -(q.x - p.x) / length, 0];
++      push(p.x, p.y, 0, n);
++      push(q.x, q.y, 0, n);
++      push(q.x, q.y, height, n);
++      push(p.x, p.y, 0, n);
++      push(q.x, q.y, height, n);
++      push(p.x, p.y, height, n);
++    }
++  }
++  const count = positions.length / 3;
++  return { positions: new Float32Array(positions), normals: new Float32Array(normals), count, triangles: count / 3 };
++}
++
++/** The camera both panel renderers start from: south-east of the centre, 35 degrees up, looking at the middle of the field. */
++export const PANEL_START = {
++  position: [520, -620, 520] as [number, number, number],
++  target: [0, 0, 20] as [number, number, number],
++  fovDeg: 36.87,
++};
++
++/** The transfer function both renderers use: opacity per 2 m step, ramping 0 -> 0.5s -> s over the speed range. */
++export const VOLUME_STEP_M = 2;
++export const OPACITY_PER_STEP = 0.02;
++export const opacityNodes = ([lo, hi]: [number, number]): [number, number][] => [
++  [lo, 0],
++  [(lo + hi) / 2, OPACITY_PER_STEP / 2],
++  [hi, OPACITY_PER_STEP],
++];
+diff --git a/apps/atlas/src/features/spike-3d/spike-3d-page.tsx b/apps/atlas/src/features/spike-3d/spike-3d-page.tsx
+new file mode 100644
+index 0000000..291758e
+--- /dev/null
++++ b/apps/atlas/src/features/spike-3d/spike-3d-page.tsx
+@@ -0,0 +1,86 @@
++import { useQuery } from "@tanstack/react-query";
++import { type Map as MapLibreMap, setWorkerUrl } from "maplibre-gl";
++import "maplibre-gl/dist/maplibre-gl.css";
++import workerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url";
++import { useState } from "react";
++import { Map, NavigationControl } from "react-map-gl/maplibre";
++import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
++import { basemaps } from "@/features/map/basemaps";
++import { demoArea } from "@/features/map/demo-area";
++import { spikeSceneQuery, type SpikeScene } from "./scene-data";
++import { mountThreePanel, threeMapLayer } from "./three-hosts";
++import { mountVtkOverlay, mountVtkPanel } from "./vtk-hosts";
++
++// trap: as in atlas-map.tsx, MapLibre can't find its worker after Vite bundles it; without this the map never loads.
++setWorkerUrl(workerUrl);
++
++export const variants = ["map-only", "three-map", "vtk-map", "three-panel", "vtk-panel"] as const;
++export type Variant = (typeof variants)[number];
++
++/** Map frames per second, read by the measurement script as `window.__spike3d`. */
++function trackFrames(map: MapLibreMap) {
++  const stamps: number[] = [];
++  map.on("render", () => stamps.push(performance.now()));
++  (window as unknown as { __spike3d: unknown }).__spike3d = { map, stamps };
++}
++
++export function Spike3dPage({ variant, basemap }: { variant: Variant; basemap: "bright" | "liberty" }) {
++  const scene = useQuery(spikeSceneQuery);
++  const [map, setMap] = useState<MapLibreMap | null>(null);
++  if (scene.error) return <p className="p-4 text-destructive">{scene.error.message}</p>;
++  if (!scene.data) return <p className="p-4 text-muted-foreground">Loading the scene…</p>;
++  const data = scene.data;
++  const onMap = variant === "three-map" || variant === "vtk-map";
++
++  const mapView = (
++    <div className="relative h-full">
++      <Map
++        initialViewState={{
++          bounds: demoArea,
++          fitBoundsOptions: { padding: 40 },
++          pitch: onMap ? 55 : 0,
++          bearing: onMap ? -20 : 0,
++        }}
++        maxPitch={80}
++        mapStyle={basemaps.find((b) => b.id === basemap)?.style}
++        onLoad={({ target }) => {
++          trackFrames(target);
++          // Below the first label layer, so street and place names stay on top of the 3D scene.
++          const labels = target.getStyle().layers.find((layer) => layer.type === "symbol")?.id;
++          if (variant === "three-map") target.addLayer(threeMapLayer(data), labels);
++          setMap(target);
++        }}
++      >
++        <NavigationControl position="top-right" visualizePitch />
++      </Map>
++      {variant === "vtk-map" && map && (
++        <Mount className="pointer-events-none absolute inset-0" mount={(host) => mountVtkOverlay(host, map, data)} />
++      )}
++    </div>
++  );
++  if (onMap || variant === "map-only") return mapView;
++
++  return (
++    <ResizablePanelGroup orientation="horizontal">
++      <ResizablePanel defaultSize="50">{mapView}</ResizablePanel>
++      <ResizableHandle withHandle />
++      <ResizablePanel defaultSize="50">
++        <PanelView variant={variant} data={data} />
++      </ResizablePanel>
++    </ResizablePanelGroup>
++  );
++}
++
++function PanelView({ variant, data }: { variant: "three-panel" | "vtk-panel"; data: SpikeScene }) {
++  return (
++    <Mount
++      className="h-full"
++      mount={(host) => (variant === "three-panel" ? mountThreePanel(host, data) : mountVtkPanel(host, data))}
++    />
++  );
++}
++
++/** Hands a DOM node to an imperative renderer for as long as React keeps it, through a React 19 ref cleanup. */
++function Mount({ className, mount }: { className: string; mount: (host: HTMLDivElement) => () => void }) {
++  return <div className={className} ref={(host) => (host ? mount(host) : undefined)} />;
++}
+diff --git a/apps/atlas/src/features/spike-3d/three-hosts.ts b/apps/atlas/src/features/spike-3d/three-hosts.ts
+new file mode 100644
+index 0000000..e9b427e
+--- /dev/null
++++ b/apps/atlas/src/features/spike-3d/three-hosts.ts
+@@ -0,0 +1,90 @@
++import type { CustomLayerInterface } from "maplibre-gl";
++import * as THREE from "three";
++import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
++import { sceneToMercator } from "./map-frame";
++import { PANEL_START, type SpikeScene } from "./scene-data";
++import { ThreeSpikeScene } from "./three-scene";
++
++/** Three.js in its own canvas inside `host`, orbiting. Returns the teardown. */
++export function mountThreePanel(host: HTMLElement, data: SpikeScene): () => void {
++  const renderer = new THREE.WebGLRenderer({ antialias: true });
++  renderer.setPixelRatio(window.devicePixelRatio);
++  renderer.setClearColor(0xf4f5f7);
++  renderer.autoClear = false;
++  host.append(renderer.domElement);
++  const scene = new ThreeSpikeScene(data);
++  const camera = new THREE.PerspectiveCamera(PANEL_START.fovDeg, 1, 5, 5000);
++  camera.up.set(0, 0, 1);
++  camera.position.set(...PANEL_START.position);
++  const controls = new OrbitControls(camera, renderer.domElement);
++  controls.target.set(...PANEL_START.target);
++  controls.update();
++
++  const sceneToClip = new THREE.Matrix4();
++  const size = new THREE.Vector2();
++  renderer.setAnimationLoop(() => {
++    renderer.getDrawingBufferSize(size);
++    camera.updateMatrixWorld();
++    sceneToClip.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
++    renderer.clear();
++    scene.draw(renderer, sceneToClip, size.x, size.y);
++  });
++  const resize = new ResizeObserver(([entry]) => {
++    if (!entry) return;
++    const { width, height } = entry.contentRect;
++    renderer.setSize(width, height);
++    camera.aspect = width / Math.max(height, 1);
++    camera.updateProjectionMatrix();
++  });
++  resize.observe(host);
++
++  return () => {
++    resize.disconnect();
++    renderer.setAnimationLoop(null);
++    controls.dispose();
++    scene.dispose();
++    renderer.dispose();
++    // trap: dispose() frees Three.js's objects but keeps the WebGL context alive until GC; browsers cap live contexts.
++    renderer.forceContextLoss();
++    renderer.domElement.remove();
++  };
++}
++
++/** Three.js as a MapLibre custom layer, sharing the map's WebGL context and depth buffer. */
++export function threeMapLayer(data: SpikeScene): CustomLayerInterface {
++  let renderer: THREE.WebGLRenderer | null = null;
++  let scene: ThreeSpikeScene | null = null;
++  const toMercator = new THREE.Matrix4().fromArray(sceneToMercator(data.origin));
++  const sceneToClip = new THREE.Matrix4();
++
++  const draw = (gl: WebGL2RenderingContext, mainMatrix: ArrayLike<number>) => {
++    if (!renderer || !scene) return;
++    sceneToClip.fromArray(Array.from(mainMatrix)).multiply(toMercator);
++    // trap: MapLibre and Three.js each cache GL state; reset Three.js's view of it before and after every draw.
++    renderer.resetState();
++    renderer.setSize(gl.drawingBufferWidth, gl.drawingBufferHeight, false);
++    scene.draw(renderer, sceneToClip, gl.drawingBufferWidth, gl.drawingBufferHeight);
++    renderer.resetState();
++  };
++
++  return {
++    id: "spike-3d-three",
++    type: "custom",
++    renderingMode: "3d",
++    onAdd(added, gl) {
++      renderer = new THREE.WebGLRenderer({ canvas: added.getCanvas(), context: gl, antialias: true });
++      renderer.autoClear = false;
++      renderer.setPixelRatio(1);
++      scene = new ThreeSpikeScene(data);
++    },
++    render(gl, { defaultProjectionData }) {
++      draw(gl, defaultProjectionData.mainMatrix);
++    },
++    onRemove() {
++      scene?.dispose();
++      // trap: never dispose() a renderer built on MapLibre's context; that would lose the map's context too.
++      renderer?.resetState();
++      renderer = scene = null;
++    },
++  };
++}
+diff --git a/apps/atlas/src/features/spike-3d/three-scene.ts b/apps/atlas/src/features/spike-3d/three-scene.ts
+new file mode 100644
+index 0000000..da5c6e9
+--- /dev/null
++++ b/apps/atlas/src/features/spike-3d/three-scene.ts
+@@ -0,0 +1,167 @@
++import * as THREE from "three";
++import { opacityNodes, type SpikeScene, VOLUME_STEP_M } from "./scene-data";
++
++const MAX_SAMPLES = 600;
++
++// Adapted from engine-bench's threejs-volume.ts: the ray starts at uEye and stops at the buildings' depth, both given
++// as local metres through uClipToScene, so the same shader serves a Three.js camera and MapLibre's matrix.
++const VOLUME_VERTEX = /* glsl */ `
++varying vec3 vScene;
++void main() {
++  vScene = position;
++  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
++}`;
++
++const VOLUME_FRAGMENT = /* glsl */ `
++precision highp float;
++precision highp sampler3D;
++uniform sampler3D uData;
++uniform sampler2D uDepth;
++uniform mat4 uClipToScene;
++uniform vec3 uEye;
++uniform vec3 uOrigin, uSpacing, uSize, uBoxMin, uBoxMax, uAlpha;
++uniform vec2 uClim, uResolution;
++uniform float uStep;
++varying vec3 vScene;
++vec3 colormap(float u) {
++  vec3 s0 = vec3(33., 102., 172.) / 255., s1 = vec3(67., 200., 220.) / 255., s2 = vec3(120., 200., 80.) / 255.;
++  vec3 s3 = vec3(250., 220., 50.) / 255., s4 = vec3(200., 30., 30.) / 255.;
++  float x = clamp(u, 0., 1.) * 4.;
++  if (x < 1.) return mix(s0, s1, x);
++  if (x < 2.) return mix(s1, s2, x - 1.);
++  if (x < 3.) return mix(s2, s3, x - 2.);
++  return mix(s3, s4, x - 3.);
++}
++void main() {
++  vec3 dir = normalize(vScene - uEye);
++  vec3 ta = (uBoxMin - uEye) / dir, tb = (uBoxMax - uEye) / dir;
++  vec3 tn = min(ta, tb), tf = max(ta, tb);
++  float tNear = max(max(max(tn.x, tn.y), tn.z), 0.0);
++  float tFar = min(min(tf.x, tf.y), tf.z);
++  vec2 uv = gl_FragCoord.xy / uResolution;
++  float depth = texture(uDepth, uv).x;
++  if (depth < 1.0) {
++    vec4 hit = uClipToScene * vec4(uv * 2.0 - 1.0, depth * 2.0 - 1.0, 1.0);
++    tFar = min(tFar, distance(uEye, hit.xyz / hit.w));
++  }
++  if (tFar <= tNear) discard;
++  vec4 acc = vec4(0.0);
++  float t = tNear + 0.5 * uStep;
++  for (int i = 0; i < ${MAX_SAMPLES}; i++) {
++    if (t >= tFar || acc.a >= 0.99) break;
++    vec3 index = (uEye + dir * t - uOrigin) / uSpacing;
++    float f = clamp((texture(uData, (index + 0.5) / uSize).r - uClim.x) / (uClim.y - uClim.x), 0.0, 1.0);
++    float a = f < 0.5 ? mix(uAlpha.x, uAlpha.y, f / 0.5) : mix(uAlpha.y, uAlpha.z, (f - 0.5) / 0.5);
++    acc.rgb += (1.0 - acc.a) * a * colormap(f);
++    acc.a += (1.0 - acc.a) * a;
++    t += uStep;
++  }
++  if (acc.a < 0.004) discard;
++  gl_FragColor = acc;
++}`;
++
++/**
++ * The spike scene in Three.js, drawn from a clip-space matrix alone, so a Three.js camera (panel) and MapLibre's
++ * projection (custom layer) drive the identical draw. Buildings first into a depth target, then buildings and volume.
++ */
++export class ThreeSpikeScene {
++  readonly scene = new THREE.Scene();
++  private readonly camera = new THREE.Camera();
++  private readonly depthScene = new THREE.Scene();
++  private readonly depthTarget = new THREE.WebGLRenderTarget(1, 1, { depthBuffer: true });
++  private readonly volumeMaterial: THREE.ShaderMaterial;
++  private readonly disposables: { dispose(): void }[] = [];
++
++  constructor(data: SpikeScene) {
++    const geometry = new THREE.BufferGeometry();
++    geometry.setAttribute("position", new THREE.BufferAttribute(data.buildings.positions, 3));
++    geometry.setAttribute("normal", new THREE.BufferAttribute(data.buildings.normals, 3));
++    const buildingMaterial = new THREE.MeshLambertMaterial({ color: 0xb8c4cf });
++    this.scene.add(new THREE.Mesh(geometry, buildingMaterial));
++    this.depthScene.add(new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ colorWrite: false })));
++    this.scene.add(new THREE.AmbientLight(0xffffff, 1.6));
++    const sun = new THREE.DirectionalLight(0xffffff, 1.8);
++    sun.position.set(0.4, -0.6, 1);
++    this.scene.add(sun);
++
++    this.depthTarget.depthTexture = new THREE.DepthTexture(1, 1);
++    const { dims, origin, spacing, range, speed } = data.field;
++    const texture = new THREE.Data3DTexture(speed, ...dims);
++    texture.format = THREE.RedFormat;
++    texture.type = THREE.FloatType;
++    texture.minFilter = texture.magFilter = THREE.LinearFilter;
++    texture.needsUpdate = true;
++    const boxMin = new THREE.Vector3(...origin);
++    const boxMax = new THREE.Vector3(...dims.map((n, i) => origin[i]! + (n - 1) * spacing[i]!));
++    const [, mid, top] = opacityNodes(range);
++    this.volumeMaterial = new THREE.ShaderMaterial({
++      vertexShader: VOLUME_VERTEX,
++      fragmentShader: VOLUME_FRAGMENT,
++      side: THREE.BackSide,
++      transparent: true,
++      depthWrite: false,
++      depthTest: false,
++      blending: THREE.CustomBlending,
++      blendSrc: THREE.OneFactor,
++      blendDst: THREE.OneMinusSrcAlphaFactor,
++      uniforms: {
++        uData: { value: texture },
++        uDepth: { value: this.depthTarget.depthTexture },
++        uClipToScene: { value: new THREE.Matrix4() },
++        uEye: { value: new THREE.Vector3() },
++        uOrigin: { value: boxMin.clone() },
++        uSpacing: { value: new THREE.Vector3(...spacing) },
++        uSize: { value: new THREE.Vector3(...dims) },
++        uBoxMin: { value: boxMin },
++        uBoxMax: { value: boxMax },
++        uAlpha: { value: new THREE.Vector3(0, mid![1], top![1]) },
++        uClim: { value: new THREE.Vector2(...range) },
++        uResolution: { value: new THREE.Vector2() },
++        uStep: { value: VOLUME_STEP_M },
++      },
++    });
++    const box = new THREE.BoxGeometry(...boxMax.clone().sub(boxMin).toArray());
++    box.translate(...boxMin.clone().add(boxMax).multiplyScalar(0.5).toArray());
++    const volume = new THREE.Mesh(box, this.volumeMaterial);
++    volume.renderOrder = 1;
++    this.scene.add(volume);
++    this.disposables.push(
++      geometry,
++      buildingMaterial,
++      this.depthTarget,
++      this.depthTarget.depthTexture,
++      texture,
++      this.volumeMaterial,
++      box,
++    );
++  }
++
++  /** Draws into whatever framebuffer `renderer` targets, from local metres to clip space through `sceneToClip`. */
++  draw(
++    renderer: THREE.WebGLRenderer,
++    sceneToClip: THREE.Matrix4,
++    width: number,
++    height: number,
++    target: THREE.WebGLRenderTarget | null = null,
++  ) {
++    this.camera.projectionMatrix.copy(sceneToClip);
++    this.camera.projectionMatrixInverse.copy(sceneToClip).invert();
++    const uniforms = this.volumeMaterial.uniforms as Record<"uClipToScene" | "uEye" | "uResolution", THREE.IUniform>;
++    uniforms.uClipToScene.value.copy(this.camera.projectionMatrixInverse);
++    // The eye is where every ray through the frustum meets: clip (0, 0, 1, 0) taken back to the scene.
++    const eye = new THREE.Vector4(0, 0, 1, 0).applyMatrix4(this.camera.projectionMatrixInverse);
++    uniforms.uEye.value.set(eye.x / eye.w, eye.y / eye.w, eye.z / eye.w);
++    uniforms.uResolution.value.set(width, height);
++    if (this.depthTarget.width !== width || this.depthTarget.height !== height) this.depthTarget.setSize(width, height);
++
++    renderer.setRenderTarget(this.depthTarget);
++    renderer.clear(true, true, false);
++    renderer.render(this.depthScene, this.camera);
++    renderer.setRenderTarget(target);
++    renderer.render(this.scene, this.camera);
++  }
++
++  dispose() {
++    for (const d of this.disposables) d.dispose();
++  }
++}
+diff --git a/apps/atlas/src/features/spike-3d/vtk-hosts.ts b/apps/atlas/src/features/spike-3d/vtk-hosts.ts
+new file mode 100644
+index 0000000..1e27895
+--- /dev/null
++++ b/apps/atlas/src/features/spike-3d/vtk-hosts.ts
+@@ -0,0 +1,152 @@
++import "@kitware/vtk.js/Rendering/Profiles/Geometry";
++import "@kitware/vtk.js/Rendering/Profiles/Volume";
++import vtkDataArray from "@kitware/vtk.js/Common/Core/DataArray";
++import vtkImageData from "@kitware/vtk.js/Common/DataModel/ImageData";
++import vtkPiecewiseFunction from "@kitware/vtk.js/Common/DataModel/PiecewiseFunction";
++import vtkPolyData from "@kitware/vtk.js/Common/DataModel/PolyData";
++import vtkActor from "@kitware/vtk.js/Rendering/Core/Actor";
++import vtkColorTransferFunction from "@kitware/vtk.js/Rendering/Core/ColorTransferFunction";
++import vtkMapper from "@kitware/vtk.js/Rendering/Core/Mapper";
++import vtkVolume from "@kitware/vtk.js/Rendering/Core/Volume";
++import vtkVolumeMapper from "@kitware/vtk.js/Rendering/Core/VolumeMapper";
++import vtkGenericRenderWindow from "@kitware/vtk.js/Rendering/Misc/GenericRenderWindow";
++import type { Map as MapLibreMap } from "maplibre-gl";
++import { sweref } from "@/lib/sweref";
++import { opacityNodes, PANEL_START, type SpikeScene, VOLUME_STEP_M } from "./scene-data";
++
++const STOPS: [number, number, number][] = [
++  [33, 102, 172],
++  [67, 200, 220],
++  [120, 200, 80],
++  [250, 220, 50],
++  [200, 30, 30],
++];
++
++/** vtk.js's render window in `host`, with the spike's buildings and volume, matching three-scene.ts's look. */
++function createVtkScene(host: HTMLElement, data: SpikeScene, background: [number, number, number, number]) {
++  const view = vtkGenericRenderWindow.newInstance({ background, listenWindowResize: false });
++  view.setContainer(host);
++  const renderer = view.getRenderer();
++
++  const poly = vtkPolyData.newInstance();
++  poly.getPoints().setData(data.buildings.positions, 3);
++  const cells = new Uint32Array(data.buildings.triangles * 4);
++  for (let t = 0; t < data.buildings.triangles; t++) cells.set([3, 3 * t, 3 * t + 1, 3 * t + 2], 4 * t);
++  poly.getPolys().setData(cells);
++  poly
++    .getPointData()
++    .setNormals(vtkDataArray.newInstance({ name: "normals", values: data.buildings.normals, numberOfComponents: 3 }));
++  const mapper = vtkMapper.newInstance();
++  mapper.setInputData(poly);
++  mapper.setScalarVisibility(false);
++  const actor = vtkActor.newInstance();
++  actor.setMapper(mapper);
++  actor.getProperty().setColor(0.72, 0.77, 0.81);
++  renderer.addActor(actor);
++
++  const { dims, origin, spacing, range, speed } = data.field;
++  const image = vtkImageData.newInstance();
++  image.setDimensions(dims);
++  image.setOrigin(origin);
++  image.setSpacing(spacing);
++  image.getPointData().setScalars(vtkDataArray.newInstance({ name: "speed", values: speed, numberOfComponents: 1 }));
++  const ctf = vtkColorTransferFunction.newInstance();
++  STOPS.forEach(([r, g, b], i) =>
++    ctf.addRGBPoint(range[0] + (i / (STOPS.length - 1)) * (range[1] - range[0]), r / 255, g / 255, b / 255),
++  );
++  const opacity = vtkPiecewiseFunction.newInstance();
++  for (const [value, alpha] of opacityNodes(range)) opacity.addPoint(value, alpha);
++  const volumeMapper = vtkVolumeMapper.newInstance();
++  volumeMapper.setInputData(image);
++  volumeMapper.setSampleDistance(VOLUME_STEP_M);
++  const volume = vtkVolume.newInstance();
++  volume.setMapper(volumeMapper);
++  volume.getProperty().setRGBTransferFunction(0, ctf);
++  volume.getProperty().setScalarOpacity(0, opacity);
++  // Unit distance = step, so each sample carries exactly the transfer function's opacity, as three-scene.ts does.
++  volume.getProperty().setScalarOpacityUnitDistance(0, VOLUME_STEP_M);
++  renderer.addVolume(volume);
++
++  const camera = renderer.getActiveCamera();
++  camera.setViewAngle(PANEL_START.fovDeg);
++  // trap: delete() releases vtk.js's objects but not the WebGL context, which then lives until GC.
++  const release = () => {
++    const gl = (
++      view.getApiSpecificRenderWindow() as unknown as { getContext(): WebGL2RenderingContext | null }
++    ).getContext();
++    view.delete();
++    gl?.getExtension("WEBGL_lose_context")?.loseContext();
++  };
++  return { view, renderer, camera, release };
++}
++
++/** vtk.js in its own canvas inside `host`, with its trackball interactor. Returns the teardown. */
++export function mountVtkPanel(host: HTMLElement, data: SpikeScene): () => void {
++  const { view, renderer, camera, release } = createVtkScene(host, data, [0.957, 0.961, 0.969, 1]);
++  camera.setPosition(...PANEL_START.position);
++  camera.setFocalPoint(...PANEL_START.target);
++  camera.setViewUp(0, 0, 1);
++  renderer.resetCameraClippingRange();
++  const resize = new ResizeObserver(() => {
++    view.resize();
++    view.getRenderWindow().render();
++  });
++  resize.observe(host);
++  return () => {
++    resize.disconnect();
++    release();
++  };
++}
++
++/**
++ * vtk.js over the map: vtk.js can't draw into MapLibre's context, so it gets its own transparent canvas on top, its
++ * camera rebuilt from the map's public camera state after every map frame. Returns the teardown.
++ */
++export function mountVtkOverlay(host: HTMLElement, map: MapLibreMap, data: SpikeScene): () => void {
++  const { view, renderer, camera, release } = createVtkScene(host, data, [0, 0, 0, 0]);
++  const toLocal = (lng: number, lat: number) => {
++    const [x, y] = sweref.forward([lng, lat]) as [number, number];
++    return [x - data.origin[0], y - data.origin[1]] as const;
++  };
++  const sync = () => {
++    const { lng, lat } = map.getCenter();
++    const [cx, cy] = toLocal(lng, lat);
++    // True north in local metres: SWEREF's grid north is a couple of degrees off it here.
++    const [nx0, ny0] = toLocal(lng, lat + 0.001);
++    const nLength = Math.hypot(nx0 - cx, ny0 - cy);
++    const north = [(nx0 - cx) / nLength, (ny0 - cy) / nLength] as const;
++    const east = [north[1], -north[0]] as const;
++    const bearing = (map.getBearing() * Math.PI) / 180,
++      pitch = (map.getPitch() * Math.PI) / 180;
++    const fov = map.getVerticalFieldOfView();
++    // MapLibre's camera sits 0.5 / tan(fov / 2) canvas heights from the centre, in CSS pixels of 512-px tiles.
++    const metresPerPixel = (40075016.686 * Math.cos((lat * Math.PI) / 180)) / (512 * 2 ** map.getZoom());
++    const distance = (0.5 / Math.tan((fov * Math.PI) / 360)) * map.getCanvas().clientHeight * metresPerPixel;
++    const ahead = [
++      north[0] * Math.cos(bearing) + east[0] * Math.sin(bearing),
++      north[1] * Math.cos(bearing) + east[1] * Math.sin(bearing),
++    ];
++    camera.setViewAngle(fov);
++    camera.setFocalPoint(cx, cy, 0);
++    camera.setPosition(
++      cx - ahead[0]! * distance * Math.sin(pitch),
++      cy - ahead[1]! * distance * Math.sin(pitch),
++      distance * Math.cos(pitch),
++    );
++    camera.setViewUp(ahead[0]! * Math.cos(pitch), ahead[1]! * Math.cos(pitch), Math.sin(pitch));
++    renderer.resetCameraClippingRange();
++    view.getRenderWindow().render();
++  };
++  const resize = new ResizeObserver(() => {
++    view.resize();
++    sync();
++  });
++  resize.observe(host);
++  map.on("render", sync);
++  sync();
++  return () => {
++    map.off("render", sync);
++    resize.disconnect();
++    release();
++  };
++}
+diff --git a/apps/atlas/src/routes/_authenticated/dev/3d.tsx b/apps/atlas/src/routes/_authenticated/dev/3d.tsx
+new file mode 100644
+index 0000000..7fe790e
+--- /dev/null
++++ b/apps/atlas/src/routes/_authenticated/dev/3d.tsx
+@@ -0,0 +1,52 @@
++import { Link, createFileRoute, redirect } from "@tanstack/react-router";
++import { z } from "zod";
++import { Spike3dPage, variants } from "@/features/spike-3d/spike-3d-page";
++
++export const Route = createFileRoute("/_authenticated/dev/3d")({
++  validateSearch: z.object({
++    variant: z.enum(variants).catch("map-only"),
++    basemap: z.enum(["bright", "liberty"]).catch("bright"),
++  }),
++  beforeLoad: ({ context }) => {
++    if (context.user.role !== "admin") throw redirect({ to: "/" });
++  },
++  component: Page,
++});
++
++function Page() {
++  const { variant, basemap } = Route.useSearch();
++  return (
++    <div className="flex h-[calc(100svh-var(--site-header-height))] flex-col">
++      <nav className="flex flex-wrap items-center gap-3 border-b px-3 py-2 text-sm">
++        <Link to="/" className="underline underline-offset-4">
++          ← Home
++        </Link>
++        <span className="text-muted-foreground">3D renderer spike:</span>
++        {variants.map((v) => (
++          <Link
++            key={v}
++            to="/dev/3d"
++            search={{ variant: v, basemap }}
++            className={v === variant ? "font-semibold" : "underline underline-offset-4"}
++          >
++            {v}
++          </Link>
++        ))}
++        <span className="text-muted-foreground">basemap:</span>
++        {(["bright", "liberty"] as const).map((b) => (
++          <Link
++            key={b}
++            to="/dev/3d"
++            search={{ variant, basemap: b }}
++            className={b === basemap ? "font-semibold" : "underline underline-offset-4"}
++          >
++            {b}
++          </Link>
++        ))}
++      </nav>
++      <div className="min-h-0 flex-1">
++        <Spike3dPage key={`${variant}-${basemap}`} variant={variant} basemap={basemap} />
++      </div>
++    </div>
++  );
++}
