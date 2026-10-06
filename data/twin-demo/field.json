@@ -1,0 +1,10 @@
+{
+  "crs": "EPSG:3006",
+  "dims": [64, 64, 64],
+  "order": "x-fastest",
+  "origin": [319370.0, 6397790.0, 0.0],
+  "spacing": [9.93650000001071, 10.174599999561906, 1.5873],
+  "speed_range": [0.0897328332066536, 11.214102745056152],
+  "files": { "speed": "speed.f32", "velocity": "velocity.f32" },
+  "source": "dtcc-core smoke dataset (synthetic, analytic), resolution 64, z 0-100 m"
+}
