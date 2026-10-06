@@ -1,0 +1,158 @@
+{
+  "crs": "EPSG:3006",
+  "dims": [
+    64,
+    64,
+    64
+  ],
+  "order": "x-fastest",
+  "origin": [
+    319370.0,
+    6397790.0,
+    0.0
+  ],
+  "spacing": [
+    9.93650000001071,
+    10.174599999561906,
+    1.5873
+  ],
+  "speed_range": [
+    1.0869629506456267e-17,
+    7.747077102661132
+  ],
+  "speed_min_max": [
+    0.0,
+    10.472731590270996
+  ],
+  "terrain": "z is height above local ground",
+  "source": "dtcc-sim wind (stokes), 5 m/s from 225 deg, slip side/top, 200 m domain, 59526 vertices. Stokes approximation: the routing of air around and over buildings, not real speeds; far too slow near the ground",
+  "solve": {
+    "bounds": [
+      319370.0,
+      6397790.0,
+      319996.0,
+      6398431.0
+    ],
+    "crs": "EPSG:3006",
+    "args": {
+      "wind_speed": 5.0,
+      "wind_dir_deg": 225.0,
+      "inlet_profile": "power_law",
+      "mesh_max_mesh_size": 40.0,
+      "mesh_domain_height": 200.0,
+      "equations": "stokes",
+      "side_top_boundary": "slip"
+    },
+    "vertices": 59526,
+    "cells": 226020,
+    "fields": {
+      "velocity": [
+        59526,
+        3
+      ],
+      "pressure": [
+        59526
+      ],
+      "speed": [
+        59526
+      ]
+    },
+    "speed": {
+      "min": 0.0,
+      "max": 11.904231104214784,
+      "mean": 0.5887221233976565
+    },
+    "solve_seconds": 195.4,
+    "plausible": true,
+    "problems": [],
+    "diagnostics": {
+      "equations": "stokes",
+      "scheme": "mixed_stokes",
+      "simulation_mode": "steady",
+      "stop_reason": "linear_solve_converged",
+      "steps": 1,
+      "time_s": 120.93691643,
+      "dt_final": null,
+      "wind_speed": 5.0,
+      "wind_dir_deg": 225.0,
+      "wind_vector_xy": [
+        0.7071067811865474,
+        0.7071067811865477
+      ],
+      "inlet_marker": -5,
+      "outlet_marker": -6,
+      "closed_cavity": false,
+      "wall_model": "noslip",
+      "side_top_boundary": "slip",
+      "inlet_profile": "power_law",
+      "z0": 0.5,
+      "u_ref_height": 10.0,
+      "power_law_alpha": 0.2,
+      "rho": 1.2,
+      "nu": 1.5e-05,
+      "nu_t": 0.0,
+      "nu_eff": 1.5e-05,
+      "num_buildings": 120,
+      "mesh_hmin": 0.040433656494828926,
+      "degrees_of_freedom": {
+        "velocity": 1173249,
+        "pressure": 59526
+      },
+      "boundary_category_counts": {
+        "wall": 57944,
+        "roof": 6845,
+        "ground": 22656,
+        "inlet": 1115,
+        "outlet": 604,
+        "top": 1170,
+        "side": 1690
+      },
+      "fields": {
+        "velocity": {
+          "dim": 3,
+          "unit": "m/s",
+          "finite": true,
+          "min": -2.8206175426897437,
+          "max": 11.904521207802128,
+          "l2_norm": 1290.7625152308306
+        },
+        "pressure": {
+          "dim": 1,
+          "unit": "m^2/s^2",
+          "finite": true,
+          "min": -0.00020666800646283604,
+          "max": 0.0006793124833270576,
+          "l2_norm": 0.002665819537181823
+        },
+        "speed": {
+          "dim": 1,
+          "unit": "m/s",
+          "source": "computed as the velocity magnitude on VolumeMesh output"
+        }
+      },
+      "convergence": {
+        "relative_update": null,
+        "divergence_rms": 0.01335202245059148,
+        "flux_imbalance": 0.00012618665389446595,
+        "cfl": null,
+        "slip_normal_velocity_rms": 1.3957311338305875e-14,
+        "steady_tolerance": 0.0001,
+        "divergence_tolerance": 0.005,
+        "flux_imbalance_tolerance": 0.05,
+        "steady_window": 5
+      },
+      "linear_solves": {
+        "stokes": {
+          "converged_reason": 2,
+          "iterations": 26,
+          "residual_norm": 0.3053259151918568
+        }
+      },
+      "residual_status": "last-step PETSc KSP residual norms are recorded when available; a full nonlinear CFD residual is not assembled by this wrapper"
+    },
+    "dtcc_core_revision": "17c6efe44ca7622e6ef4a802627dfce3ef7f6174",
+    "dtcc_sim_revision": "0.1.0",
+    "solved_at": "2026-10-06T11:24:58.622837+00:00",
+    "regated_note": "vertex-median crossing check moved to sample_wind.py grid check"
+  }
+}
