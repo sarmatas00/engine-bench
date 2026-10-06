@@ -22,8 +22,7 @@ const pick = <T extends string>(key: string, allowed: readonly T[], fallback: T)
   (allowed as readonly string[]).includes(query.get(key) ?? '') ? (query.get(key) as T) : fallback;
 const variant = pick('variant', VARIANTS, 'three-map');
 const basemap = pick('basemap', ['bright', 'liberty'] as const, 'bright');
-// The wind solve (scripts/twin-demo/) ran out of memory here; the page draws the smoke field until it's published.
-const fieldName = 'smoke';
+const fieldName = pick('field', ['smoke', 'wind'] as const, 'smoke');
 const onMap = variant === 'three-map' || variant === 'vtk-map';
 const go = (key: string, value: string) => {
   const next = new URLSearchParams(location.search);
@@ -43,11 +42,12 @@ const ui = mountChrome({
     'Switch the basemap to liberty and zoom in: MapLibre draws its own 3D buildings. three-map shares the map\'s depth buffer and stays under the labels; vtk-map paints over labels and the map\'s buildings alike.',
     'Neither renderer can stop the volume at MapLibre\'s own buildings: the map\'s depth buffer can\'t be sampled. The volume stops at the spike\'s own buildings.',
     'The 3D library is downloaded only when a 3D variant is open; the readouts show how much. In Atlas as spiked, both libraries sat in the entry chunk every page loads (+427 KB gzipped).',
-    'Scene: 297 LoD1 buildings (dtcc-core, Lantmäteriet footprints and point cloud) and dtcc-core\'s synthetic smoke field, 64^3 over 0-100 m. A real dtcc-sim wind solve for this area was attempted and ran out of memory (about 260,000 unknowns against Docker\'s free memory); scripts/twin-demo/ holds it for a bigger machine.',
+    'Scene: 297 LoD1 buildings (dtcc-core, Lantmäteriet footprints and point cloud). Volume: smoke is dtcc-core\'s synthetic field; wind is a dtcc-sim solve for this area, 5 m/s from the south-west, in its Stokes approximation. Stokes shows how air is routed around and over the buildings but runs far too slow near the ground: read it as a pattern, not as wind speeds. dtcc-sim\'s full Navier-Stokes wind diverges today (dtcc-sim#12).',
   ],
   controls: [
     {kind: 'select', id: 'variant', label: 'View', options: [...VARIANTS], value: variant, onChange: v => go('variant', v)},
     {kind: 'select', id: 'basemap', label: 'Basemap', options: ['bright', 'liberty'], value: basemap, onChange: v => go('basemap', v)},
+    {kind: 'select', id: 'field', label: 'Volume', options: ['smoke', 'wind'], value: fieldName, onChange: v => go('field', v)},
     {kind: 'button', id: 'orbit', label: 'Orbit test (8 s)', onClick: () => void orbitTest()},
   ],
 });

@@ -2061,26 +2061,45 @@ use it. In Atlas, the same `import()` would take the +427 KB off every page.
 frames with the window size and pixel ratio, for anyone to paste. That's the
 cheapest route to numbers from non-Apple machines (test #3).
 
-### The wind field (test #5): attempted, out of memory
+### The wind field (test #5)
 
-`scripts/twin-demo/solve_wind.py` runs dtcc-sim's `urban_wind_simulation` for
-the demo area in the `dtcc-sim:local` image (the one page 13's heat solve used),
-5 m/s from 225 degrees with a power-law inlet. Three findings:
+Page 21's **wind** volume is a dtcc-sim `urban_wind_simulation` for the demo
+area, in its **Stokes** approximation: 5 m/s from 225 degrees (Gothenburg's
+prevailing south-westerly), power-law inlet, **slip** side and top boundaries,
+a **200 m** domain, 59,526 vertices, solved in 195 s at 8.7 GB peak. Stokes has
+no inertia: it shows how air is routed around and over the buildings, and runs
+far too slow near the ground (median 0.00 m/s at 5 m, 1.27 at 30 m, 5.34 at
+80 m above local ground). The page says so. `scripts/twin-demo/solve_wind.py`
+and `sample_wind.py` reproduce it (EQUATIONS=stokes SIDE_TOP=slip
+DOMAIN_HEIGHT=200).
 
-- **dtcc-sim's wind solver doesn't run on dolfinx 0.11** (the image's version).
-  `urban_wind.py:2286` and `:2389` call `fem.petsc.assemble_matrix_mat`, which
-  0.11 doesn't have; 0.11 assembles into an existing matrix through the
-  `PETSc.Mat` overload of `assemble_matrix`, same arguments. The script aliases
-  it. Worth an upstream issue.
-- **Navier-Stokes with the defaults diverged and was killed.** 25 m mesh,
-  dt 0.2: the velocity solve stopped converging from step 3 (CFL 55-68 against
-  a target of 2), then Docker killed it (exit 137).
-- **Stationary Stokes on a 40 m mesh was killed too.** The mesh is set by the
-  buildings, not the size cap: 127,000 cells and about 260,000 unknowns (225,010
-  velocity, 34,752 pressure). The coupled solve passed 4.6 GB, with Docker's VM
-  at 7.75 GB and the dtcc-agent stack holding about 2 GB of it.
+What it took, in order:
 
-`sample_wind.py` (resample onto page 21's grid, the heat pipeline's
-interpolation) is written but has nothing to sample yet. The page ships the
-smoke field and says so. To finish: more Docker memory (or run with nothing
-else in Docker), then a smaller dt for Navier-Stokes or Stokes first.
+- **dtcc-sim#9** (dolfinx 0.11 removed `assemble_matrix_mat`) was already fixed
+  on `develop` (`c46f34e`, 2026-09-30); `dtcc-sim:local` (2026-09-08) predated
+  it. But `develop`'s Dockerfile no longer builds here: unpinned
+  `mambaforge:latest` brings CMake 4.4.4, which can't find `ar`
+  (`CMAKE_AR-NOTFOUND`) linking `dtcc-tetgen-wrapper`. So
+  `dtcc-sim:develop-41055d5` is `develop`'s code and its locked Core
+  (`17c6efe`) installed on top of `dtcc-sim:local`'s working toolchain. pip
+  kept the image's old Core (same version string, different commit) until
+  forced; the image build now asserts the commit.
+- **Docker memory** raised from 7.8 to 13.6 GB. The 200 m domain needs 8.7 GB.
+- **Open side/top boundaries are useless for Stokes here:** the flow enters on
+  the south-west edge and leaves within ~150 m; everywhere else it stands
+  still. Slip boundaries make it cross the area.
+- **The default 80 m domain is too low:** the tile rises from 39 to 96 m, so
+  over the hill only ~23 m of air was left. 200 m fixes it.
+- **The checks.** dtcc-sim#12: a diverged wind run returns a normal-looking
+  mesh. `solve_wind.py` rejects non-finite speeds, speeds over 5x the inlet and
+  a stop reason other than converged. `sample_wind.py` rejects a field whose
+  median speed 30-60 m above local ground, in the middle of the tile, is under
+  0.2x the inlet; on the regular grid, because per mesh vertex it reads low (the
+  mesh crowds vertices against walls and ground). The open-boundary result fails
+  it; the slip/200 m result passes (2.47 m/s).
+- The field follows the terrain: grid level k is k x 1.59 m above local ground,
+  since the page draws the map and buildings flat.
+
+Full Navier-Stokes is still open: dtcc-sim#12 (diverges with defaults, even on
+a 200 m box). `scripts/twin-demo/sweep_wind.py` tries the settings #12 lists as
+untested; results below when the sweep finishes.
