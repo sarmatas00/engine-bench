@@ -2100,6 +2100,38 @@ What it took, in order:
 - The field follows the terrain: grid level k is k x 1.59 m above local ground,
   since the page draws the map and buildings flat.
 
-Full Navier-Stokes is still open: dtcc-sim#12 (diverges with defaults, even on
-a 200 m box). `scripts/twin-demo/sweep_wind.py` tries the settings #12 lists as
-untested; results below when the sweep finishes.
+### Navier-Stokes: the settings that don't diverge (dtcc-sim#12)
+
+`scripts/twin-demo/sweep_wind.py` ran the settings #12 lists as untested on
+#12's own 200 m box (1,645 vertices), Navier-Stokes, 5 m/s from 270 degrees,
+steady mode, 300 steps each, all six in parallel:
+
+~~~
+settings                                         max speed   mean    outcome
+defaults (dt 0.2)                                72,855 m/s  73.6    diverged
+dt 0.05                                           2,521 m/s   5.6    diverged
+dt 0.05, nu_t 1, 50-step inlet ramp              16,246 m/s  37.2    diverged
+dt 0.05, nu_t 5, 50-step inlet ramp              45,600 m/s  61.5    diverged
+dt 0.05, nu_t 1, ramp, slip side/top                 12.9    2.40    stable, CFL 0.58
+dt 0.05, nu_t 5, ramp, slip side/top                  7.6    2.33    stable, CFL 0.39
+~~~
+
+**Every open-boundary run diverged; both slip runs stayed physical.** The side
+and top boundary decides it, more than viscosity or the time step, which is
+also what decided the Stokes solve above.
+
+The nu_t 5 slip case, run for the full 2000 steps (660 s): the relative change
+fell from 3.0e-4 (step 500) to 5.2e-7 (step 2000), mean speed 2.27 m/s, max 7.5.
+But `div_rms` stops at 0.0399 from step 500, eight times the 5e-3 tolerance, so
+the run ends `reason=max_steps`, the same stop reason as a diverged run.
+`solve_wind.py` now accepts `max_steps` only when the final relative change
+(`diagnostics["convergence"]["relative_update"]`) met dtcc-sim's own steady
+tolerance; diverged and unsettled runs are still rejected.
+
+These are now the Navier-Stokes defaults in `solve_wind.py`. The Chalmers run
+(36x the box's vertices, estimated 3-7 h for 1000 steps) is
+`.cache/twin-demo/night_run.sh`, scheduled for an idle machine. A draft comment
+for #12 is in `~/Projects/dtcc/messages/comment-dtcc-sim-12-sweep.md`.
+
+`develop`'s Dockerfile not building (CMake 4.4, `CMAKE_AR-NOTFOUND`) is not yet
+reported to dtcc-sim.

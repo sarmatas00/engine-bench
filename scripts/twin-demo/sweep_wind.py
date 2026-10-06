@@ -21,7 +21,7 @@ sys.path.insert(0, "/work")
 from solve_wind import plausibility  # noqa: E402
 
 BOX = [319891.0, 6399790.0, 320091.0, 6399990.0]  # dtcc-sim#12's reproduction box, EPSG:3006
-BASE = dict(wind_speed=5.0, wind_dir_deg=270.0, equations="navier_stokes", simulation_mode="steady", max_steps=600)
+BASE = dict(wind_speed=5.0, wind_dir_deg=270.0, equations="navier_stokes", simulation_mode="steady", max_steps=300)
 CONFIGS = {
     "default": {},  # dt 0.2, nu_t 0, no ramp, open side/top: #12's failing case
     "small-dt": dict(dt=0.05),
@@ -29,6 +29,7 @@ CONFIGS = {
     "nut5-ramp": dict(dt=0.05, nu_t=5.0, inlet_ramp_steps=50),
     "nut1-ramp-slip": dict(dt=0.05, nu_t=1.0, inlet_ramp_steps=50, side_top_boundary="slip"),
     "nut5-ramp-slip": dict(dt=0.05, nu_t=5.0, inlet_ramp_steps=50, side_top_boundary="slip"),
+    "nut5-ramp-slip-full": dict(dt=0.05, nu_t=5.0, inlet_ramp_steps=50, side_top_boundary="slip", max_steps=2000),
     "stokes": dict(equations="stokes"),
     "stokes-slip": dict(equations="stokes", side_top_boundary="slip"),
 }
@@ -48,13 +49,13 @@ def main(name):
     speed = np.linalg.norm(velocity, axis=1)
     diagnostics = dict((getattr(mesh, "attributes", None) or {}).get("simulation_diagnostics")
                        or getattr(mesh, "simulation_diagnostics", None) or {})
-    keep = ("stop_reason", "steps", "time_s", "relative_update", "divergence_rms", "flux_imbalance", "cfl")
+    keep = ("stop_reason", "steps", "time_s")
     solves = diagnostics.get("linear_solves") or {}
     print("SWEEP " + json.dumps({
         "config": name, "args": args, "seconds": round(time.time() - t0, 1), "vertices": len(mesh.vertices),
         "speed": {"max": float(np.nanmax(speed)), "p99": float(np.nanpercentile(speed, 99)),
                   "mean": float(np.nanmean(speed))},
-        "diagnostics": {k: diagnostics.get(k) for k in keep},
+        "diagnostics": {**{k: diagnostics.get(k) for k in keep}, **(diagnostics.get("convergence") or {})},
         "linear_solves": json.loads(json.dumps(solves, default=str)),
         "problems": plausibility(speed, diagnostics, args, np.asarray(mesh.vertices)),
     }), flush=True)
