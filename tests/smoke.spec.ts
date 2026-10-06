@@ -448,4 +448,15 @@ test.describe('21-twin-map-vs-panel', () => {
       await page.screenshot({path: `screens/combined/21-twin-map-vs-panel-${variant}.png`});
     });
   }
+  test('wind volume (dtcc-sim, Stokes)', async ({page}) => {
+    test.slow();
+    const errors: string[] = [];
+    page.on('pageerror', e => errors.push(`pageerror: ${e.message}`));
+    await page.goto('/21-twin-map-vs-panel/?variant=three-panel&field=wind');
+    await page.waitForFunction(() => (window as any).__bench?.ready === true, null, {timeout: 60_000});
+    expect(errors, errors.join('\n')).toEqual([]);
+    await expect(page.locator('#host > .failure')).toHaveCount(0);
+    // FAILS IF: the wind field loses its caveat. Stokes is a routing pattern, not wind speeds.
+    await expect(page.locator('.readouts')).toContainText('Stokes approximation');
+  });
 });

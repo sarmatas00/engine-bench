@@ -23,34 +23,42 @@ BOUNDS = [319370.0, 6397790.0, 319996.0, 6398431.0]
 import os
 
 # EQUATIONS=stokes is dtcc-sim's stationary solve: one linear system, no inertia, so a stand-in for wind, not wind.
-# The Navier-Stokes defaults (25 m mesh, dt 0.2) ran out of Docker memory and diverged (CFL 55-68) on 2026-10-06.
+# Navier-Stokes defaults diverge (dtcc-sim#12); sweep_wind.py looks for settings that don't. Needs dtcc-sim >= c46f34e
+# (dolfinx 0.11, dtcc-sim#9): run in dtcc-sim:develop-41055d5 or later.
 EQUATIONS = os.environ.get("EQUATIONS", "stokes")
 ARGS = dict(
     wind_speed=5.0,
     wind_dir_deg=225.0,          # from the south-west, Gothenburg's prevailing wind
     inlet_profile="power_law",
     mesh_max_mesh_size=float(os.environ.get("MESH_SIZE", "40")),
-    mesh_domain_height=80.0,
+    mesh_domain_height=float(os.environ.get("DOMAIN_HEIGHT", "80")),
     equations=EQUATIONS,
+    side_top_boundary=os.environ.get("SIDE_TOP", "open"),
     **({} if EQUATIONS == "stokes" else dict(simulation_mode="steady", dt=float(os.environ.get("DT", "0.02")),
                                               inlet_ramp_steps=20, max_steps=int(os.environ.get("MAX_STEPS", "400")))),
 )
 
 
-def patch_dolfinx_assemble_matrix_mat():
-    """dtcc-sim's urban_wind.py calls fem.petsc.assemble_matrix_mat, gone in dolfinx 0.11 (the image's version).
+def plausibility(speed, diagnostics, args, vertices=None):
+    """dtcc-sim#12: a diverged wind run still returns a normal-looking mesh. Check before anything uses it.
 
-    0.11 assembles into an existing matrix through the PETSc.Mat overload of assemble_matrix, same arguments.
+    Whether the flow crosses the domain is checked on the regular grid in sample_wind.py: per mesh vertex it is
+    biased low, because the mesh crowds vertices against walls and ground, where the speed is near zero.
     """
-    import dolfinx.fem.petsc as fem_petsc
-    if not hasattr(fem_petsc, "assemble_matrix_mat"):
-        fem_petsc.assemble_matrix_mat = lambda A, a, bcs=None, **kw: fem_petsc.assemble_matrix(A, a, bcs=bcs, **kw)
-        print("solve_wind: aliased dolfinx.fem.petsc.assemble_matrix_mat for dolfinx 0.11", flush=True)
+    limit = 5 * args["wind_speed"]
+    problems = []
+    if not np.isfinite(speed).all():
+        problems.append("non-finite speed")
+    if float(np.nanmax(speed)) > limit:
+        problems.append(f"max speed {float(np.nanmax(speed)):.1f} m/s > {limit:.0f} (5x the inlet)")
+    reason = (diagnostics or {}).get("stop_reason")
+    if reason not in (None, "steady_criteria", "statistical_stationarity", "linear_solve_converged"):
+        problems.append(f"stop_reason={reason}")
+    return problems
 
 
 def main():
     core_compat.patch_terrain_raster_classification()
-    patch_dolfinx_assemble_matrix_mat()
     from dtcc_sim.datasets import UrbanWindSimulationDataset
 
     t0 = time.time()
@@ -68,18 +76,23 @@ def main():
                         cells=np.asarray(mesh.cells, np.int64), velocity=velocity.astype(np.float32),
                         pressure=(pressure.reshape(-1).astype(np.float32) if pressure is not None else np.zeros(0, np.float32)))
     speed = np.linalg.norm(velocity, axis=1)
+    diagnostics = dict((getattr(mesh, "attributes", None) or {}).get("simulation_diagnostics")
+                       or getattr(mesh, "simulation_diagnostics", None) or {})
+    problems = plausibility(speed, diagnostics, ARGS, np.asarray(mesh.vertices))
     meta = {
         "bounds": BOUNDS, "crs": "EPSG:3006", "args": ARGS,
         "vertices": int(len(mesh.vertices)), "cells": int(len(mesh.cells)),
         "fields": {k: list(np.asarray(v).shape) for k, v in fields.items()},
         "speed": {"min": float(speed.min()), "max": float(speed.max()), "mean": float(speed.mean())},
         "solve_seconds": round(seconds, 1),
+        "plausible": not problems, "problems": problems,
+        "diagnostics": json.loads(json.dumps(diagnostics, default=str)),
         "dtcc_core_revision": benchio.distribution_revision("dtcc-core"),
         "dtcc_sim_revision": benchio.distribution_revision("dtcc-sim"),
         "solved_at": datetime.now(timezone.utc).isoformat(),
     }
     (OUT / "wind.meta.json").write_text(json.dumps(meta, indent=2) + "\n")
-    print(f"solve_wind: speed {meta['speed']}", flush=True)
+    print(f"solve_wind: speed {meta['speed']}, plausible={not problems} {problems}", flush=True)
 
 
 if __name__ == "__main__":
