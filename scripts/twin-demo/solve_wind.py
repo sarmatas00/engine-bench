@@ -23,7 +23,8 @@ BOUNDS = [319370.0, 6397790.0, 319996.0, 6398431.0]
 import os
 
 # EQUATIONS=stokes is dtcc-sim's stationary solve: one linear system, no inertia, so a stand-in for wind, not wind.
-# Navier-Stokes defaults diverge (dtcc-sim#12); sweep_wind.py looks for settings that don't. Needs dtcc-sim >= c46f34e
+# Navier-Stokes defaults diverge (dtcc-sim#12). sweep_wind.py found the stable ones, now the NS defaults here:
+# slip side/top (SIDE_TOP=slip), nu_t 5, a 50-step inlet ramp, dt 0.05. Needs dtcc-sim >= c46f34e
 # (dolfinx 0.11, dtcc-sim#9): run in dtcc-sim:develop-41055d5 or later.
 EQUATIONS = os.environ.get("EQUATIONS", "stokes")
 ARGS = dict(
@@ -34,8 +35,13 @@ ARGS = dict(
     mesh_domain_height=float(os.environ.get("DOMAIN_HEIGHT", "80")),
     equations=EQUATIONS,
     side_top_boundary=os.environ.get("SIDE_TOP", "open"),
-    **({} if EQUATIONS == "stokes" else dict(simulation_mode="steady", dt=float(os.environ.get("DT", "0.02")),
-                                              inlet_ramp_steps=20, max_steps=int(os.environ.get("MAX_STEPS", "400")))),
+    **({} if EQUATIONS == "stokes" else dict(
+        simulation_mode="steady",
+        dt=float(os.environ.get("DT", "0.05")),
+        nu_t=float(os.environ.get("NU_T", "5.0")),
+        inlet_ramp_steps=int(os.environ.get("RAMP", "50")),
+        max_steps=int(os.environ.get("MAX_STEPS", "1000")),
+    )),
 )
 
 
@@ -52,8 +58,13 @@ def plausibility(speed, diagnostics, args, vertices=None):
     if float(np.nanmax(speed)) > limit:
         problems.append(f"max speed {float(np.nanmax(speed)):.1f} m/s > {limit:.0f} (5x the inlet)")
     reason = (diagnostics or {}).get("stop_reason")
-    if reason not in (None, "steady_criteria", "statistical_stationarity", "linear_solve_converged"):
-        problems.append(f"stop_reason={reason}")
+    convergence = (diagnostics or {}).get("convergence") or {}
+    rel, tol = convergence.get("relative_update"), convergence.get("steady_tolerance")
+    # A run whose div_rms plateaus above tolerance ends at max_steps even once the flow has settled (seen on
+    # dtcc-sim#12's box: rel 5e-7, div_rms flat at 0.04). Accept that only when rel itself met the tolerance.
+    settled = reason == "max_steps" and rel is not None and tol is not None and rel < tol
+    if reason not in (None, "steady_criteria", "statistical_stationarity", "linear_solve_converged") and not settled:
+        problems.append(f"stop_reason={reason} (relative update {rel}, tolerance {tol})")
     return problems
 
 
