@@ -427,3 +427,25 @@ test.describe('combined', () => {
     });
   }
 });
+
+// Page 21 loads MapLibre 6 and the basemap style from OpenFreeMap, so it needs the network, unlike pages 00-14.
+test.describe('21-twin-map-vs-panel', () => {
+  for (const variant of ['map-only', 'three-map', 'vtk-map', 'three-panel', 'vtk-panel'] as const) {
+    test(variant, async ({page}) => {
+      test.slow();
+      const errors: string[] = [];
+      page.on('pageerror', e => errors.push(`pageerror: ${e.message}`));
+      const scripts: string[] = [];
+      page.on('response', r => { if (/\.js(\?|$)/.test(r.url())) scripts.push(r.url()); });
+      await page.goto(`/21-twin-map-vs-panel/?variant=${variant}`);
+      await page.waitForFunction(() => (window as any).__bench?.ready === true, null, {timeout: 60_000});
+      expect(errors, errors.join('\n')).toEqual([]);
+      await expect(page.locator('#host > .failure')).toHaveCount(0);
+      const bodies = await Promise.all(scripts.map(u => page.evaluate(url => fetch(url).then(r => r.text()), u)));
+      const loaded = {three: bodies.some(b => b.includes('WebGLRenderer')), vtk: bodies.some(b => b.includes('vtkVolumeMapper'))};
+      // FAILS IF: a 3D library reaches a view that doesn't use it -- the page's whole point about lazy loading.
+      expect(loaded).toEqual({three: variant.startsWith('three'), vtk: variant.startsWith('vtk')});
+      await page.screenshot({path: `screens/combined/21-twin-map-vs-panel-${variant}.png`});
+    });
+  }
+});

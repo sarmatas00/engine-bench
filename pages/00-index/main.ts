@@ -22,6 +22,7 @@ const rows: [string, string, string, string, string][] = [
   ['18-threejs-flagship-volume', 'Three.js Delft volume', 'The same scene in Three.js, with a ray marcher we would own.', 'Volume axis, Three.js.', 'The second measurement of page 17\'s scene.'],
   ['19-vtkjs-flagship-animation', 'VTK.js Delft animation', 'The Delft district inside a synthetic pressure field that changes over time, 25 frames in a loop.', 'Animation axis, vtk.js.', 'Whether frame rate holds while the volume is replaced every frame, streamed or preloaded. Compare with page 20.'],
   ['20-threejs-flagship-animation', 'Three.js Delft animation', 'The same playback in Three.js, on page 18\'s ray marcher.', 'Animation axis, Three.js.', 'The second measurement of page 19\'s playback.'],
+  ['21-twin-map-vs-panel', '3D on the map vs in a panel', 'The Chalmers campus, Atlas\'s demo area, with 3D buildings and a volume: drawn into the MapLibre 6 map, laid over it, or in a panel beside it. Pick the view; each loads its 3D library only then.', 'Where 3D goes in the Twin.', 'On the map means Three.js: vtk.js can only cover the map. In a panel, either works. The Orbit test button measures your own machine.'],
 ];
 
 /**
@@ -30,7 +31,7 @@ const rows: [string, string, string, string, string][] = [
  */
 const COMBINED = new Set(['13-vtkjs-scientific', '14-threejs-scientific', '15-vtkjs-flagship',
   '16-threejs-flagship', '17-vtkjs-flagship-volume', '18-threejs-flagship-volume',
-  '19-vtkjs-flagship-animation', '20-threejs-flagship-animation']);
+  '19-vtkjs-flagship-animation', '20-threejs-flagship-animation', '21-twin-map-vs-panel']);
 
 // The briefing's own argument order, so the index reads as the case rather than a file listing.
 const sections: Record<string, string> = {
@@ -40,7 +41,8 @@ const sections: Record<string, string> = {
   '05-fix-a1-deck-terrain': 'What the fixes cost',
   '09-cesium-terrain': 'What else was considered, and why it lost',
   '13-vtkjs-scientific': 'Scientific visualization — one scene carrying the city and the fields',
-  '15-vtkjs-flagship': 'Scaling up — the Delft flagship district'
+  '15-vtkjs-flagship': 'Scaling up — the Delft flagship district',
+  '21-twin-map-vs-panel': 'Inside the Twin — on the map or in a panel'
 };
 
 /**

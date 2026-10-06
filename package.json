@@ -32,8 +32,11 @@
     "@luma.gl/engine": "9.4.0",
     "@luma.gl/shadertools": "9.4.0",
     "cesium": "1.145.0",
+    "earcut": "3.2.3",
     "maplibre-gl": "5.24.0",
+    "maplibre-gl6": "npm:maplibre-gl@6.10.0",
     "playcanvas": "2.22.0",
+    "proj4": "2.22.0",
     "three": "0.185.1"
   },
   "devDependencies": {

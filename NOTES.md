@@ -2026,3 +2026,61 @@ Raw: `.cache/sessions/2026-10-05-twin-spike-metal.jsonl`.
 **Also found in Atlas:** the README's fixture command fails on Apple Silicon
 (`fiona` has no linux/arm64 wheel, so `uv sync` tries to compile it without
 GDAL). `DOCKER_DEFAULT_PLATFORM=linux/amd64` works.
+
+## Page 21: the twin spike as a public demo, lazy loading, and the wind attempt (2026-10-06)
+
+The dtcc-twin spike can't be opened by anyone else (Atlas needs its backend and
+a login), so page 21 puts it on the bench site. It is the spike's renderer code,
+ported file for file into `src/lib/twin-demo/` with only imports changed, on the
+same Chalmers scene and MapLibre **6.10**. The bench pins MapLibre 5.24 for
+deck.gl (Environment), so 6.10 comes in as the npm alias `maplibre-gl6`, used
+only by this page. One switch picks `map-only`, `three-map`, `vtk-map`,
+`three-panel` or `vtk-panel`; another picks the bright or liberty basemap. What
+the page leaves out is Atlas itself: no React, so StrictMode's double mount and
+the context-release fix are recorded above, not shown live.
+
+**Lazy loading (test #6).** The page fetches MapLibre, the page code and the
+scene files first, and `import()`s a 3D library only when a view needs it. Built
+output, gzipped:
+
+~~~
+first load (map-only)       272 KB   MapLibre 6.10 + page; no Three.js, no vtk.js
++ Three.js views            186 KB   on demand
++ vtk.js views              339 KB   on demand
+~~~
+
+The page reads the same numbers off `PerformanceResourceTiming` and shows them.
+One trap: the spike's building extrusion used Three.js's `ShapeUtils`, and the
+bundler puts all of `three` in one shared chunk, so the vtk.js views downloaded
+Three.js too (394 KB). Roofs are now cut with `earcut` directly (the library
+`ShapeUtils` wraps; same 5,514 triangles), and the vtk.js views load vtk.js
+only. A Playwright test per view fails if a library reaches a view that doesn't
+use it. In Atlas, the same `import()` would take the +427 KB off every page.
+
+**An Orbit test button** runs the spike's 8 s orbit and prints p50, p95 and late
+frames with the window size and pixel ratio, for anyone to paste. That's the
+cheapest route to numbers from non-Apple machines (test #3).
+
+### The wind field (test #5): attempted, out of memory
+
+`scripts/twin-demo/solve_wind.py` runs dtcc-sim's `urban_wind_simulation` for
+the demo area in the `dtcc-sim:local` image (the one page 13's heat solve used),
+5 m/s from 225 degrees with a power-law inlet. Three findings:
+
+- **dtcc-sim's wind solver doesn't run on dolfinx 0.11** (the image's version).
+  `urban_wind.py:2286` and `:2389` call `fem.petsc.assemble_matrix_mat`, which
+  0.11 doesn't have; 0.11 assembles into an existing matrix through the
+  `PETSc.Mat` overload of `assemble_matrix`, same arguments. The script aliases
+  it. Worth an upstream issue.
+- **Navier-Stokes with the defaults diverged and was killed.** 25 m mesh,
+  dt 0.2: the velocity solve stopped converging from step 3 (CFL 55-68 against
+  a target of 2), then Docker killed it (exit 137).
+- **Stationary Stokes on a 40 m mesh was killed too.** The mesh is set by the
+  buildings, not the size cap: 127,000 cells and about 260,000 unknowns (225,010
+  velocity, 34,752 pressure). The coupled solve passed 4.6 GB, with Docker's VM
+  at 7.75 GB and the dtcc-agent stack holding about 2 GB of it.
+
+`sample_wind.py` (resample onto page 21's grid, the heat pipeline's
+interpolation) is written but has nothing to sample yet. The page ships the
+smoke field and says so. To finish: more Docker memory (or run with nothing
+else in Docker), then a smaller dt for Navier-Stokes or Stokes first.
