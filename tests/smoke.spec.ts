@@ -458,5 +458,7 @@ test.describe('21-twin-map-vs-panel', () => {
     await expect(page.locator('#host > .failure')).toHaveCount(0);
     // FAILS IF: the wind field loses its caveat. Stokes is a routing pattern, not wind speeds.
     await expect(page.locator('.readouts')).toContainText('Stokes approximation');
+    // FAILS IF: the page stops saying where the wind really blows from (dtcc-sim turns a diagonal wind).
+    await expect(page.locator('.readouts')).toContainText('Measured 60-100 m up: from');
   });
 });

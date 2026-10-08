@@ -2135,3 +2135,63 @@ for #12 is in `~/Projects/dtcc/messages/comment-dtcc-sim-12-sweep.md`.
 
 `develop`'s Dockerfile not building (CMake 4.4, `CMAKE_AR-NOTFOUND`) is not yet
 reported to dtcc-sim.
+
+### Navier-Stokes on the Chalmers area: stable, unsettled, and turned by the box
+
+The night run (`.cache/twin-demo/night_run.sh`, 2026-10-06): the `solve_wind.py`
+defaults above, 5 m/s from 225 degrees, 59,526 vertices (1.17 M velocity dofs),
+1000 steps in 4.7 h at about 5.7 GB. No solve failed and CFL held near 21
+(`mesh_hmin` is 4 cm: sliver cells set the step, not the buildings).
+
+~~~
+step   rel        div_rms
+ 100   3.9e-3     0.038
+ 500   1.1e-3     0.027
+ 850   8.8e-4     0.026    lowest rel
+1000   1.1e-3     0.026    rising again; tolerance 1e-4 / 5e-3
+~~~
+
+**It never settles, and a longer run at these settings won't fix that.** `rel`
+bottoms out at step 850 and climbs. 1000 x 0.05 s is 50 s of flow, about 0.3 of
+the time the air needs to cross the tile, so the field is still the start-up.
+`solve_wind.py` rejects it (`stop_reason=max_steps`, rel 1.1e-3).
+
+On page 21's grid, middle half of the tile, against the Stokes field live now:
+
+~~~
+height above ground   Navier-Stokes   Stokes   inlet profile
+0-15 m                0.0-0.1 m/s     0.0      3.8-5.0
+15-30 m               1.5             0.7      5.9
+30-60 m               4.5             2.5      6.8
+60-100 m              6.3             5.2      7.6
+~~~
+
+Above the roofs Navier-Stokes is much closer to the inflow and shows reverse
+flow (16-28% of low cells), which Stokes can't. Street level is still dead:
+constant `nu_t` 5 and no-slip walls, not run length.
+
+**dtcc-sim turns a diagonal wind.** `select_inlet_outlet`
+(`dtcc_sim/urban_wind.py`) makes the one lateral face with the most negative
+normal . wind the inlet and the most positive the outlet; the others become
+sides. At 225 degrees the south and west faces tie (-0.7071067811865477 vs
+...474) and float rounding picks south, so air enters only through the south
+face, leaves only through the north, and the east and west faces are slip
+walls. Measured:
+
+- Stokes (live): the wind 60-100 m up comes from 172 degrees, not 225.
+  `sample_wind.py` now writes the measured direction into the page readout.
+- Navier-Stokes: the air pushed east has no exit and runs north along the east
+  face. All 743 vertices above 10 m/s sit in the east 10% of the box; 60-150 m
+  up, the east strip runs at 11.4 m/s against 6.8 in the middle.
+
+That jet is why the night run stays off page 21. A clean Navier-Stokes field
+needs a wind square to the box (e.g. 270) or two inlet faces upstream.
+
+The probe (`.cache/twin-demo/probe-270/run.sh`, 2026-10-08): the same area and
+settings, wind from 270 degrees (one face clearly upstream) and `dt=0.2`, 100
+steps in 37 min. Stable: no failed solve, CFL rose to 63 and stayed, `rel` still
+falling at step 100 (3.6e-3), max speed 12.0 m/s. The flow 60-150 m up comes
+from 270 degrees, and the north edge, south edge and middle run within 3% of
+each other (8.6-8.9 m/s): no jet. At `dt=0.2` a step covers four times the
+flow, so two crossings of the tile (about 250 s) is roughly 1250 steps, 6-7 h.
+Street level will still be slow: that is `nu_t`, not the time step.

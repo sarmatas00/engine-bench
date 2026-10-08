@@ -25,7 +25,7 @@
     10.472731590270996
   ],
   "terrain": "z is height above local ground",
-  "source": "dtcc-sim wind (stokes), 5 m/s from 225 deg, slip side/top, 200 m domain, 59526 vertices. Stokes approximation: the routing of air around and over buildings, not real speeds; far too slow near the ground",
+  "source": "dtcc-sim wind (stokes), 5 m/s from 225 deg, slip side/top, 200 m domain, 59526 vertices. Measured 60-100 m up: from 172 deg (dtcc-sim lets a diagonal wind in through one side of its box only). Stokes approximation: the routing of air around and over buildings, not real speeds; far too slow near the ground",
   "solve": {
     "bounds": [
       319370.0,
