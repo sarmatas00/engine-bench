@@ -49,13 +49,22 @@ def main():
     if float(np.median(band)) < 0.2 * meta["args"]["wind_speed"]:
         sys.exit(f"sample_wind: flow doesn't cross the area (median {float(np.median(band)):.2f} m/s 30-60 m up)")
 
+    # Where the air actually comes from aloft (60-100 m, middle half), which needn't be the requested direction:
+    # dtcc-sim lets air in through one bbox face only, so a diagonal wind turns toward that face's normal.
+    aloft = (heights >= 60) & (heights <= 100)
+    uv = sampled.reshape(nz, ny, nx, 3)[aloft][:, ny // 4:3 * ny // 4, nx // 4:3 * nx // 4, :2].reshape(-1, 2)
+    measured_from = float((np.degrees(np.arctan2(np.median(uv[:, 0]), np.median(uv[:, 1]))) + 180) % 360)
+
     OUT.mkdir(parents=True, exist_ok=True)
     speed.tofile(OUT / "speed.f32")
     lo, hi = (float(v) for v in np.percentile(speed, [2, 98]))
     equations = meta["args"]["equations"]
     source = (f"dtcc-sim wind ({equations}), {meta['args']['wind_speed']:.0f} m/s from "
               f"{meta['args']['wind_dir_deg']:.0f} deg, {meta['args']['side_top_boundary']} side/top, "
-              f"{meta['args']['mesh_domain_height']:.0f} m domain, {meta['vertices']} vertices")
+              f"{meta['args']['mesh_domain_height']:.0f} m domain, {meta['vertices']} vertices. "
+              f"Measured 60-100 m up: from {measured_from:.0f} deg")
+    if meta["args"]["wind_dir_deg"] % 90:
+        source += " (dtcc-sim lets a diagonal wind in through one side of its box only)"
     if equations == "stokes":
         source += ". Stokes approximation: the routing of air around and over buildings, not real speeds; far too slow near the ground"
     field = {
@@ -67,7 +76,8 @@ def main():
     }
     (OUT / "field.json").write_text(json.dumps(field, indent=2) + "\n")
     print(f"sample_wind: {speed.size} cells, speed {speed.min():.2f}-{speed.max():.2f} m/s "
-          f"(2-98%: {lo:.2f}-{hi:.2f}); median 30-60 m up {float(np.median(band)):.2f} m/s")
+          f"(2-98%: {lo:.2f}-{hi:.2f}); median 30-60 m up {float(np.median(band)):.2f} m/s; "
+          f"from {measured_from:.0f} deg 60-100 m up")
 
 
 if __name__ == "__main__":

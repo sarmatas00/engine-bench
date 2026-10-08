@@ -29,7 +29,9 @@ import os
 EQUATIONS = os.environ.get("EQUATIONS", "stokes")
 ARGS = dict(
     wind_speed=5.0,
-    wind_dir_deg=225.0,          # from the south-west, Gothenburg's prevailing wind
+    # 225: from the south-west, Gothenburg's prevailing wind. dtcc-sim picks ONE inlet and ONE outlet bbox face, and
+    # at 45 deg two faces tie (the pick is float rounding), so a diagonal wind piles up against a slip side.
+    wind_dir_deg=float(os.environ.get("WIND_DIR", "225")),
     inlet_profile="power_law",
     mesh_max_mesh_size=float(os.environ.get("MESH_SIZE", "40")),
     mesh_domain_height=float(os.environ.get("DOMAIN_HEIGHT", "80")),
