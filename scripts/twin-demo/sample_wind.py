@@ -5,10 +5,12 @@ the other. z follows the terrain: page 21 draws the map and buildings flat, and 
 level k sits k * spacing above the local ground (the lowest mesh vertex within 15 m). Interpolation is
 scripts/real/sample_field.py's: linear inside the mesh, nearest outside.
 
-    .venv/bin/python scripts/twin-demo/sample_wind.py
+    .venv/bin/python scripts/twin-demo/sample_wind.py          # .cache/twin-demo/wind.*
+    WIND_RUN=ns-270 .venv/bin/python scripts/twin-demo/sample_wind.py   # .cache/twin-demo/ns-270/wind.*
 """
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -18,7 +20,7 @@ REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "scripts" / "real"))
 from sample_field import interpolate  # noqa: E402
 
-SOLVE = REPO / ".cache" / "twin-demo"
+SOLVE = REPO / ".cache" / "twin-demo" / os.environ.get("WIND_RUN", "")
 SMOKE = REPO / "public" / "data" / "twin-demo" / "field.json"
 OUT = REPO / "public" / "data" / "twin-demo" / "wind"
 
@@ -67,6 +69,10 @@ def main():
         source += " (dtcc-sim lets a diagonal wind in through one side of its box only)"
     if equations == "stokes":
         source += ". Stokes approximation: the routing of air around and over buildings, not real speeds; far too slow near the ground"
+    else:
+        # A constant eddy viscosity (nu_t) and no-slip walls: right above the roofs, near-still air in the streets.
+        source += (f". Navier-Stokes, settled (relative change {meta['diagnostics']['convergence']['relative_update']:.0e}). "
+                   f"Constant eddy viscosity {meta['args']['nu_t']:g} m2/s: far too slow below roof height")
     field = {
         "crs": grid["crs"], "dims": grid["dims"], "order": "x-fastest",
         # z relative to the mesh's lowest ground, which the page draws at 0.

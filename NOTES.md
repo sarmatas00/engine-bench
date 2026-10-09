@@ -2195,3 +2195,22 @@ from 270 degrees, and the north edge, south edge and middle run within 3% of
 each other (8.6-8.9 m/s): no jet. At `dt=0.2` a step covers four times the
 flow, so two crossings of the tile (about 250 s) is roughly 1250 steps, 6-7 h.
 Street level will still be slow: that is `nu_t`, not the time step.
+
+**The clean run settles** (`.cache/twin-demo/ns-270/night_run.sh`, 2026-10-08):
+270 degrees, `dt=0.2`, 1250 steps (250 s of flow) in 5.2 h. `rel` passes the 1e-4
+tolerance near step 550 and ends at 4.3e-7; `div_rms` sits at its floor, 0.030.
+`solve_wind.py` accepts it. On page 21's grid, middle half of the tile:
+
+~~~
+height above ground   NS 270          Stokes   inlet profile
+0-15 m                0.0-0.1 m/s     0.0      3.8-5.0
+15-30 m               1.0             0.7      5.9
+30-60 m               5.4             2.5      6.8
+60-100 m              9.0             5.2      7.6
+~~~
+
+Aligned with the inflow at every height above 15 m (median cos +0.95 to +1.00),
+from 270 degrees 60-150 m up, north/south edges and middle at 8.7/9.4/9.3 m/s:
+no jet. 60-100 m runs 19% over the inlet profile, likely the air squeezed between
+the buildings and the 200 m slip lid (not checked). Street level is still near
+still: constant `nu_t` 5. Page 21 now shows this field (`WIND_RUN=ns-270`).

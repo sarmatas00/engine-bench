@@ -448,7 +448,7 @@ test.describe('21-twin-map-vs-panel', () => {
       await page.screenshot({path: `screens/combined/21-twin-map-vs-panel-${variant}.png`});
     });
   }
-  test('wind volume (dtcc-sim, Stokes)', async ({page}) => {
+  test('wind volume (dtcc-sim, Navier-Stokes)', async ({page}) => {
     test.slow();
     const errors: string[] = [];
     page.on('pageerror', e => errors.push(`pageerror: ${e.message}`));
@@ -456,8 +456,8 @@ test.describe('21-twin-map-vs-panel', () => {
     await page.waitForFunction(() => (window as any).__bench?.ready === true, null, {timeout: 60_000});
     expect(errors, errors.join('\n')).toEqual([]);
     await expect(page.locator('#host > .failure')).toHaveCount(0);
-    // FAILS IF: the wind field loses its caveat. Stokes is a routing pattern, not wind speeds.
-    await expect(page.locator('.readouts')).toContainText('Stokes approximation');
+    // FAILS IF: the wind field loses its caveat. Below roof height the speeds are far too slow.
+    await expect(page.locator('.readouts')).toContainText('far too slow below roof height');
     // FAILS IF: the page stops saying where the wind really blows from (dtcc-sim turns a diagonal wind).
     await expect(page.locator('.readouts')).toContainText('Measured 60-100 m up: from');
   });

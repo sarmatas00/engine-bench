@@ -17,15 +17,15 @@
     1.5873
   ],
   "speed_range": [
-    1.0869629506456267e-17,
-    7.747077102661132
+    2.9807783451499985e-17,
+    9.809776954650879
   ],
   "speed_min_max": [
     0.0,
-    10.472731590270996
+    11.64854907989502
   ],
   "terrain": "z is height above local ground",
-  "source": "dtcc-sim wind (stokes), 5 m/s from 225 deg, slip side/top, 200 m domain, 59526 vertices. Measured 60-100 m up: from 172 deg (dtcc-sim lets a diagonal wind in through one side of its box only). Stokes approximation: the routing of air around and over buildings, not real speeds; far too slow near the ground",
+  "source": "dtcc-sim wind (navier_stokes), 5 m/s from 270 deg, slip side/top, 200 m domain, 59526 vertices. Measured 60-100 m up: from 270 deg. Navier-Stokes, settled (relative change 4e-07). Constant eddy viscosity 5 m2/s: far too slow below roof height",
   "solve": {
     "bounds": [
       319370.0,
@@ -36,12 +36,17 @@
     "crs": "EPSG:3006",
     "args": {
       "wind_speed": 5.0,
-      "wind_dir_deg": 225.0,
+      "wind_dir_deg": 270.0,
       "inlet_profile": "power_law",
       "mesh_max_mesh_size": 40.0,
       "mesh_domain_height": 200.0,
-      "equations": "stokes",
-      "side_top_boundary": "slip"
+      "equations": "navier_stokes",
+      "side_top_boundary": "slip",
+      "simulation_mode": "steady",
+      "dt": 0.2,
+      "nu_t": 5.0,
+      "inlet_ramp_steps": 50,
+      "max_steps": 1250
     },
     "vertices": 59526,
     "cells": 226020,
@@ -59,28 +64,28 @@
     },
     "speed": {
       "min": 0.0,
-      "max": 11.904231104214784,
-      "mean": 0.5887221233976565
+      "max": 12.013166305834327,
+      "mean": 0.8085686555198217
     },
-    "solve_seconds": 195.4,
+    "solve_seconds": 18726.9,
     "plausible": true,
     "problems": [],
     "diagnostics": {
-      "equations": "stokes",
-      "scheme": "mixed_stokes",
+      "equations": "navier_stokes",
+      "scheme": "IPCS_ABCN",
       "simulation_mode": "steady",
-      "stop_reason": "linear_solve_converged",
-      "steps": 1,
-      "time_s": 120.93691643,
-      "dt_final": null,
+      "stop_reason": "max_steps",
+      "steps": 1250,
+      "time_s": 249.99999999999434,
+      "dt_final": 0.2,
       "wind_speed": 5.0,
-      "wind_dir_deg": 225.0,
+      "wind_dir_deg": 270.0,
       "wind_vector_xy": [
-        0.7071067811865474,
-        0.7071067811865477
+        1.0,
+        2.4492935982947064e-16
       ],
-      "inlet_marker": -5,
-      "outlet_marker": -6,
+      "inlet_marker": -3,
+      "outlet_marker": -4,
       "closed_cavity": false,
       "wall_model": "noslip",
       "side_top_boundary": "slip",
@@ -90,8 +95,8 @@
       "power_law_alpha": 0.2,
       "rho": 1.2,
       "nu": 1.5e-05,
-      "nu_t": 0.0,
-      "nu_eff": 1.5e-05,
+      "nu_t": 5.0,
+      "nu_eff": 5.000015,
       "num_buildings": 120,
       "mesh_hmin": 0.040433656494828926,
       "degrees_of_freedom": {
@@ -102,27 +107,27 @@
         "wall": 57944,
         "roof": 6845,
         "ground": 22656,
-        "inlet": 1115,
-        "outlet": 604,
+        "inlet": 539,
+        "outlet": 1151,
         "top": 1170,
-        "side": 1690
+        "side": 1719
       },
       "fields": {
         "velocity": {
           "dim": 3,
           "unit": "m/s",
           "finite": true,
-          "min": -2.8206175426897437,
-          "max": 11.904521207802128,
-          "l2_norm": 1290.7625152308306
+          "min": -6.276096807404089,
+          "max": 12.403029399650215,
+          "l2_norm": 1672.2730746271923
         },
         "pressure": {
           "dim": 1,
           "unit": "m^2/s^2",
           "finite": true,
-          "min": -0.00020666800646283604,
-          "max": 0.0006793124833270576,
-          "l2_norm": 0.002665819537181823
+          "min": -55.4100593436367,
+          "max": 131.14540651509247,
+          "l2_norm": 2096.4703253859784
         },
         "speed": {
           "dim": 1,
@@ -131,28 +136,37 @@
         }
       },
       "convergence": {
-        "relative_update": null,
-        "divergence_rms": 0.01335202245059148,
-        "flux_imbalance": 0.00012618665389446595,
-        "cfl": null,
-        "slip_normal_velocity_rms": 1.3957311338305875e-14,
+        "relative_update": 4.2839701878241167e-07,
+        "divergence_rms": 0.029881836401088123,
+        "flux_imbalance": 0.0002990878855990532,
+        "cfl": 62.588708845018154,
+        "slip_normal_velocity_rms": 1.1510612732855299e-14,
         "steady_tolerance": 0.0001,
         "divergence_tolerance": 0.005,
         "flux_imbalance_tolerance": 0.05,
         "steady_window": 5
       },
       "linear_solves": {
-        "stokes": {
+        "velocity": {
           "converged_reason": 2,
-          "iterations": 26,
-          "residual_norm": 0.3053259151918568
+          "iterations": 8,
+          "residual_norm": 0.00046841426380487086
+        },
+        "pressure": {
+          "converged_reason": 2,
+          "iterations": 9,
+          "residual_norm": 7.81509105817453e-09
+        },
+        "correction": {
+          "converged_reason": 2,
+          "iterations": 33,
+          "residual_norm": 3.463433114332951e-05
         }
       },
       "residual_status": "last-step PETSc KSP residual norms are recorded when available; a full nonlinear CFD residual is not assembled by this wrapper"
     },
     "dtcc_core_revision": "17c6efe44ca7622e6ef4a802627dfce3ef7f6174",
     "dtcc_sim_revision": "0.1.0",
-    "solved_at": "2026-10-06T11:24:58.622837+00:00",
-    "regated_note": "vertex-median crossing check moved to sample_wind.py grid check"
+    "solved_at": "2026-10-09T00:12:37.070476+00:00"
   }
 }
