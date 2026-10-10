@@ -2223,8 +2223,10 @@ Page 21's boxes are core's footprints and heights (the `buildings` Dataset) but 
 `city_surface_mesh` over the same area, core defaults: 26 s, 23,468 vertices,
 46,507 triangles, terrain included. Core merges footprints closer than 0.5 m,
 drops those under 15 m² and simplifies detail under 0.5 m: **120 buildings from
-297 footprints** (each building is two markers; terrain is -2). Heights agree
-with the boxes: the tallest is 36.6 m in both. Winding is consistent (0 of
+297 footprints** (each building is a roof marker and a wall marker; terrain is
+-2). Heights: roofs at median 10.2 m (p90 23.1, max 41.8) against the boxes'
+9.0 m (p90 19.7, max 36.6); core's are measured from each building's lowest wall
+bottom, which on a slope is below the box's ground. Winding is consistent (0 of
 51,964 shared building edges run the same way twice) and every roof faces up.
 
 The page loads core's `city.obj` byte for byte (428 KB gzipped, against 16 KB
@@ -2232,7 +2234,11 @@ for the footprints). `parseObj` takes the scene origin off in float64: SWEREF
 northings are ~6.4e6, where float32 steps by 0.5 m. `sample_surface.py` writes the
 two sidecars: `ground.f32` (each vertex flattened onto the flat map: terrain and
 wall bottoms to 0, other building vertices to their building's lowest wall
-bottom, so roofs stay flat) and `speed.f32`, the `ns-270` wind 2 m along each
+bottom, so roofs stay flat). **Trap, shipped once in #27:** roof and walls carry
+different markers and a roof touches no terrain, so grouping by marker put every
+roof (5,849 triangles) on the ground: open boxes, which Vasilis spotted. Buildings
+are now grouped by connectivity, and the script refuses to write if any up-facing
+building triangle ends below 1 m and `speed.f32`, the `ns-270` wind 2 m along each
 vertex normal. Right at a surface the speed is 0 (no-slip); at 2 m the median is
 0.05 m/s and 6% exceed 1 m/s, so the colours are scaled to their own 2-98% range
 (0-1.57 m/s) and labelled as where the wind reaches surfaces, not pedestrian
