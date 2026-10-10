@@ -22,8 +22,9 @@ const pick = <T extends string>(key: string, allowed: readonly T[], fallback: T)
   (allowed as readonly string[]).includes(query.get(key) ?? '') ? (query.get(key) as T) : fallback;
 const variant = pick('variant', VARIANTS, 'three-map');
 const basemap = pick('basemap', ['bright', 'liberty'] as const, 'bright');
-const fieldName = pick('field', ['smoke', 'wind', 'none'] as const, 'smoke');
-const buildingsKind = pick('buildings', ['boxes', 'core-mesh'] as const, 'boxes');
+const buildingsKind = pick('buildings', ['boxes', 'core-mesh'] as const, 'core-mesh');
+// A volume over the heatmap hides it, so core's mesh starts without one.
+const fieldName = pick('field', ['smoke', 'wind', 'none'] as const, buildingsKind === 'core-mesh' ? 'none' : 'smoke');
 const onMap = variant === 'three-map' || variant === 'vtk-map';
 const go = (key: string, value: string) => {
   const next = new URLSearchParams(location.search);
@@ -34,7 +35,7 @@ const go = (key: string, value: string) => {
 const ui = mountChrome({
   num: '21',
   title: '3D on the map vs in a panel',
-  expect: 'The Chalmers campus (Atlas\'s demo area) as LoD1 buildings and a volume, either drawn into the MapLibre map or in a panel beside it.',
+  expect: 'The Chalmers campus (Atlas\'s demo area) as dtcc-core\'s city surface mesh coloured by wind, or as boxes with a volume, either drawn into the MapLibre map or in a panel beside it.',
   claim: 'Where 3D goes in the Twin, on the map or in its own panel, is a business decision. This page shows what each choice looks like and costs.',
   decision: 'On the map means Three.js: only it can be drawn inside the map, under its labels and among its 3D buildings. '
     + 'vtk.js can only sit on top of the map, covering labels. In a panel, either works.',
@@ -44,7 +45,7 @@ const ui = mountChrome({
     'Neither renderer can stop the volume at MapLibre\'s own buildings: the map\'s depth buffer can\'t be sampled. The volume stops at the spike\'s own buildings.',
     'The 3D library is downloaded only when a 3D variant is open; the readouts show how much. In Atlas as spiked, both libraries sat in the entry chunk every page loads (+427 KB gzipped).',
     'Scene: 297 LoD1 buildings (dtcc-core, Lantmäteriet footprints and point cloud). Volume: smoke is dtcc-core\'s synthetic field; wind is dtcc-sim\'s full Navier-Stokes solve for this area, 5 m/s from the west, settled after 1,250 steps. Above the roofs it is real wind: aligned with the inflow, about 5 m/s at 30-60 m. Below roof height it runs far too slow, because the solve uses one constant eddy viscosity for the whole area; read the streets as sheltered, not as measured speeds. West, not Gothenburg\'s usual south-west: dtcc-sim lets air into its box through one side only, and a diagonal wind piles up against the other sides (dtcc-sim#12).',
-    'Buildings → core-mesh: dtcc-core\'s own city surface mesh, its OBJ loaded as core writes it. Core merges touching footprints, drops very small ones and adds the terrain: 120 buildings instead of 297 boxes, 46,507 triangles, 428 KB gzipped. It is coloured by the Navier-Stokes wind 2 m off each surface, scaled to its own range: where the wind reaches surfaces, not pedestrian speeds. Volume → none shows it alone. Core\'s .glb of the same mesh cannot be opened: it declares 32-bit data and writes 64-bit.',
+    'Buildings: dtcc-core\'s own city surface mesh by default, its OBJ loaded as core writes it; Buildings → boxes shows the footprints extruded in the browser instead, which the FPS and memory findings above were measured with. Core merges touching footprints, drops very small ones and adds the terrain: 120 buildings instead of 297 boxes, 46,507 triangles, 428 KB gzipped. It is coloured by the Navier-Stokes wind 2 m off each surface, scaled to its own range: where the wind reaches surfaces, not pedestrian speeds. It starts with no volume; pick smoke or wind to add one. Core\'s .glb of the same mesh cannot be opened: it declares 32-bit data and writes 64-bit.',
   ],
   controls: [
     {kind: 'select', id: 'variant', label: 'View', options: [...VARIANTS], value: variant, onChange: v => go('variant', v)},
