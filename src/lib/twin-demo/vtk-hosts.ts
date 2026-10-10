@@ -38,11 +38,31 @@ function createVtkScene(host: HTMLElement, data: SpikeScene, background: [number
     .setNormals(vtkDataArray.newInstance({ name: "normals", values: data.buildings.normals, numberOfComponents: 3 }));
   const mapper = vtkMapper.newInstance();
   mapper.setInputData(poly);
-  mapper.setScalarVisibility(false);
+  const { colors } = data.buildings;
+  if (colors) {
+    // The heatmap's colours are final RGB, already through the shared colormap: no lookup table.
+    poly.getPointData().setScalars(vtkDataArray.newInstance({ name: "rgb", values: colors, numberOfComponents: 3 }));
+    mapper.setColorModeToDirectScalars();
+  } else mapper.setScalarVisibility(false);
   const actor = vtkActor.newInstance();
   actor.setMapper(mapper);
   actor.getProperty().setColor(0.72, 0.77, 0.81);
+  // A heatmap's colour is the data: mostly ambient, so faces at a grazing angle to the light don't go dark.
+  // Back faces culled, as Three.js does by default: drawn, they speckled core's walls. Safe because core's winding
+  // is consistent and outward (NOTES, "dtcc-core's city surface mesh on page 21").
+  if (colors) actor.getProperty().set({ ambient: 0.6, diffuse: 0.4, backfaceCulling: true });
   renderer.addActor(actor);
+  const camera = renderer.getActiveCamera();
+  camera.setViewAngle(PANEL_START.fovDeg);
+  // trap: delete() releases vtk.js's objects but not the WebGL context, which then lives until GC.
+  const release = () => {
+    const gl = (
+      view.getApiSpecificRenderWindow() as unknown as { getContext(): WebGL2RenderingContext | null }
+    ).getContext();
+    view.delete();
+    gl?.getExtension("WEBGL_lose_context")?.loseContext();
+  };
+  if (!data.field) return { view, renderer, camera, release };
 
   const { dims, origin, spacing, range, speed } = data.field;
   const image = vtkImageData.newInstance();
@@ -66,17 +86,6 @@ function createVtkScene(host: HTMLElement, data: SpikeScene, background: [number
   // Unit distance = step, so each sample carries exactly the transfer function's opacity, as three-scene.ts does.
   volume.getProperty().setScalarOpacityUnitDistance(0, VOLUME_STEP_M);
   renderer.addVolume(volume);
-
-  const camera = renderer.getActiveCamera();
-  camera.setViewAngle(PANEL_START.fovDeg);
-  // trap: delete() releases vtk.js's objects but not the WebGL context, which then lives until GC.
-  const release = () => {
-    const gl = (
-      view.getApiSpecificRenderWindow() as unknown as { getContext(): WebGL2RenderingContext | null }
-    ).getContext();
-    view.delete();
-    gl?.getExtension("WEBGL_lose_context")?.loseContext();
-  };
   return { view, renderer, camera, release };
 }
 

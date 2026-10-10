@@ -448,6 +448,21 @@ test.describe('21-twin-map-vs-panel', () => {
       await page.screenshot({path: `screens/combined/21-twin-map-vs-panel-${variant}.png`});
     });
   }
+  for (const variant of ['three-map', 'vtk-map', 'three-panel', 'vtk-panel'] as const) {
+    test(`core mesh heatmap, ${variant}`, async ({page}) => {
+      test.slow();
+      const errors: string[] = [];
+      page.on('pageerror', e => errors.push(`pageerror: ${e.message}`));
+      await page.goto(`/21-twin-map-vs-panel/?variant=${variant}&buildings=core-mesh&field=none`);
+      await page.waitForFunction(() => (window as any).__bench?.ready === true, null, {timeout: 60_000});
+      expect(errors, errors.join('\n')).toEqual([]);
+      await expect(page.locator('#host > .failure')).toHaveCount(0);
+      // FAILS IF: the page stops drawing core's own mesh (back to browser-made boxes) or drops the heatmap's caveat.
+      await expect(page.locator('.readouts')).toContainText("in dtcc-core's city surface mesh, with terrain (46507 triangles)");
+      await expect(page.locator('.readouts')).toContainText('not pedestrian wind speeds');
+      await page.screenshot({path: `screens/combined/21-twin-map-vs-panel-core-mesh-${variant}.png`});
+    });
+  }
   test('wind volume (dtcc-sim, Navier-Stokes)', async ({page}) => {
     test.slow();
     const errors: string[] = [];
