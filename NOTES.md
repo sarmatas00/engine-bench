@@ -2214,3 +2214,44 @@ from 270 degrees 60-150 m up, north/south edges and middle at 8.7/9.4/9.3 m/s:
 no jet. 60-100 m runs 19% over the inlet profile, likely the air squeezed between
 the buildings and the 200 m slip lid (not checked). Street level is still near
 still: constant `nu_t` 5. Page 21 now shows this field (`WIND_RUN=ns-270`).
+
+### dtcc-core's city surface mesh on page 21 (`?buildings=core-mesh`)
+
+Page 21's boxes are core's footprints and heights (the `buildings` Dataset) but the
+3D is the browser's: each raw footprint extruded. `export_city_mesh.py` (in
+`dtcc-engine-fixtures`, core `9b4e9b9`) asks core for its own
+`city_surface_mesh` over the same area, core defaults: 26 s, 23,468 vertices,
+46,507 triangles, terrain included. Core merges footprints closer than 0.5 m,
+drops those under 15 m² and simplifies detail under 0.5 m: **120 buildings from
+297 footprints** (each building is two markers; terrain is -2). Heights agree
+with the boxes: the tallest is 36.6 m in both. Winding is consistent (0 of
+51,964 shared building edges run the same way twice) and every roof faces up.
+
+The page loads core's `city.obj` byte for byte (428 KB gzipped, against 16 KB
+for the footprints). `parseObj` takes the scene origin off in float64: SWEREF
+northings are ~6.4e6, where float32 steps by 0.5 m. `sample_surface.py` writes the
+two sidecars: `ground.f32` (each vertex flattened onto the flat map: terrain and
+wall bottoms to 0, other building vertices to their building's lowest wall
+bottom, so roofs stay flat) and `speed.f32`, the `ns-270` wind 2 m along each
+vertex normal. Right at a surface the speed is 0 (no-slip); at 2 m the median is
+0.05 m/s and 6% exceed 1 m/s, so the colours are scaled to their own 2-98% range
+(0-1.57 m/s) and labelled as where the wind reaches surfaces, not pedestrian
+speeds. The windward west edge and the first faces it meets come out hottest.
+
+**Two dtcc-core export problems, unreported:**
+
+- **The .glb can't be opened.** `dtcc_core/io/meshes.py` writes
+  `mesh.faces.flatten().tobytes()` and `mesh.vertices.flatten().tobytes()`
+  (numpy's int64 and float64) under accessors declared `UNSIGNED_INT` and
+  `FLOAT`: the buffers are exactly twice the declared size, and read as 64-bit
+  they equal the OBJ. Still so in core `18eb176`. The glTF is also z-up with
+  absolute SWEREF coordinates, so even fixed it would lie on its side, 6,400 km
+  from the origin, in a standard viewer.
+- **No FBX:** `RuntimeError: Unable to save mesh (Mesh); format .fbx not
+  supported` in this image (no assimp).
+
+Rendering the heatmap the same in both libraries took two fixes: Three.js
+takes vertex colours as linear light and brightens them on output, so the sRGB
+colormap is converted to linear first; vtk.js got mostly-ambient lighting and
+back-face culling (drawn back faces speckled the walls). Frame times for this
+view are not measured yet.

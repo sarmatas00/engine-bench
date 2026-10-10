@@ -69,14 +69,29 @@ export class ThreeSpikeScene {
   private readonly camera = new THREE.Camera();
   private readonly depthScene = new THREE.Scene();
   private readonly depthTarget = new THREE.WebGLRenderTarget(1, 1, { depthBuffer: true });
-  private readonly volumeMaterial: THREE.ShaderMaterial;
+  /** null when the scene has no volume: then the depth pass is skipped too. */
+  private readonly volumeMaterial: THREE.ShaderMaterial | null = null;
   private readonly disposables: { dispose(): void }[] = [];
 
   constructor(data: SpikeScene) {
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute("position", new THREE.BufferAttribute(data.buildings.positions, 3));
     geometry.setAttribute("normal", new THREE.BufferAttribute(data.buildings.normals, 3));
-    const buildingMaterial = new THREE.MeshLambertMaterial({ color: 0xb8c4cf });
+    const { colors } = data.buildings;
+    if (colors) {
+      // trap: Three.js takes vertex colours as linear light and brightens them on output, which washes the sRGB
+      // colormap out (every dark blue turns pale). Convert to linear, so the screen shows the colormap's own colours.
+      const linear = new Float32Array(colors.length);
+      const c = new THREE.Color();
+      for (let i = 0; i < colors.length; i += 3) {
+        c.setRGB(colors[i]! / 255, colors[i + 1]! / 255, colors[i + 2]! / 255, THREE.SRGBColorSpace);
+        linear.set([c.r, c.g, c.b], i);
+      }
+      geometry.setAttribute("color", new THREE.BufferAttribute(linear, 3));
+    }
+    const buildingMaterial = colors
+      ? new THREE.MeshLambertMaterial({ vertexColors: true })
+      : new THREE.MeshLambertMaterial({ color: 0xb8c4cf });
     this.scene.add(new THREE.Mesh(geometry, buildingMaterial));
     this.depthScene.add(new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ colorWrite: false })));
     this.scene.add(new THREE.AmbientLight(0xffffff, 1.6));
@@ -85,6 +100,8 @@ export class ThreeSpikeScene {
     this.scene.add(sun);
 
     this.depthTarget.depthTexture = new THREE.DepthTexture(1, 1);
+    this.disposables.push(geometry, buildingMaterial, this.depthTarget, this.depthTarget.depthTexture);
+    if (!data.field) return;
     const { dims, origin, spacing, range, speed } = data.field;
     const texture = new THREE.Data3DTexture(speed, ...dims);
     texture.format = THREE.RedFormat;
@@ -125,15 +142,7 @@ export class ThreeSpikeScene {
     const volume = new THREE.Mesh(box, this.volumeMaterial);
     volume.renderOrder = 1;
     this.scene.add(volume);
-    this.disposables.push(
-      geometry,
-      buildingMaterial,
-      this.depthTarget,
-      this.depthTarget.depthTexture,
-      texture,
-      this.volumeMaterial,
-      box,
-    );
+    this.disposables.push(texture, this.volumeMaterial, box);
   }
 
   /** Draws into whatever framebuffer `renderer` targets, from local metres to clip space through `sceneToClip`. */
@@ -146,6 +155,11 @@ export class ThreeSpikeScene {
   ) {
     this.camera.projectionMatrix.copy(sceneToClip);
     this.camera.projectionMatrixInverse.copy(sceneToClip).invert();
+    if (!this.volumeMaterial) {
+      renderer.setRenderTarget(target);
+      renderer.render(this.scene, this.camera);
+      return;
+    }
     const uniforms = this.volumeMaterial.uniforms as Record<"uClipToScene" | "uEye" | "uResolution", THREE.IUniform>;
     uniforms.uClipToScene.value.copy(this.camera.projectionMatrixInverse);
     // The eye is where every ray through the frustum meets: clip (0, 0, 1, 0) taken back to the scene.

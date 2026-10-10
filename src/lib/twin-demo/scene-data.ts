@@ -1,7 +1,8 @@
 // Ported from the dtcc-twin spike (docs/twin-spike/). One change: roofs are cut with earcut, which Three.js's ShapeUtils
 // wraps, so the vtk.js views don't download Three.js just to triangulate. Loaded only once a 3D view is picked.
 import earcut from "earcut";
-import type { BuildingsJson, FieldJson } from "./scene-files";
+import { colormap } from "../colormap";
+import type { BuildingsJson, CoreMeshFiles, FieldJson } from "./scene-files";
 
 /**
  * The scene every variant draws, in local metres: x and y along SWEREF 99 TM's east and north axes, measured from the
@@ -10,33 +11,93 @@ import type { BuildingsJson, FieldJson } from "./scene-files";
 export type SpikeScene = {
   /** The local origin in SWEREF 99 TM metres. */
   origin: [number, number];
-  buildings: { positions: Float32Array; normals: Float32Array; count: number; triangles: number };
+  /** `colors` (RGB 0-255 per vertex) only for the core mesh's heatmap; the boxes are one flat grey. */
+  buildings: { positions: Float32Array; normals: Float32Array; colors: Uint8Array | null; count: number; triangles: number };
+  /** null when no volume is drawn. */
   field: {
     dims: [number, number, number];
     origin: [number, number, number];
     spacing: [number, number, number];
     range: [number, number];
     speed: Float32Array;
-  };
+  } | null;
 };
 
-export function buildScene(buildings: BuildingsJson, field: FieldJson, speed: Float32Array): SpikeScene {
+/** `coreMesh`, when given, replaces the extruded footprints with dtcc-core's city surface mesh and its heatmap. */
+export function buildScene(
+  buildings: BuildingsJson,
+  field: FieldJson | null,
+  speed: Float32Array | null,
+  coreMesh: CoreMeshFiles | null = null,
+): SpikeScene {
   const [minX, minY, maxX, maxY] = buildings.bounds;
   const origin: [number, number] = [(minX + maxX) / 2, (minY + maxY) / 2];
-  const [nx, ny, nz] = field.dims;
-  if (speed.length !== nx * ny * nz)
-    throw new Error(`speed.f32 holds ${speed.length} values, field.json says ${nx * ny * nz}`);
-  return {
-    origin,
-    buildings: extrude(buildings.buildings, origin),
-    field: {
+  let volume: SpikeScene["field"] = null;
+  if (field && speed) {
+    const [nx, ny, nz] = field.dims;
+    if (speed.length !== nx * ny * nz)
+      throw new Error(`speed.f32 holds ${speed.length} values, field.json says ${nx * ny * nz}`);
+    volume = {
       dims: field.dims,
       origin: [field.origin[0] - origin[0], field.origin[1] - origin[1], field.origin[2]],
       spacing: field.spacing,
       range: field.speed_range,
       speed,
-    },
+    };
+  }
+  return {
+    origin,
+    buildings: coreMesh ? surface(coreMesh, origin) : { ...extrude(buildings.buildings, origin), colors: null },
+    field: volume,
   };
+}
+
+/**
+ * An OBJ's vertices (`v x y z`) and triangles (`f a b c`, 1-based, `a/b/c` forms allowed), x and y taken off `origin`
+ * while still in float64: SWEREF northings are ~6.4e6, where float32 steps by 0.5 m.
+ */
+export function parseObj(text: string, [ox, oy]: [number, number]) {
+  const xyz: number[] = [];
+  const faces: number[] = [];
+  for (const line of text.split("\n")) {
+    if (line.startsWith("v ")) {
+      const [x, y, z] = line.slice(2).trim().split(/\s+/).map(Number);
+      xyz.push(x! - ox, y! - oy, z!);
+    } else if (line.startsWith("f ")) {
+      const corners = line.slice(2).trim().split(/\s+/);
+      if (corners.length !== 3) throw new Error(`OBJ face with ${corners.length} corners; expected triangles`);
+      for (const c of corners) faces.push(Number.parseInt(c, 10) - 1);
+    }
+  }
+  return { positions: new Float64Array(xyz), faces: new Uint32Array(faces) };
+}
+
+/** Core's mesh flattened onto the map (z minus `ground`), flat-shaded like the boxes, coloured by the wind near it. */
+function surface({ obj, ground, speed, meta }: CoreMeshFiles, origin: [number, number]) {
+  const { positions: xyz, faces } = parseObj(obj, origin);
+  const vertexCount = xyz.length / 3;
+  if (ground.length !== vertexCount || speed.length !== vertexCount)
+    throw new Error(`core mesh: ${vertexCount} vertices, ${ground.length} ground and ${speed.length} speed values`);
+  const count = faces.length;
+  const positions = new Float32Array(count * 3);
+  const normals = new Float32Array(count * 3);
+  const colors = new Uint8Array(count * 3);
+  const [lo, hi] = meta.speed_range;
+  const p = [0, 0, 0].map(() => [0, 0, 0]);
+  for (let t = 0; t < count; t += 3) {
+    for (let c = 0; c < 3; c++) {
+      const v = faces[t + c]!;
+      p[c] = [xyz[3 * v]!, xyz[3 * v + 1]!, xyz[3 * v + 2]! - ground[v]!];
+      positions.set(p[c]!, 3 * (t + c));
+      colors.set(colormap(speed[v]!, lo, hi), 3 * (t + c));
+    }
+    const [a, b, d] = p as [number[], number[], number[]];
+    const u = [b[0]! - a[0]!, b[1]! - a[1]!, b[2]! - a[2]!], w = [d[0]! - a[0]!, d[1]! - a[1]!, d[2]! - a[2]!];
+    const n = [u[1]! * w[2]! - u[2]! * w[1]!, u[2]! * w[0]! - u[0]! * w[2]!, u[0]! * w[1]! - u[1]! * w[0]!];
+    const length = Math.hypot(n[0]!, n[1]!, n[2]!) || 1;
+    for (let c = 0; c < 3; c++) normals.set([n[0]! / length, n[1]! / length, n[2]! / length], 3 * (t + c));
+  }
+  return { positions, normals, colors, count, triangles: count / 3 };
 }
 
 /** Flat-shaded prisms: a roof and one quad per wall, non-indexed so every face keeps its own normal. */
