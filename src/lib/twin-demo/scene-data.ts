@@ -12,7 +12,9 @@ export type SpikeScene = {
   /** The local origin in SWEREF 99 TM metres. */
   origin: [number, number];
   /** `colors` (RGB 0-255 per vertex) only for the core mesh's heatmap; the boxes are one flat grey. */
-  buildings: { positions: Float32Array; normals: Float32Array; colors: Uint8Array | null; count: number; triangles: number };
+  buildings: SceneMesh;
+  /** Drawn see-through over `buildings` (OVERLAY_TINT at OVERLAY_OPACITY), or null. */
+  overlay: SceneMesh | null;
   /** null when no volume is drawn. */
   field: {
     dims: [number, number, number];
@@ -23,12 +25,23 @@ export type SpikeScene = {
   } | null;
 };
 
-/** `coreMesh`, when given, replaces the extruded footprints with dtcc-core's city surface mesh and its heatmap. */
+/** Flat-shaded, non-indexed triangles; `colors` (RGB 0-255 per vertex) only for the core mesh's heatmap. */
+export type SceneMesh = { positions: Float32Array; normals: Float32Array; colors: Uint8Array | null; count: number; triangles: number };
+
+/** The see-through core mesh in the `both` view: one tint, so where it and the boxes differ shows as shape, not colour. */
+export const OVERLAY_TINT: [number, number, number] = [0.18, 0.44, 0.84];
+export const OVERLAY_OPACITY = 0.35;
+
+/**
+ * `coreMesh`, when given, replaces the extruded footprints with dtcc-core's city surface mesh and its heatmap; with
+ * `overlay`, the footprints stay and core's mesh is drawn see-through over them instead, for comparing the two.
+ */
 export function buildScene(
   buildings: BuildingsJson,
   field: FieldJson | null,
   speed: Float32Array | null,
   coreMesh: CoreMeshFiles | null = null,
+  overlay = false,
 ): SpikeScene {
   const [minX, minY, maxX, maxY] = buildings.bounds;
   const origin: [number, number] = [(minX + maxX) / 2, (minY + maxY) / 2];
@@ -47,7 +60,8 @@ export function buildScene(
   }
   return {
     origin,
-    buildings: coreMesh ? surface(coreMesh, origin) : { ...extrude(buildings.buildings, origin), colors: null },
+    buildings: coreMesh && !overlay ? surface(coreMesh, origin) : { ...extrude(buildings.buildings, origin), colors: null },
+    overlay: coreMesh && overlay ? { ...withoutGround(surface(coreMesh, origin)), colors: null } : null,
     field: volume,
   };
 }
@@ -98,6 +112,24 @@ function surface({ obj, ground, speed, meta }: CoreMeshFiles, origin: [number, n
     for (let c = 0; c < 3; c++) normals.set([n[0]! / length, n[1]! / length, n[2]! / length], 3 * (t + c));
   }
   return { positions, normals, colors, count, triangles: count / 3 };
+}
+
+/**
+ * The mesh minus its terrain: after flattening, terrain is every up-facing triangle with all three corners at z = 0,
+ * which no roof or wall can be. For the overlay, where a see-through ground would tint every box beneath it.
+ */
+function withoutGround(mesh: SceneMesh): SceneMesh {
+  const keep: number[] = [];
+  for (let t = 0; t < mesh.triangles; t++) {
+    const flat = [0, 1, 2].every((c) => Math.abs(mesh.positions[9 * t + 3 * c + 2]!) < 0.01);
+    if (!(flat && mesh.normals[9 * t + 2]! > 0.9)) keep.push(t);
+  }
+  const pick = (array: Float32Array) => {
+    const out = new Float32Array(keep.length * 9);
+    keep.forEach((t, i) => out.set(array.subarray(9 * t, 9 * t + 9), 9 * i));
+    return out;
+  };
+  return { positions: pick(mesh.positions), normals: pick(mesh.normals), colors: null, count: keep.length * 3, triangles: keep.length };
 }
 
 /** Flat-shaded prisms: a roof and one quad per wall, non-indexed so every face keeps its own normal. */

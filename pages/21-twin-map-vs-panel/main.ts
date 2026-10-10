@@ -22,9 +22,9 @@ const pick = <T extends string>(key: string, allowed: readonly T[], fallback: T)
   (allowed as readonly string[]).includes(query.get(key) ?? '') ? (query.get(key) as T) : fallback;
 const variant = pick('variant', VARIANTS, 'three-map');
 const basemap = pick('basemap', ['bright', 'liberty'] as const, 'bright');
-const buildingsKind = pick('buildings', ['boxes', 'core-mesh'] as const, 'core-mesh');
-// A volume over the heatmap hides it, so core's mesh starts without one.
-const fieldName = pick('field', ['smoke', 'wind', 'none'] as const, buildingsKind === 'core-mesh' ? 'none' : 'smoke');
+const buildingsKind = pick('buildings', ['boxes', 'core-mesh', 'both'] as const, 'core-mesh');
+// A volume over the heatmap (or the see-through comparison) hides it, so those start without one.
+const fieldName = pick('field', ['smoke', 'wind', 'none'] as const, buildingsKind === 'boxes' ? 'smoke' : 'none');
 const onMap = variant === 'three-map' || variant === 'vtk-map';
 const go = (key: string, value: string) => {
   const next = new URLSearchParams(location.search);
@@ -45,12 +45,12 @@ const ui = mountChrome({
     'Neither renderer can stop the volume at MapLibre\'s own buildings: the map\'s depth buffer can\'t be sampled. The volume stops at the spike\'s own buildings.',
     'The 3D library is downloaded only when a 3D variant is open; the readouts show how much. In Atlas as spiked, both libraries sat in the entry chunk every page loads (+427 KB gzipped).',
     'Scene: 297 LoD1 buildings (dtcc-core, Lantmäteriet footprints and point cloud). Volume: smoke is dtcc-core\'s synthetic field; wind is dtcc-sim\'s full Navier-Stokes solve for this area, 5 m/s from the west, settled after 1,250 steps. Above the roofs it is real wind: aligned with the inflow, about 5 m/s at 30-60 m. Below roof height it runs far too slow, because the solve uses one constant eddy viscosity for the whole area; read the streets as sheltered, not as measured speeds. West, not Gothenburg\'s usual south-west: dtcc-sim lets air into its box through one side only, and a diagonal wind piles up against the other sides (dtcc-sim#12).',
-    'Buildings: dtcc-core\'s own city surface mesh by default, its OBJ loaded as core writes it; Buildings → boxes shows the footprints extruded in the browser instead, which the FPS and memory findings above were measured with. Core merges touching footprints, drops very small ones and adds the terrain: 120 buildings instead of 297 boxes, 46,507 triangles, 428 KB gzipped. It is coloured by the Navier-Stokes wind 2 m off each surface, scaled to its own range: where the wind reaches surfaces, not pedestrian speeds. It starts with no volume; pick smoke or wind to add one. Core\'s .glb of the same mesh cannot be opened: it declares 32-bit data and writes 64-bit.',
+    'Buildings: dtcc-core\'s own city surface mesh by default, its OBJ loaded as core writes it; Buildings → boxes shows the footprints extruded in the browser instead, which the FPS and memory findings above were measured with. Core merges touching footprints, drops very small ones and adds the terrain: 120 buildings instead of 297 boxes, 46,507 triangles, 428 KB gzipped. It is coloured by the Navier-Stokes wind 2 m off each surface, scaled to its own range: where the wind reaches surfaces, not pedestrian speeds. It starts with no volume; pick smoke or wind to add one. Buildings → both draws core\'s mesh see-through over the boxes, to compare the two shapes. Core\'s .glb of the same mesh cannot be opened: it declares 32-bit data and writes 64-bit.',
   ],
   controls: [
     {kind: 'select', id: 'variant', label: 'View', options: [...VARIANTS], value: variant, onChange: v => go('variant', v)},
     {kind: 'select', id: 'basemap', label: 'Basemap', options: ['bright', 'liberty'], value: basemap, onChange: v => go('basemap', v)},
-    {kind: 'select', id: 'buildings', label: 'Buildings', options: ['boxes', 'core-mesh'], value: buildingsKind, onChange: v => go('buildings', v)},
+    {kind: 'select', id: 'buildings', label: 'Buildings', options: ['boxes', 'core-mesh', 'both'], value: buildingsKind, onChange: v => go('buildings', v)},
     {kind: 'select', id: 'field', label: 'Volume', options: ['smoke', 'wind', 'none'], value: fieldName, onChange: v => go('field', v)},
     {kind: 'button', id: 'orbit', label: 'Orbit test (8 s)', onClick: () => void orbitTest()},
   ],
@@ -106,10 +106,12 @@ map.on('render', () => frameStamps.push(performance.now()));
 const mapLoaded = new Promise<void>(resolve => map.once('load', () => resolve()));
 
 async function start() {
-  const files = await loadSceneFiles(fieldName, buildingsKind === 'core-mesh');
+  const files = await loadSceneFiles(fieldName, buildingsKind !== 'boxes');
   ui.setReadout('scene data', `${Math.round(files.bytes / 1024)} KB (${buildingsKind}, ${fieldName} volume)`);
   if (files.field?.source) ui.setReadout('volume source', files.field.source);
-  if (files.coreMesh) ui.setReadout('surface source', files.coreMesh.meta.source);
+  if (files.coreMesh) ui.setReadout('surface source', buildingsKind === 'both'
+    ? 'dtcc-core city surface mesh, buildings only, drawn see-through (blue) over the browser-extruded footprints (grey)'
+    : files.coreMesh.meta.source);
   await mapLoaded;
   ui.setReadout('page + map JS downloaded', `${scriptKb(0)} KB (0 if your browser had it cached)`);
   if (variant === 'map-only') return;
@@ -117,7 +119,7 @@ async function start() {
   // The lazy part: nothing below is in the page's first download.
   const loadMark = performance.now();
   const {buildScene} = await import('@lib/twin-demo/scene-data');
-  const scene = buildScene(files.buildings, files.field, files.speed, files.coreMesh);
+  const scene = buildScene(files.buildings, files.field, files.speed, files.coreMesh, buildingsKind === 'both');
   if (variant === 'three-map') {
     const {threeMapLayer} = await import('@lib/twin-demo/three-hosts');
     const labels = map.getStyle().layers.find(layer => layer.type === 'symbol')?.id;
@@ -137,9 +139,11 @@ async function start() {
   }
   map.triggerRepaint();
   ui.setReadout('3D library downloaded on demand', `${scriptKb(loadMark)} KB in ${Math.round(performance.now() - loadMark)} ms (0 KB if cached)`);
-  ui.setReadout('buildings', files.coreMesh
-    ? `${files.coreMesh.meta.buildings} in dtcc-core's city surface mesh, with terrain (${scene.buildings.triangles} triangles)`
-    : `${files.buildings.buildings.length} footprints extruded in the browser (${scene.buildings.triangles} triangles)`);
+  const boxes = `${files.buildings.buildings.length} footprints extruded in the browser`;
+  const core = `${files.coreMesh?.meta.buildings} in dtcc-core's city surface mesh`;
+  ui.setReadout('buildings', buildingsKind === 'both'
+    ? `${boxes} (${scene.buildings.triangles} triangles), under ${core} (${scene.overlay?.triangles} triangles, see-through)`
+    : buildingsKind === 'core-mesh' ? `${core}, with terrain (${scene.buildings.triangles} triangles)` : `${boxes} (${scene.buildings.triangles} triangles)`);
 }
 
 /** The orbit the twin spike was measured with: zoom 15.6, pitch 60, one turn in 8 s, rAF gaps. */
