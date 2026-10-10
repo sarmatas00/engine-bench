@@ -12,7 +12,15 @@ import vtkVolumeMapper from "@kitware/vtk.js/Rendering/Core/VolumeMapper";
 import vtkGenericRenderWindow from "@kitware/vtk.js/Rendering/Misc/GenericRenderWindow";
 import type { Map as MapLibreMap } from "maplibre-gl6";
 import { sweref } from "./sweref";
-import { opacityNodes, PANEL_START, type SpikeScene, VOLUME_STEP_M } from "./scene-data";
+import {
+  OVERLAY_OPACITY,
+  OVERLAY_TINT,
+  opacityNodes,
+  PANEL_START,
+  type SceneMesh,
+  type SpikeScene,
+  VOLUME_STEP_M,
+} from "./scene-data";
 
 const STOPS: [number, number, number][] = [
   [33, 102, 172],
@@ -22,36 +30,44 @@ const STOPS: [number, number, number][] = [
   [200, 30, 30],
 ];
 
+/** One scene mesh as a vtk.js actor: `color` for plain meshes, the mesh's own RGB for the heatmap. */
+function meshActor(mesh: SceneMesh, color: [number, number, number]) {
+  const poly = vtkPolyData.newInstance();
+  poly.getPoints().setData(mesh.positions, 3);
+  const cells = new Uint32Array(mesh.triangles * 4);
+  for (let t = 0; t < mesh.triangles; t++) cells.set([3, 3 * t, 3 * t + 1, 3 * t + 2], 4 * t);
+  poly.getPolys().setData(cells);
+  poly.getPointData().setNormals(vtkDataArray.newInstance({ name: "normals", values: mesh.normals, numberOfComponents: 3 }));
+  const mapper = vtkMapper.newInstance();
+  mapper.setInputData(poly);
+  if (mesh.colors) {
+    // The heatmap's colours are final RGB, already through the shared colormap: no lookup table.
+    poly.getPointData().setScalars(vtkDataArray.newInstance({ name: "rgb", values: mesh.colors, numberOfComponents: 3 }));
+    mapper.setColorModeToDirectScalars();
+  } else mapper.setScalarVisibility(false);
+  const actor = vtkActor.newInstance();
+  actor.setMapper(mapper);
+  actor.getProperty().setColor(...color);
+  // A heatmap's colour is the data: mostly ambient, so faces at a grazing angle to the light don't go dark.
+  // Back faces culled, as Three.js does by default: drawn, they speckled core's walls. Safe because core's winding
+  // is consistent and outward (NOTES, "dtcc-core's city surface mesh on page 21").
+  if (mesh.colors) actor.getProperty().set({ ambient: 0.6, diffuse: 0.4, backfaceCulling: true });
+  return actor;
+}
+
 /** vtk.js's render window in `host`, with the spike's buildings and volume, matching three-scene.ts's look. */
 function createVtkScene(host: HTMLElement, data: SpikeScene, background: [number, number, number, number]) {
   const view = vtkGenericRenderWindow.newInstance({ background, listenWindowResize: false });
   view.setContainer(host);
   const renderer = view.getRenderer();
 
-  const poly = vtkPolyData.newInstance();
-  poly.getPoints().setData(data.buildings.positions, 3);
-  const cells = new Uint32Array(data.buildings.triangles * 4);
-  for (let t = 0; t < data.buildings.triangles; t++) cells.set([3, 3 * t, 3 * t + 1, 3 * t + 2], 4 * t);
-  poly.getPolys().setData(cells);
-  poly
-    .getPointData()
-    .setNormals(vtkDataArray.newInstance({ name: "normals", values: data.buildings.normals, numberOfComponents: 3 }));
-  const mapper = vtkMapper.newInstance();
-  mapper.setInputData(poly);
-  const { colors } = data.buildings;
-  if (colors) {
-    // The heatmap's colours are final RGB, already through the shared colormap: no lookup table.
-    poly.getPointData().setScalars(vtkDataArray.newInstance({ name: "rgb", values: colors, numberOfComponents: 3 }));
-    mapper.setColorModeToDirectScalars();
-  } else mapper.setScalarVisibility(false);
-  const actor = vtkActor.newInstance();
-  actor.setMapper(mapper);
-  actor.getProperty().setColor(0.72, 0.77, 0.81);
-  // A heatmap's colour is the data: mostly ambient, so faces at a grazing angle to the light don't go dark.
-  // Back faces culled, as Three.js does by default: drawn, they speckled core's walls. Safe because core's winding
-  // is consistent and outward (NOTES, "dtcc-core's city surface mesh on page 21").
-  if (colors) actor.getProperty().set({ ambient: 0.6, diffuse: 0.4, backfaceCulling: true });
-  renderer.addActor(actor);
+  renderer.addActor(meshActor(data.buildings, [0.72, 0.77, 0.81]));
+  if (data.overlay) {
+    const overlay = meshActor(data.overlay, OVERLAY_TINT);
+    // Translucent actors go through vtk.js's own transparency pass; culled back faces keep the shell readable.
+    overlay.getProperty().set({ opacity: OVERLAY_OPACITY, backfaceCulling: true });
+    renderer.addActor(overlay);
+  }
   const camera = renderer.getActiveCamera();
   camera.setViewAngle(PANEL_START.fovDeg);
   // trap: delete() releases vtk.js's objects but not the WebGL context, which then lives until GC.
