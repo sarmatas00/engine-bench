@@ -53,11 +53,32 @@ def main():
     on_ground = np.zeros(len(vertices), bool)
     on_ground[np.unique(faces[markers == -2])] = True
     ground = vertices[:, 2].copy()
-    for k in np.unique(markers[markers >= 0]):
-        ids = np.unique(faces[markers == k])
-        base = ids[on_ground[ids]]
-        floor = vertices[base if base.size else ids, 2].min()
-        ground[ids[~on_ground[ids]]] = floor
+    # trap: a building's roof and walls carry DIFFERENT markers, and the roof touches no terrain. Per marker, a roof's
+    # "lowest point" is the roof itself, which put every roof on the ground. Group by connectivity instead: one
+    # building is its roof and walls joined through shared vertices (or vertices at the same place).
+    from scipy.sparse import coo_matrix
+    from scipy.sparse.csgraph import connected_components
+    building = faces[markers >= 0]
+    edges = [building[:, [0, 1]], building[:, [1, 2]]]
+    ids = np.unique(building)
+    _, first = np.unique(np.round(vertices[ids], 2), axis=0, return_inverse=True)
+    twins = np.full(first.max() + 1, -1)
+    twins[first] = ids  # one representative per position
+    edges.append(np.column_stack([ids, twins[first]]))
+    edges = np.vstack(edges)
+    n = len(vertices)
+    _, part = connected_components(coo_matrix((np.ones(len(edges)), (edges[:, 0], edges[:, 1])), shape=(n, n)), directed=False)
+    for p in np.unique(part[ids]):
+        members = ids[part[ids] == p]
+        base = members[on_ground[members]]
+        ground[members[~on_ground[members]]] = vertices[base if base.size else members, 2].min()
+    buildings_count = int(len(np.unique(part[ids])))
+
+    # Roofs must stay up: no up-facing building face may end on the flat map.
+    up = np.cross(vertices[faces[:, 1]] - vertices[faces[:, 0]], vertices[faces[:, 2]] - vertices[faces[:, 0]])[:, 2] > 0
+    flat = (markers >= 0) & up & ((vertices[:, 2] - ground)[faces].max(axis=1) < 1.0)
+    if flat.any():
+        sys.exit(f"sample_surface: {int(flat.sum())} roof triangles flattened onto the ground")
 
     face_normals = np.cross(vertices[faces[:, 1]] - vertices[faces[:, 0]], vertices[faces[:, 2]] - vertices[faces[:, 0]])
     normals = np.zeros_like(vertices)
@@ -79,7 +100,7 @@ def main():
     args = solve_meta["args"]
     meta = {
         "crs": "EPSG:3006", "vertices": int(len(vertices)), "triangles": int(len(faces)),
-        "buildings": int(len(np.unique(markers[markers >= 0])) // 2),  # a roof marker and a wall marker each
+        "buildings": buildings_count,
         "speed_range": [lo, hi], "offset_m": OFFSET_M,
         "source": (f"dtcc-core city surface mesh (core defaults, {len(faces)} triangles). Colour: dtcc-sim wind "
                    f"({args['equations']}, {args['wind_speed']:.0f} m/s from {args['wind_dir_deg']:.0f} deg) "
