@@ -1,4 +1,4 @@
-import{t as e}from"./colormap-CL31EnH4.js";import{s as t}from"./flagship-volume-CzW75_Kr.js";var n=`
+import{t as e}from"./colormap-AtHHP5RJ.js";import{s as t}from"./flagship-volume-CzW75_Kr.js";var n=`
 varying vec3 vWorld;
 void main() {
   vec4 world = modelMatrix * vec4(position, 1.0);

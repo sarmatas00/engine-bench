@@ -1,4 +1,4 @@
-import{i as e,l as t,o as n,s as r,u as i}from"./dataset-5whEyHbd.js";import{n as a,r as o,t as s}from"./chrome-BDM6kZSm.js";import{a as c,i as l,n as u,o as d,s as f,t as p}from"./deck-map-DlPjarle.js";import{n as m,t as h}from"./probe-B1mgd0N8.js";import{t as g}from"./colormap-CL31EnH4.js";var _={name:`ramp`,fs:`layout(std140) uniform rampUniforms {
+import{i as e,l as t,o as n,s as r,u as i}from"./dataset-5whEyHbd.js";import{n as a,r as o,t as s}from"./chrome-BDM6kZSm.js";import{a as c,i as l,n as u,o as d,s as f,t as p}from"./deck-map-DlPjarle.js";import{n as m,t as h}from"./probe-B1mgd0N8.js";import{t as g}from"./colormap-AtHHP5RJ.js";var _={name:`ramp`,fs:`layout(std140) uniform rampUniforms {
   float uMin;
   float uMax;
 } ramp;`,uniformTypes:{uMin:`f32`,uMax:`f32`},defaultUniforms:{uMin:10,uMax:35}};function v(e,t,n,r){let i=e.replace(t,n);if(i===e)throw Error(`shader anchor not found: ${r}`);return i}var y=class extends m{static layerName=`TemperatureScenegraphLayer`;static defaultProps={...m.defaultProps,tMin:10,tMax:35,_lighting:`flat`};getShaders(){let e=super.getShaders(),t=String(e.vs);t=v(t,`in vec3 positions;`,`in vec3 positions;
