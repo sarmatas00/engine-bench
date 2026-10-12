@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { opacityNodes, type SpikeScene, VOLUME_STEP_M } from "./scene-data";
+import { OVERLAY_OPACITY, OVERLAY_TINT, opacityNodes, type SpikeScene, VOLUME_STEP_M } from "./scene-data";
 
 const MAX_SAMPLES = 600;
 
@@ -101,6 +101,22 @@ export class ThreeSpikeScene {
 
     this.depthTarget.depthTexture = new THREE.DepthTexture(1, 1);
     this.disposables.push(geometry, buildingMaterial, this.depthTarget, this.depthTarget.depthTexture);
+    if (data.overlay) {
+      // See-through and out of the depth pass, so it neither hides the boxes nor stops the volume.
+      const overlay = new THREE.BufferGeometry();
+      overlay.setAttribute("position", new THREE.BufferAttribute(data.overlay.positions, 3));
+      overlay.setAttribute("normal", new THREE.BufferAttribute(data.overlay.normals, 3));
+      const overlayMaterial = new THREE.MeshLambertMaterial({
+        color: new THREE.Color(...OVERLAY_TINT),
+        transparent: true,
+        opacity: OVERLAY_OPACITY,
+        depthWrite: false,
+      });
+      const mesh = new THREE.Mesh(overlay, overlayMaterial);
+      mesh.renderOrder = 2;
+      this.scene.add(mesh);
+      this.disposables.push(overlay, overlayMaterial);
+    }
     if (!data.field) return;
     const { dims, origin, spacing, range, speed } = data.field;
     const texture = new THREE.Data3DTexture(speed, ...dims);

@@ -2261,3 +2261,12 @@ takes vertex colours as linear light and brightens them on output, so the sRGB
 colormap is converted to linear first; vtk.js got mostly-ambient lighting and
 back-face culling (drawn back faces speckled the walls). Frame times for this
 view are not measured yet.
+
+**Buildings → both** (Anders asked to see core's buildings and the boxes
+together): the boxes stay opaque grey and core's mesh is drawn over them at 35%
+opacity in one blue tint, since heatmap colours half see-through over grey turn
+to mud. The overlay drops core's terrain (after flattening: every up-facing
+triangle with all three corners at z = 0); with it, a blue sheet tinted every
+box. Three.js draws the overlay transparent with no depth write and outside the
+volume's depth pass; vtk.js through actor opacity. Where the two disagree shows
+as shape: merged blocks, and core's buildings running taller on slopes.

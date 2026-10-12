@@ -463,6 +463,21 @@ test.describe('21-twin-map-vs-panel', () => {
       await page.screenshot({path: `screens/combined/21-twin-map-vs-panel-core-mesh-${variant}.png`});
     });
   }
+  for (const variant of ['three-map', 'vtk-map', 'three-panel', 'vtk-panel'] as const) {
+    test(`core mesh over boxes, ${variant}`, async ({page}) => {
+      test.slow();
+      const errors: string[] = [];
+      page.on('pageerror', e => errors.push(`pageerror: ${e.message}`));
+      await page.goto(`/21-twin-map-vs-panel/?variant=${variant}&buildings=both`);
+      await page.waitForFunction(() => (window as any).__bench?.ready === true, null, {timeout: 60_000});
+      expect(errors, errors.join('\n')).toEqual([]);
+      await expect(page.locator('#host > .failure')).toHaveCount(0);
+      // FAILS IF: "both" loses either the boxes or the see-through core mesh over them.
+      await expect(page.locator('.readouts')).toContainText('297 footprints extruded in the browser');
+      await expect(page.locator('.readouts')).toContainText('triangles, see-through');
+      await page.screenshot({path: `screens/combined/21-twin-map-vs-panel-both-${variant}.png`});
+    });
+  }
   test('wind volume (dtcc-sim, Navier-Stokes)', async ({page}) => {
     test.slow();
     const errors: string[] = [];
