@@ -7,7 +7,7 @@ import 'maplibre-gl6/dist/maplibre-gl.css';
 import {Map as MapLibreMap, NavigationControl, setWorkerUrl} from 'maplibre-gl6';
 import workerUrl from 'maplibre-gl6/dist/maplibre-gl-worker.mjs?worker&url';
 import {mountChrome} from '@lib/chrome';
-import {loadSceneFiles} from '@lib/twin-demo/scene-files';
+import {DELTA_LIMIT_M, loadSceneFiles} from '@lib/twin-demo/scene-files';
 
 // MapLibre 6 looks for its worker next to its own module, which the bundler moves.
 setWorkerUrl(workerUrl);
@@ -21,8 +21,10 @@ const query = new URLSearchParams(location.search);
 const pick = <T extends string>(key: string, allowed: readonly T[], fallback: T): T =>
   (allowed as readonly string[]).includes(query.get(key) ?? '') ? (query.get(key) as T) : fallback;
 const variant = pick('variant', VARIANTS, 'three-map');
-const basemap = pick('basemap', ['bright', 'liberty'] as const, 'bright');
-const buildingsKind = pick('buildings', ['boxes', 'core-mesh', 'both'] as const, 'core-mesh');
+const BUILDINGS = ['boxes', 'core-mesh', 'both', 'vs-osm'] as const;
+const buildingsKind = pick('buildings', BUILDINGS, 'core-mesh');
+// liberty draws OSM's own buildings in 3D: next to the comparison, the ones core lacks stand alone.
+const basemap = pick('basemap', ['bright', 'liberty'] as const, buildingsKind === 'vs-osm' ? 'liberty' : 'bright');
 // A volume over the heatmap (or the see-through comparison) hides it, so those start without one.
 const fieldName = pick('field', ['smoke', 'wind', 'none'] as const, buildingsKind === 'boxes' ? 'smoke' : 'none');
 const onMap = variant === 'three-map' || variant === 'vtk-map';
@@ -46,11 +48,12 @@ const ui = mountChrome({
     'The 3D library is downloaded only when a 3D variant is open; the readouts show how much. In Atlas as spiked, both libraries sat in the entry chunk every page loads (+427 KB gzipped).',
     'Scene: 297 LoD1 buildings (dtcc-core, Lantmäteriet footprints and point cloud). Volume: smoke is dtcc-core\'s synthetic field; wind is dtcc-sim\'s full Navier-Stokes solve for this area, 5 m/s from the west, settled after 1,250 steps. Above the roofs it is real wind: aligned with the inflow, about 5 m/s at 30-60 m. Below roof height it runs far too slow, because the solve uses one constant eddy viscosity for the whole area; read the streets as sheltered, not as measured speeds. West, not Gothenburg\'s usual south-west: dtcc-sim lets air into its box through one side only, and a diagonal wind piles up against the other sides (dtcc-sim#12).',
     'Buildings: dtcc-core\'s own city surface mesh by default, its OBJ loaded as core writes it; Buildings → boxes shows the footprints extruded in the browser instead, which the FPS and memory findings above were measured with. Core merges touching footprints, drops very small ones and adds the terrain: 120 buildings instead of 297 boxes, 46,507 triangles, 428 KB gzipped. It is coloured by the Navier-Stokes wind 2 m off each surface, scaled to its own range: where the wind reaches surfaces, not pedestrian speeds. It starts with no volume; pick smoke or wind to add one. Buildings → both draws core\'s mesh see-through over the boxes, to compare the two shapes. Core\'s .glb of the same mesh cannot be opened: it declares 32-bit data and writes 64-bit.',
+    'Buildings → vs-osm colours each core building by its height minus the basemap\'s OpenStreetMap height, compared on a 1 m grid (scripts/twin-demo/compare_osm.py). 69 of 120 can be compared, and core is taller in nearly all: median +5.4 m. Lantmäteriet\'s boxes agree with core (median +0.9 m), so it is OSM that is low: 67 of those 69 OSM heights have the ceil(levels x 3.66) pattern of a floor count, not a measured height. OSM has no height at all for 33 more (the basemap draws them 5 m tall, OpenMapTiles\' default). Footprints: OSM has 67 buildings core lacks (15.049 m²); 21 are cut by the area\'s edge, which core leaves out, and none of the rest is in Lantmäteriet\'s footprints either. It opens on Basemap → liberty, where OSM\'s own buildings stand in light grey: the ones with no colour on them are those core lacks. Most of the main campus is dark slate: OSM has no height for it.',
   ],
   controls: [
     {kind: 'select', id: 'variant', label: 'View', options: [...VARIANTS], value: variant, onChange: v => go('variant', v)},
     {kind: 'select', id: 'basemap', label: 'Basemap', options: ['bright', 'liberty'], value: basemap, onChange: v => go('basemap', v)},
-    {kind: 'select', id: 'buildings', label: 'Buildings', options: ['boxes', 'core-mesh', 'both'], value: buildingsKind, onChange: v => go('buildings', v)},
+    {kind: 'select', id: 'buildings', label: 'Buildings', options: [...BUILDINGS], value: buildingsKind, onChange: v => go('buildings', v)},
     {kind: 'select', id: 'field', label: 'Volume', options: ['smoke', 'wind', 'none'], value: fieldName, onChange: v => go('field', v)},
     {kind: 'button', id: 'orbit', label: 'Orbit test (8 s)', onClick: () => void orbitTest()},
   ],
@@ -106,12 +109,22 @@ map.on('render', () => frameStamps.push(performance.now()));
 const mapLoaded = new Promise<void>(resolve => map.once('load', () => resolve()));
 
 async function start() {
-  const files = await loadSceneFiles(fieldName, buildingsKind !== 'boxes');
+  const files = await loadSceneFiles(fieldName, buildingsKind !== 'boxes', buildingsKind === 'vs-osm');
   ui.setReadout('scene data', `${Math.round(files.bytes / 1024)} KB (${buildingsKind}, ${fieldName} volume)`);
   if (files.field?.source) ui.setReadout('volume source', files.field.source);
   if (files.coreMesh) ui.setReadout('surface source', buildingsKind === 'both'
     ? 'dtcc-core city surface mesh, buildings only, drawn see-through (blue) over the browser-extruded footprints (grey)'
+    : files.compare ? `dtcc-core city surface mesh, buildings only, coloured by core minus OSM height. ${files.compare.meta.method}`
     : files.coreMesh.meta.source);
+  if (files.compare) {
+    const s = files.compare.meta.summary;
+    ui.setReadout('colour', `red: core taller than OSM, blue: lower, full at ±${DELTA_LIMIT_M} m; dark slate: nothing to compare. `
+      + 'With Basemap → liberty, light-grey buildings standing alone are OSM buildings core lacks.');
+    ui.setReadout('core vs OSM', `${s.compared} of ${s.core_buildings} buildings compared: core minus OSM median `
+      + `${s.delta_m?.median} m, ${s.delta_m?.over_5m} differ by over 5 m. OSM has no height for ${s.osm_has_no_height} `
+      + `and no building under ${s.no_osm_building}. ${s.osm_buildings_not_in_core} OSM buildings are missing from core `
+      + `(${s.osm_not_in_core_m2.toLocaleString('de-DE')} m², ${s.osm_not_in_core_at_edge} of them cut by the area's edge).`);
+  }
   await mapLoaded;
   ui.setReadout('page + map JS downloaded', `${scriptKb(0)} KB (0 if your browser had it cached)`);
   if (variant === 'map-only') return;
@@ -119,7 +132,7 @@ async function start() {
   // The lazy part: nothing below is in the page's first download.
   const loadMark = performance.now();
   const {buildScene} = await import('@lib/twin-demo/scene-data');
-  const scene = buildScene(files.buildings, files.field, files.speed, files.coreMesh, buildingsKind === 'both');
+  const scene = buildScene(files.buildings, files.field, files.speed, files.coreMesh, buildingsKind === 'both', files.compare?.delta);
   if (variant === 'three-map') {
     const {threeMapLayer} = await import('@lib/twin-demo/three-hosts');
     const labels = map.getStyle().layers.find(layer => layer.type === 'symbol')?.id;
@@ -143,7 +156,9 @@ async function start() {
   const core = `${files.coreMesh?.meta.buildings} in dtcc-core's city surface mesh`;
   ui.setReadout('buildings', buildingsKind === 'both'
     ? `${boxes} (${scene.buildings.triangles} triangles), under ${core} (${scene.overlay?.triangles} triangles, see-through)`
-    : buildingsKind === 'core-mesh' ? `${core}, with terrain (${scene.buildings.triangles} triangles)` : `${boxes} (${scene.buildings.triangles} triangles)`);
+    : buildingsKind === 'core-mesh' ? `${core}, with terrain (${scene.buildings.triangles} triangles)`
+    : buildingsKind === 'vs-osm' ? `${core}, without terrain (${scene.buildings.triangles} triangles)`
+    : `${boxes} (${scene.buildings.triangles} triangles)`);
 }
 
 /** The orbit the twin spike was measured with: zoom 15.6, pitch 60, one turn in 8 s, rAF gaps. */

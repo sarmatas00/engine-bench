@@ -41,21 +41,22 @@ def read_obj(path):
     return np.array(vertices), np.array(faces)
 
 
-def main():
+def read_core_mesh():
+    """Core's city mesh with its per-face markers (-2 terrain, >= 0 buildings), checked against each other."""
     vertices, faces = read_obj(MESH / "city.obj")
     markers = np.fromfile(MESH / "city.markers.i32", np.int32)
     if len(markers) != len(faces):
-        sys.exit(f"sample_surface: {len(markers)} markers for {len(faces)} faces; re-run export_city_mesh.py")
-    solve_meta = json.loads((SOLVE / "wind.meta.json").read_text())
-    if not solve_meta.get("plausible"):
-        sys.exit(f"sample_surface: refusing an implausible solve ({solve_meta.get('problems')})")
+        sys.exit(f"{len(markers)} markers for {len(faces)} faces; re-run export_city_mesh.py")
+    return vertices, faces, markers
 
-    on_ground = np.zeros(len(vertices), bool)
-    on_ground[np.unique(faces[markers == -2])] = True
-    ground = vertices[:, 2].copy()
-    # trap: a building's roof and walls carry DIFFERENT markers, and the roof touches no terrain. Per marker, a roof's
-    # "lowest point" is the roof itself, which put every roof on the ground. Group by connectivity instead: one
-    # building is its roof and walls joined through shared vertices (or vertices at the same place).
+
+def building_parts(vertices, faces, markers):
+    """One label per vertex naming its building, and the building vertices' ids.
+
+    trap: a building's roof and walls carry DIFFERENT markers, and the roof touches no terrain. Per marker, a roof's
+    "lowest point" is the roof itself, which put every roof on the ground. Group by connectivity instead: one
+    building is its roof and walls joined through shared vertices (or vertices at the same place).
+    """
     from scipy.sparse import coo_matrix
     from scipy.sparse.csgraph import connected_components
     building = faces[markers >= 0]
@@ -68,6 +69,19 @@ def main():
     edges = np.vstack(edges)
     n = len(vertices)
     _, part = connected_components(coo_matrix((np.ones(len(edges)), (edges[:, 0], edges[:, 1])), shape=(n, n)), directed=False)
+    return part, ids
+
+
+def main():
+    vertices, faces, markers = read_core_mesh()
+    solve_meta = json.loads((SOLVE / "wind.meta.json").read_text())
+    if not solve_meta.get("plausible"):
+        sys.exit(f"sample_surface: refusing an implausible solve ({solve_meta.get('problems')})")
+
+    on_ground = np.zeros(len(vertices), bool)
+    on_ground[np.unique(faces[markers == -2])] = True
+    ground = vertices[:, 2].copy()
+    part, ids = building_parts(vertices, faces, markers)
     for p in np.unique(part[ids]):
         members = ids[part[ids] == p]
         base = members[on_ground[members]]

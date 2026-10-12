@@ -55,6 +55,20 @@ describe("buildScene with core's mesh", () => {
     expect(buildScene(boxes, null, null, coreMesh).overlay).toBeNull();
   });
 
+  it("in the vs-osm view colours core's buildings by core minus OSM, dark slate where nothing is compared", () => {
+    // Two triangles: a wall-like one standing up (delta -10 and NaN corners) and a terrain one, which is dropped.
+    const obj = "v 1 1 50\nv 2 1 50\nv 1 1 60\nv 3 3 50\nv 4 3 50\nv 3 4 50\nf 1 2 3\nf 4 5 6\n";
+    const coreMesh = { obj, ground: new Float32Array(6).fill(50), speed: new Float32Array(6), meta };
+    const delta = new Float32Array([-10, 10, Number.NaN, Number.NaN, Number.NaN, Number.NaN]);
+    const scene = buildScene(buildings, null, null, coreMesh, false, delta);
+    // FAILS IF: the comparison keeps core's terrain, which hides the basemap's OSM footprints beneath it.
+    expect(scene.buildings.triangles).toBe(1);
+    // FAILS IF: the scale flips (red must mean core taller) or a building with no comparison gets a delta colour.
+    expect([...scene.buildings.colors!.slice(0, 3)]).toEqual([33, 102, 172]);
+    expect([...scene.buildings.colors!.slice(3, 6)]).toEqual([200, 30, 30]);
+    expect([...scene.buildings.colors!.slice(6, 9)]).toEqual([95, 95, 110]);
+  });
+
   it("refuses sidecars that don't match the OBJ's vertex count", () => {
     const coreMesh = { obj: "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n", ground: new Float32Array(2), speed: new Float32Array(3), meta };
     expect(() => buildScene(buildings, null, null, coreMesh)).toThrow("2 ground");

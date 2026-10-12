@@ -477,6 +477,20 @@ test.describe('21-twin-map-vs-panel', () => {
       await expect(page.locator('.readouts')).toContainText('triangles, see-through');
       await page.screenshot({path: `screens/combined/21-twin-map-vs-panel-both-${variant}.png`});
     });
+    test(`core mesh vs OSM, ${variant}`, async ({page}) => {
+      test.slow();
+      const errors: string[] = [];
+      page.on('pageerror', e => errors.push(`pageerror: ${e.message}`));
+      await page.goto(`/21-twin-map-vs-panel/?variant=${variant}&buildings=vs-osm`);
+      await page.waitForFunction(() => (window as any).__bench?.ready === true, null, {timeout: 60_000});
+      expect(errors, errors.join('\n')).toEqual([]);
+      await expect(page.locator('#host > .failure')).toHaveCount(0);
+      // FAILS IF: the comparison loses its numbers, or what a 5 m OSM height means.
+      await expect(page.locator('.readouts')).toContainText(/\d+ of 120 buildings compared: core minus OSM median/);
+      await expect(page.locator('.readouts')).toContainText('treated as OSM having no height');
+      await expect(page.locator('.readouts')).toContainText('without terrain');
+      await page.screenshot({path: `screens/combined/21-twin-map-vs-panel-vs-osm-${variant}.png`});
+    });
   }
   test('wind volume (dtcc-sim, Navier-Stokes)', async ({page}) => {
     test.slow();

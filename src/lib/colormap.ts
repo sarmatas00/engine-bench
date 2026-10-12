@@ -8,6 +8,15 @@ export function colormap(t: number, min: number, max: number): [number, number, 
   return [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f].map(Math.round) as [number, number, number];
 }
 
+/** Blue (negative) through near-white (0) to red (positive), clamped at ±limit: for signed differences. */
+export function diverging(t: number, limit: number): [number, number, number] {
+  const u = Math.min(1, Math.max(-1, t / limit));
+  const end = u < 0 ? [33, 102, 172] : [200, 30, 30];
+  const mid = [245, 245, 240];
+  const f = Math.abs(u);
+  return [0, 1, 2].map(i => Math.round(mid[i]! + (end[i]! - mid[i]!) * f)) as [number, number, number];
+}
+
 export const COLORMAP_GLSL = /* glsl */ `
 vec3 benchColormap(float u) {
   vec3 s0 = vec3(33., 102., 172.) / 255.;
