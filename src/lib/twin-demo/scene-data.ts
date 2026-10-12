@@ -1,8 +1,8 @@
 // Ported from the dtcc-twin spike (docs/twin-spike/). One change: roofs are cut with earcut, which Three.js's ShapeUtils
 // wraps, so the vtk.js views don't download Three.js just to triangulate. Loaded only once a 3D view is picked.
 import earcut from "earcut";
-import { colormap } from "../colormap";
-import type { BuildingsJson, CoreMeshFiles, FieldJson } from "./scene-files";
+import { colormap, diverging } from "../colormap";
+import { type BuildingsJson, type CoreMeshFiles, DELTA_LIMIT_M, type FieldJson } from "./scene-files";
 
 /**
  * The scene every variant draws, in local metres: x and y along SWEREF 99 TM's east and north axes, measured from the
@@ -11,7 +11,7 @@ import type { BuildingsJson, CoreMeshFiles, FieldJson } from "./scene-files";
 export type SpikeScene = {
   /** The local origin in SWEREF 99 TM metres. */
   origin: [number, number];
-  /** `colors` (RGB 0-255 per vertex) only for the core mesh's heatmap; the boxes are one flat grey. */
+  /** `colors` (RGB 0-255 per vertex) only for the core mesh (wind heatmap or OSM comparison); the boxes are one flat grey. */
   buildings: SceneMesh;
   /** Drawn see-through over `buildings` (OVERLAY_TINT at OVERLAY_OPACITY), or null. */
   overlay: SceneMesh | null;
@@ -31,10 +31,14 @@ export type SceneMesh = { positions: Float32Array; normals: Float32Array; colors
 /** The see-through core mesh in the `both` view: one tint, so where it and the boxes differ shows as shape, not colour. */
 export const OVERLAY_TINT: [number, number, number] = [0.18, 0.44, 0.84];
 export const OVERLAY_OPACITY = 0.35;
+/** The OSM comparison's colour where nothing is compared: dark slate, apart from liberty's light-grey OSM buildings. */
+export const NO_COMPARISON: [number, number, number] = [95, 95, 110];
 
 /**
  * `coreMesh`, when given, replaces the extruded footprints with dtcc-core's city surface mesh and its heatmap; with
- * `overlay`, the footprints stay and core's mesh is drawn see-through over them instead, for comparing the two.
+ * `overlay`, the footprints stay and core's mesh is drawn see-through over them instead, for comparing the two. With
+ * `delta` (per vertex, core minus OSM height), core's buildings are coloured by it instead, without core's terrain, so
+ * the basemap's own OSM footprints show beneath.
  */
 export function buildScene(
   buildings: BuildingsJson,
@@ -42,6 +46,7 @@ export function buildScene(
   speed: Float32Array | null,
   coreMesh: CoreMeshFiles | null = null,
   overlay = false,
+  delta: Float32Array | null = null,
 ): SpikeScene {
   const [minX, minY, maxX, maxY] = buildings.bounds;
   const origin: [number, number] = [(minX + maxX) / 2, (minY + maxY) / 2];
@@ -60,8 +65,10 @@ export function buildScene(
   }
   return {
     origin,
-    buildings: coreMesh && !overlay ? surface(coreMesh, origin) : { ...extrude(buildings.buildings, origin), colors: null },
-    overlay: coreMesh && overlay ? { ...withoutGround(surface(coreMesh, origin)), colors: null } : null,
+    buildings: !coreMesh || overlay ? { ...extrude(buildings.buildings, origin), colors: null }
+      : delta ? withoutGround(surface(coreMesh, origin, deltaColor(delta)))
+      : surface(coreMesh, origin, windColor(coreMesh)),
+    overlay: coreMesh && overlay ? { ...withoutGround(surface(coreMesh, origin, windColor(coreMesh))), colors: null } : null,
     field: volume,
   };
 }
@@ -86,24 +93,31 @@ export function parseObj(text: string, [ox, oy]: [number, number]) {
   return { positions: new Float64Array(xyz), faces: new Uint32Array(faces) };
 }
 
-/** Core's mesh flattened onto the map (z minus `ground`), flat-shaded like the boxes, coloured by the wind near it. */
-function surface({ obj, ground, speed, meta }: CoreMeshFiles, origin: [number, number]) {
+type VertexColor = { values: Float32Array; color: (value: number) => [number, number, number] };
+/** The wind near each vertex, through the shared colormap over the mesh's own speed range. */
+const windColor = ({ speed, meta }: CoreMeshFiles): VertexColor =>
+  ({ values: speed, color: (value) => colormap(value, ...meta.speed_range) });
+/** Core minus OSM height per vertex, diverging around 0; NaN (nothing to compare) NO_COMPARISON. */
+export const deltaColor = (delta: Float32Array): VertexColor =>
+  ({ values: delta, color: (value) => Number.isNaN(value) ? NO_COMPARISON : diverging(value, DELTA_LIMIT_M) });
+
+/** Core's mesh flattened onto the map (z minus `ground`), flat-shaded like the boxes, coloured per vertex by `by`. */
+function surface({ obj, ground }: CoreMeshFiles, origin: [number, number], by: VertexColor) {
   const { positions: xyz, faces } = parseObj(obj, origin);
   const vertexCount = xyz.length / 3;
-  if (ground.length !== vertexCount || speed.length !== vertexCount)
-    throw new Error(`core mesh: ${vertexCount} vertices, ${ground.length} ground and ${speed.length} speed values`);
+  if (ground.length !== vertexCount || by.values.length !== vertexCount)
+    throw new Error(`core mesh: ${vertexCount} vertices, ${ground.length} ground and ${by.values.length} colour values`);
   const count = faces.length;
   const positions = new Float32Array(count * 3);
   const normals = new Float32Array(count * 3);
   const colors = new Uint8Array(count * 3);
-  const [lo, hi] = meta.speed_range;
   const p = [0, 0, 0].map(() => [0, 0, 0]);
   for (let t = 0; t < count; t += 3) {
     for (let c = 0; c < 3; c++) {
       const v = faces[t + c]!;
       p[c] = [xyz[3 * v]!, xyz[3 * v + 1]!, xyz[3 * v + 2]! - ground[v]!];
       positions.set(p[c]!, 3 * (t + c));
-      colors.set(colormap(speed[v]!, lo, hi), 3 * (t + c));
+      colors.set(by.color(by.values[v]!), 3 * (t + c));
     }
     const [a, b, d] = p as [number[], number[], number[]];
     const u = [b[0]! - a[0]!, b[1]! - a[1]!, b[2]! - a[2]!], w = [d[0]! - a[0]!, d[1]! - a[1]!, d[2]! - a[2]!];
@@ -116,7 +130,8 @@ function surface({ obj, ground, speed, meta }: CoreMeshFiles, origin: [number, n
 
 /**
  * The mesh minus its terrain: after flattening, terrain is every up-facing triangle with all three corners at z = 0,
- * which no roof or wall can be. For the overlay, where a see-through ground would tint every box beneath it.
+ * which no roof or wall can be. For the overlay, where a see-through ground would tint every box beneath it, and the
+ * OSM comparison, where it would hide the basemap's footprints.
  */
 function withoutGround(mesh: SceneMesh): SceneMesh {
   const keep: number[] = [];
@@ -124,12 +139,15 @@ function withoutGround(mesh: SceneMesh): SceneMesh {
     const flat = [0, 1, 2].every((c) => Math.abs(mesh.positions[9 * t + 3 * c + 2]!) < 0.01);
     if (!(flat && mesh.normals[9 * t + 2]! > 0.9)) keep.push(t);
   }
-  const pick = (array: Float32Array) => {
-    const out = new Float32Array(keep.length * 9);
+  const pick = <T extends Float32Array | Uint8Array>(array: T): T => {
+    const out = new (array.constructor as new (n: number) => T)(keep.length * 9);
     keep.forEach((t, i) => out.set(array.subarray(9 * t, 9 * t + 9), 9 * i));
     return out;
   };
-  return { positions: pick(mesh.positions), normals: pick(mesh.normals), colors: null, count: keep.length * 3, triangles: keep.length };
+  return {
+    positions: pick(mesh.positions), normals: pick(mesh.normals), colors: mesh.colors && pick(mesh.colors),
+    count: keep.length * 3, triangles: keep.length,
+  };
 }
 
 /** Flat-shaded prisms: a roof and one quad per wall, non-indexed so every face keeps its own normal. */

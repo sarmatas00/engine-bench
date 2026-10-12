@@ -2270,3 +2270,31 @@ triangle with all three corners at z = 0); with it, a blue sheet tinted every
 box. Three.js draws the overlay transparent with no depth write and outside the
 volume's depth pass; vtk.js through actor opacity. Where the two disagree shows
 as shape: merged blocks, and core's buildings running taller on slopes.
+
+### Core vs OpenStreetMap, per building (`?buildings=vs-osm`, 2026-10-12)
+
+Vasilis asked to compare the basemap's 3D buildings with ours. `scripts/twin-demo/fetch_osm_buildings.ts` takes the
+basemap's own buildings from OpenFreeMap's zoom-14 tiles (planet build `20261004_113936_pt`; Overpass returned
+500/504 on three servers that morning). `compare_osm.py` puts core's roofs (height above `sample_surface.py`'s ground),
+OSM's `render_height` and the Lantmäteriet boxes onto one 1 m grid and compares each core building over its own
+footprint. Tile-clipped pieces, building parts and multi-level blocks then need no polygon matching.
+
+- **Trap:** OpenMapTiles writes `render_height = ceil(COALESCE(height, levels * 3.66, 5))`
+  (`layers/building/building.sql`). A 5 m basemap building has no height in OSM; comparing against it measures the
+  default. Cells at exactly 5 m count as "OSM has no height" (a real 4-5 m building lands there too, rarely).
+- **Heights:** 69 of 120 core buildings compared. Core minus OSM median +5.4 m, 50 of 69 differ by over 5 m, nearly
+  all with core taller. Core minus Lantmäteriet boxes is +0.9 m (core's ground is each building's lowest wall bottom,
+  so slopes add a little), and boxes minus OSM is +4.6 m: OSM is the low one. 67 of the 69 OSM heights are
+  ceil(n x 3.66) values, the pattern of a `building:levels` tag rather than a measured `height`. Inferred from the
+  values: the tags themselves weren't read (Overpass down). Core and the boxes share Lantmäteriet's lidar, so their
+  agreement is consistency, not independent proof.
+- **OSM has no height** for 33 core buildings (68,152 m² of core footprint); **no OSM building** under 18 (7,070 m²,
+  mostly under 100 m²).
+- **Footprints:** OSM has 67 buildings with no core building under them (15,049 m²). 21 (11,012 m²) touch the area's
+  edge: core's datasets keep only buildings inside the bounds. The other 46 are small, mostly 5 m (untagged) in OSM,
+  and none is in Lantmäteriet's footprints either. Sheds, demolished or not-yet-built buildings are all possible;
+  not checked against imagery.
+- `compare.json` lists every core building (centre in SWEREF and lon/lat, footprint, core / OSM / Lantmäteriet
+  heights, OSM cover, status, delta) and every OSM-only building: the table an agent would query.
+- The view opens on the liberty basemap, which extrudes OSM's own buildings in light grey; "nothing to compare" is
+  dark slate so it can't be mistaken for them. Most of the main campus is dark slate: OSM has no height for it.
