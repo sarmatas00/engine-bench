@@ -2259,8 +2259,8 @@ speeds. The windward west edge and the first faces it meets come out hottest.
 Rendering the heatmap the same in both libraries took two fixes: Three.js
 takes vertex colours as linear light and brightens them on output, so the sRGB
 colormap is converted to linear first; vtk.js got mostly-ambient lighting and
-back-face culling (drawn back faces speckled the walls). Frame times for this
-view are not measured yet.
+back-face culling (drawn back faces speckled the walls). Frame times: see
+"Core's mesh: orbit frame times" below.
 
 **Buildings → both** (Anders asked to see core's buildings and the boxes
 together): the boxes stay opaque grey and core's mesh is drawn over them at 35%
@@ -2298,3 +2298,35 @@ footprint. Tile-clipped pieces, building parts and multi-level blocks then need 
   heights, OSM cover, status, delta) and every OSM-only building: the table an agent would query.
 - The view opens on the liberty basemap, which extrudes OSM's own buildings in light grey; "nothing to compare" is
   dark slate so it can't be mistaken for them. Most of the main campus is dark slate: OSM has no height for it.
+
+### Core's mesh: orbit frame times (2026-10-13)
+
+`scripts/twin-demo/measure_orbits.ts`: the page's own Orbit test (zoom 15.6, pitch 60, one turn in 8 s, rAF gaps),
+headed Chromium on the M4 (ANGLE Metal), 1400x850, field off, bright basemap unless noted, 3 rounds in alternating
+order, pixel ratio 1 and 2. 4 views x {boxes, core-mesh, both, vs-osm, vs-osm on liberty} plus `map-only`.
+
+**Not comparable with the 16.7 ms tables above.** This window paced frames at 5.5 ms (about 180 Hz), so a frame is
+"late" past about 8 ms, not 25 ms. Machine load also varied a lot (other containers, OBS, Spotlight indexing), so
+each orbit now records the load average before it. Even `map-only` dropped 18% of frames in one round at load ~37.
+
+Pixel ratio 1, load ~11 at the start: **every case held the pace** (p50 5.5-5.6 ms, p95 5.7-6.2 ms, late 0-3%). Core's mesh, the
+overlay and vs-osm looked the same as the boxes in all four views. One `vtk-map` vs-osm round on liberty had 5% late.
+
+Pixel ratio 2, map views rerun; the quiet round (load 4-10), late frames:
+
+~~~
+              boxes  core-mesh  both   vs-osm  vs-osm liberty
+three-map     2.4%   0.6%       0.6%   0.8%    1.4%
+vtk-map       16.8%  8.9%       59.2%  5.2%    0.3%
+map-only      0.3%
+~~~
+
+- **Core's mesh costs nothing measurable**, in either library, at either pixel ratio: never worse than the boxes.
+  `three-map` late frames above 3% only came at load 17 or more, never in the quiet round.
+- **`vtk-map` + both is the one real cost:** 59-70% late in all three rounds, two of them at load under 10, p50
+  11 ms, i.e. every other refresh. vtk.js's canvas covers the whole map and the see-through overlay draws over the
+  boxes. Panels at pixel ratio 2 stay at 0-3% for every case, `vtk-panel` + both included.
+- **`vtk-map` drops frames at Retina even with boxes** (9-17% late when quiet) where `three-map` stays near 0: the
+  same direction as the map-vs-panel findings above.
+- Every other refresh at 180 Hz is still about 90 fps. On a 60 Hz laptop the same work could fit in a frame or fall
+  to 30 fps; this machine can't tell. That belongs to the municipal-laptop test.
